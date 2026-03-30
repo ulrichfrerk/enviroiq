@@ -9,8 +9,12 @@ import {
   widgetConfigsTable,
   reportsTable,
 } from "@workspace/db";
+import type { Vehicle, FleetEvent } from "@workspace/db";
 import { v4 as uuidv4 } from "uuid";
 import { eq } from "drizzle-orm";
+
+type User = typeof usersTable.$inferSelect;
+type Organisation = typeof organisationsTable.$inferSelect;
 
 async function seed() {
   console.log("🌱 Seeding EnviroIQ database...");
@@ -22,9 +26,9 @@ async function seed() {
     .from(usersTable)
     .where(eq(usersTable.email, "admin@enviroiq.app"));
 
-  let superAdmin: any;
+  let superAdmin: User;
   if (!existingSuperAdmin) {
-    [superAdmin] = await db
+    const [created] = await db
       .insert(usersTable)
       .values({
         id: superAdminId,
@@ -34,11 +38,13 @@ async function seed() {
         organisationId: null,
       })
       .returning();
+    superAdmin = created;
     console.log("✅ Created super admin: admin@enviroiq.app");
   } else {
     superAdmin = existingSuperAdmin;
     console.log("ℹ️  Super admin already exists");
   }
+  void superAdmin;
 
   // 2. Demo Organisation
   const orgSlug = "acme-logistics";
@@ -47,13 +53,13 @@ async function seed() {
     .from(organisationsTable)
     .where(eq(organisationsTable.slug, orgSlug));
 
-  let org: any;
+  let org: Organisation;
   if (!existingOrg) {
     const orgId = uuidv4();
     const widgetKey = `wk_${uuidv4().replace(/-/g, "").substring(0, 24)}`;
     const inboundEmail = `${orgSlug}-${uuidv4().substring(0, 8)}@bills.enviroiq.app`;
 
-    [org] = await db
+    const [created] = await db
       .insert(organisationsTable)
       .values({
         id: orgId,
@@ -65,6 +71,7 @@ async function seed() {
         inboundEmailAddress: inboundEmail,
       })
       .returning();
+    org = created;
     console.log(`✅ Created organisation: Acme Logistics Ltd (${orgId})`);
 
     // Create default widget config
@@ -80,9 +87,9 @@ async function seed() {
     .from(usersTable)
     .where(eq(usersTable.email, "sarah@acmelogistics.co.nz"));
 
-  let orgAdmin: any;
+  let orgAdmin: User;
   if (!existingOrgAdmin) {
-    [orgAdmin] = await db
+    const [created] = await db
       .insert(usersTable)
       .values({
         id: uuidv4(),
@@ -92,6 +99,7 @@ async function seed() {
         organisationId: org.id,
       })
       .returning();
+    orgAdmin = created;
     console.log("✅ Created org admin: sarah@acmelogistics.co.nz");
   } else {
     orgAdmin = existingOrgAdmin;
@@ -122,7 +130,10 @@ async function seed() {
 
   const vehicleIds: string[] = [];
   if (!existingVehicle) {
-    const vehicles = [
+    type FuelType = "petrol" | "diesel" | "electric" | "hybrid";
+    type GpsProvider = "navman" | "blackhawk" | "generic" | "none";
+
+    const vehicles: { name: string; registration: string; make: string; model: string; fuelType: FuelType; gpsProvider: GpsProvider }[] = [
       { name: "Truck Alpha", registration: "ABC-123", make: "Isuzu", model: "NPR", fuelType: "diesel", gpsProvider: "navman" },
       { name: "Truck Beta", registration: "DEF-456", make: "Hino", model: "500", fuelType: "diesel", gpsProvider: "blackhawk" },
       { name: "Van Gamma", registration: "GHI-789", make: "Ford", model: "Transit", fuelType: "petrol", gpsProvider: "navman" },
@@ -139,15 +150,15 @@ async function seed() {
         registration: v.registration,
         make: v.make,
         model: v.model,
-        fuelType: v.fuelType as any,
-        gpsProvider: v.gpsProvider as any,
+        fuelType: v.fuelType,
+        gpsProvider: v.gpsProvider,
         isActive: true,
       });
     }
     console.log(`✅ Created ${vehicles.length} vehicles`);
   } else {
     const allVehicles = await db.select().from(vehiclesTable).where(eq(vehiclesTable.organisationId, org.id));
-    vehicleIds.push(...allVehicles.map(v => v.id));
+    vehicleIds.push(...allVehicles.map((v: Vehicle) => v.id));
     console.log("ℹ️  Vehicles already exist");
   }
 
@@ -161,11 +172,11 @@ async function seed() {
       electric: 0,
     };
 
-    const events = [];
+    const events: typeof fleetEventsTable.$inferInsert[] = [];
     for (let i = 0; i < 30; i++) {
       const date = new Date();
       date.setDate(date.getDate() - i);
-      
+
       const vehicleId = vehicleIds[i % vehicleIds.length];
       const fuelLitres = Math.round((20 + Math.random() * 80) * 10) / 10;
       const distanceKm = Math.round((50 + Math.random() * 200) * 10) / 10;
@@ -176,13 +187,16 @@ async function seed() {
         id: uuidv4(),
         organisationId: org.id,
         vehicleId,
-        eventType: "journey" as const,
+        eventType: "journey",
+        latitude: null,
+        longitude: null,
+        speedKmh: null,
         recordedAt: date,
         fuelLitres,
         distanceKm,
-        fuelType: fuelType as any,
         co2eKg,
         source: i % 2 === 0 ? "navman" : "blackhawk",
+        rawPayload: null,
       });
     }
 
@@ -217,7 +231,6 @@ async function seed() {
       });
     }
 
-    // Gas readings
     for (let i = 0; i < 6; i++) {
       const now = new Date();
       const periodEnd = new Date(now.getFullYear(), now.getMonth() - i, 0);

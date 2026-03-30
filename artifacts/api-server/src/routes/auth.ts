@@ -137,6 +137,7 @@ router.post("/passkey/register/complete", async (req, res) => {
 
     const user = await db.query.usersTable.findFirst({ where: eq(usersTable.email, email) });
     if (!user) {
+      await logAudit({ req, action: "passkey.register", outcome: "failure", userEmail: email });
       res.status(400).json({ error: "Bad Request", message: "User not found" });
       return;
     }
@@ -286,6 +287,7 @@ router.post("/passkey/authenticate/complete", async (req, res) => {
 
     const user = await db.query.usersTable.findFirst({ where: eq(usersTable.id, passkey.userId) });
     if (!user || !user.isActive) {
+      await logAudit({ req, action: "passkey.authenticate", outcome: "failure", userId: passkey.userId });
       res.status(401).json({ error: "Unauthorized", message: "User not found or inactive" });
       return;
     }
@@ -381,6 +383,7 @@ router.post("/magic-link/verify", async (req, res) => {
 
     const user = await db.query.usersTable.findFirst({ where: eq(usersTable.id, link.userId) });
     if (!user || !user.isActive) {
+      await logAudit({ req, action: "magic_link.verify", outcome: "failure", userId: link.userId });
       res.status(401).json({ error: "Unauthorized", message: "User not found" });
       return;
     }

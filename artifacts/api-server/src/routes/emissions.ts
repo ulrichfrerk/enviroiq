@@ -7,6 +7,7 @@ import { sqlRow, sqlRows, numCol, intCol, strCol } from "../lib/sql-result.js";
 const router = Router({ mergeParams: true });
 
 // GET /organisations/:orgId/emissions
+// Returns paginated emission readings from both fleet and energy sources via UNION ALL
 router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
   try {
     const orgId = req.params.orgId as string;
@@ -18,43 +19,91 @@ router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
     const fromDate = from ? new Date(from as string) : new Date(Date.now() - 30 * 86400000);
     const toDate = to ? new Date(to as string) : new Date();
 
-    const fleetRows = source === "all" || source === "fleet"
-      ? await db.execute(sql`
-          SELECT
-            id, ${orgId}::text as organisation_id, vehicle_id as source_id,
-            'fleet' as source, co2e_kg, 1 as scope,
-            recorded_at, created_at
+    const sourceFilter = source as string;
+
+    const countResult = await db.execute(sql`
+      SELECT COUNT(*) as total FROM (
+        ${sourceFilter === "energy" ? sql`SELECT 1 WHERE false` : sql`
+          SELECT id FROM fleet_events
+          WHERE organisation_id = ${orgId}
+            AND co2e_kg > 0
+            AND recorded_at >= ${fromDate}
+            AND recorded_at <= ${toDate}
+        `}
+        ${sourceFilter !== "fleet" && sourceFilter !== "energy" ? sql`UNION ALL` : sql``}
+        ${sourceFilter === "fleet" ? sql`SELECT 1 WHERE false` : sql`
+          SELECT id FROM energy_readings
+          WHERE organisation_id = ${orgId}
+            AND co2e_kg > 0
+            AND period_start >= ${fromDate}
+            AND period_end <= ${toDate}
+        `}
+      ) combined
+    `);
+
+    let itemsResult;
+    if (sourceFilter === "fleet") {
+      itemsResult = await db.execute(sql`
+        SELECT id, ${orgId}::text as organisation_id, vehicle_id as source_id,
+               'fleet' as source_type, co2e_kg, '1' as scope, recorded_at, created_at
+        FROM fleet_events
+        WHERE organisation_id = ${orgId}
+          AND co2e_kg > 0
+          AND recorded_at >= ${fromDate}
+          AND recorded_at <= ${toDate}
+        ORDER BY recorded_at DESC
+        LIMIT ${limit} OFFSET ${offset}
+      `);
+    } else if (sourceFilter === "energy") {
+      itemsResult = await db.execute(sql`
+        SELECT id, ${orgId}::text as organisation_id, id as source_id,
+               'energy' as source_type, co2e_kg, '2' as scope, period_start as recorded_at, created_at
+        FROM energy_readings
+        WHERE organisation_id = ${orgId}
+          AND co2e_kg > 0
+          AND period_start >= ${fromDate}
+          AND period_end <= ${toDate}
+        ORDER BY period_start DESC
+        LIMIT ${limit} OFFSET ${offset}
+      `);
+    } else {
+      itemsResult = await db.execute(sql`
+        SELECT * FROM (
+          SELECT id, ${orgId}::text as organisation_id, vehicle_id as source_id,
+                 'fleet' as source_type, co2e_kg, '1' as scope, recorded_at, created_at
           FROM fleet_events
           WHERE organisation_id = ${orgId}
             AND co2e_kg > 0
             AND recorded_at >= ${fromDate}
             AND recorded_at <= ${toDate}
-          ORDER BY recorded_at DESC
-          LIMIT ${limit} OFFSET ${offset}
-        `)
-      : { rows: [] };
-
-    const energyRows = source === "all" || source === "energy"
-      ? await db.execute(sql`
-          SELECT
-            id, ${orgId}::text as organisation_id, id as source_id,
-            'energy' as source, co2e_kg, 2 as scope,
-            period_start as recorded_at, created_at
+          UNION ALL
+          SELECT id, ${orgId}::text as organisation_id, id as source_id,
+                 'energy' as source_type, co2e_kg, '2' as scope, period_start as recorded_at, created_at
           FROM energy_readings
           WHERE organisation_id = ${orgId}
             AND co2e_kg > 0
             AND period_start >= ${fromDate}
             AND period_end <= ${toDate}
-          ORDER BY period_start DESC
-          LIMIT ${limit} OFFSET ${offset}
-        `)
-      : { rows: [] };
+        ) combined
+        ORDER BY recorded_at DESC
+        LIMIT ${limit} OFFSET ${offset}
+      `);
+    }
 
-    const fleetData = sqlRows(fleetRows);
-    const energyData = sqlRows(energyRows);
-    const items = [...fleetData, ...energyData];
+    const total = intCol(sqlRow(countResult), "total");
+    const items = sqlRows(itemsResult).map((r) => ({
+      id: strCol(r, "id"),
+      organisationId: strCol(r, "organisation_id"),
+      sourceId: strCol(r, "source_id"),
+      sourceType: strCol(r, "source_type"),
+      scope: strCol(r, "scope"),
+      co2eKg: numCol(r, "co2e_kg"),
+      recordedAt: strCol(r, "recorded_at"),
+      createdAt: strCol(r, "created_at"),
+    }));
 
-    res.json({ items, total: items.length, page, limit });
+    const totalPages = Math.ceil(total / limit);
+    res.json({ items, total, page, limit, totalPages });
   } catch (err) {
     req.log.error({ err }, "List emissions failed");
     res.status(500).json({ error: "Internal Server Error", message: "Failed to list emissions" });
@@ -66,10 +115,9 @@ router.get("/totals", requireAuth, requireOrgAccess, async (req, res) => {
   try {
     const orgId = req.params.orgId as string;
     const period = (req.query.period as string) || "month";
-    const groupBy = (req.query.groupBy as string) || "source";
 
     const now = new Date();
-    let fromDate = new Date();
+    const fromDate = new Date(now);
     switch (period) {
       case "day": fromDate.setDate(now.getDate() - 1); break;
       case "week": fromDate.setDate(now.getDate() - 7); break;
@@ -78,7 +126,6 @@ router.get("/totals", requireAuth, requireOrgAccess, async (req, res) => {
       case "year": fromDate.setFullYear(now.getFullYear() - 1); break;
     }
 
-    // Get fleet totals
     const fleetTotals = await db.execute(sql`
       SELECT COALESCE(SUM(co2e_kg), 0) as total
       FROM fleet_events
@@ -87,7 +134,6 @@ router.get("/totals", requireAuth, requireOrgAccess, async (req, res) => {
         AND recorded_at <= ${now}
     `);
 
-    // Get energy totals
     const energyTotals = await db.execute(sql`
       SELECT COALESCE(SUM(co2e_kg), 0) as total
       FROM energy_readings
@@ -99,15 +145,19 @@ router.get("/totals", requireAuth, requireOrgAccess, async (req, res) => {
     const energyCo2e = parseFloat(String(sqlRow(energyTotals).total ?? "0")) || 0;
     const totalCo2e = fleetCo2e + energyCo2e;
 
-    // Time series (monthly buckets)
     const timeSeries = await db.execute(sql`
-      SELECT
-        DATE_TRUNC('month', recorded_at) as date,
-        SUM(co2e_kg) as co2e_kg
-      FROM fleet_events
-      WHERE organisation_id = ${orgId}
-        AND recorded_at >= ${fromDate}
-      GROUP BY DATE_TRUNC('month', recorded_at)
+      SELECT date, SUM(co2e_kg) as co2e_kg FROM (
+        SELECT DATE_TRUNC('month', recorded_at) as date, co2e_kg
+        FROM fleet_events
+        WHERE organisation_id = ${orgId}
+          AND recorded_at >= ${fromDate}
+        UNION ALL
+        SELECT DATE_TRUNC('month', period_start) as date, co2e_kg
+        FROM energy_readings
+        WHERE organisation_id = ${orgId}
+          AND period_start >= ${fromDate}
+      ) combined
+      GROUP BY date
       ORDER BY date ASC
     `);
 
