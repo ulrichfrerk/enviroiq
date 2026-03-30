@@ -29,7 +29,9 @@ export default function Widget() {
     }
   };
 
-  const embedSnippet = config ? `<script src="${window.location.origin}/widget.js" data-widget-key="${config.widgetKey || 'YOUR_WIDGET_KEY'}"></script>` : "";
+  const embedSnippet = (config as any)?.embedScript || (config && (config as any).widgetKey
+    ? `<script src="${window.location.origin}/api/widget/${(config as any).widgetKey}/widget.js" async></script>\n<div id="enviroiq-widget"></div>`
+    : "");
 
   const copyEmbed = () => {
     navigator.clipboard.writeText(embedSnippet);

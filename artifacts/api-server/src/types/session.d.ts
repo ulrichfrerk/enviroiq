@@ -7,6 +7,6 @@ declare module "express-session" {
     name: string;
     role: "super_admin" | "org_admin" | "org_viewer";
     organisationId: string | null;
-    currentChallenge?: string;
+    webAuthnChallengeId?: string;
   }
 }

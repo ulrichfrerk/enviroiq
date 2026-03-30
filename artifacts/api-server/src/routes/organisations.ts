@@ -3,6 +3,7 @@ import { db, organisationsTable, usersTable, vehiclesTable, widgetConfigsTable }
 import { eq, count, sql } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
 import { requireAuth, requireRole, requireOrgAccess, requireOrgAdmin } from "../lib/auth.js";
+import { sqlRow, sqlRows, numCol, intCol, strCol } from "../lib/sql-result.js";
 import { logAudit } from "../lib/audit.js";
 import { calcSustainabilityScore } from "../lib/emissions.js";
 
@@ -208,16 +209,16 @@ router.get("/:orgId/summary", requireAuth, requireOrgAccess, async (req, res) =>
       WHERE organisation_id = ${orgId}
     `);
 
-    const fr: any = (fleetResult as any).rows?.[0] || (fleetResult as any)[0] || {};
-    const er: any = (energyResult as any).rows?.[0] || (energyResult as any)[0] || {};
-    const gr: any = (goalsResult as any).rows?.[0] || (goalsResult as any)[0] || {};
+    const fr = sqlRow(fleetResult);
+    const er = sqlRow(energyResult);
+    const gr = sqlRow(goalsResult);
 
-    const fleetCo2e = parseFloat(fr.total_co2e) || 0;
-    const energyCo2e = parseFloat(er.total_co2e) || 0;
-    const fleetDistance = parseFloat(fr.total_distance) || 0;
-    const energyKwh = parseFloat(er.total_kwh) || 0;
-    const goalsOnTrack = parseInt(gr.on_track) || 0;
-    const totalGoals = parseInt(gr.total) || 0;
+    const fleetCo2e = numCol(fr, "total_co2e");
+    const energyCo2e = numCol(er, "total_co2e");
+    const fleetDistance = numCol(fr, "total_distance");
+    const energyKwh = numCol(er, "total_kwh");
+    const goalsOnTrack = intCol(gr, "on_track");
+    const totalGoals = intCol(gr, "total");
 
     const score = calcSustainabilityScore({
       totalCo2eKg: fleetCo2e + energyCo2e,
@@ -237,7 +238,7 @@ router.get("/:orgId/summary", requireAuth, requireOrgAccess, async (req, res) =>
       activeVehicles: parseInt(String(vc)) || 0,
       sustainabilityScore: score,
       goalsOnTrack,
-      goalsBehind: parseInt(gr.behind) || 0,
+      goalsBehind: intCol(gr, "behind"),
       periodOverPeriodChange: 0,
       lastUpdated: now.toISOString(),
     });

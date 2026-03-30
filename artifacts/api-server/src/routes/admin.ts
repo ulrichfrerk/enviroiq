@@ -2,6 +2,7 @@ import { Router } from "express";
 import { db, organisationsTable, usersTable, vehiclesTable, auditLogsTable } from "@workspace/db";
 import { count, sql } from "drizzle-orm";
 import { requireRole } from "../lib/auth.js";
+import { sqlRow, sqlRows, numCol, intCol, strCol } from "../lib/sql-result.js";
 
 const router = Router();
 
@@ -34,15 +35,15 @@ router.get("/stats", requireRole("super_admin"), async (req, res) => {
       db.select().from(auditLogsTable).orderBy(sql`created_at DESC`).limit(10),
     ]);
 
-    const fc = (fleetCo2eResult as any).rows?.[0]?.total || (fleetCo2eResult as any)[0]?.total || 0;
-    const ec = (energyCo2eResult as any).rows?.[0]?.total || (energyCo2eResult as any)[0]?.total || 0;
+    const fc = parseFloat(String(sqlRow(fleetCo2eResult).total ?? 0)) || 0;
+    const ec = parseFloat(String(sqlRow(energyCo2eResult).total ?? 0)) || 0;
 
     res.json({
       totalOrganisations: parseInt(String(totalOrgs)) || 0,
       activeOrganisations: parseInt(String(activeOrgs)) || 0,
       totalUsers: parseInt(String(totalUsers)) || 0,
       totalVehicles: parseInt(String(totalVehicles)) || 0,
-      totalCo2eKgThisMonth: parseFloat(fc) + parseFloat(ec),
+      totalCo2eKgThisMonth: fc + ec,
       totalEnergyKwhThisMonth: 0,
       recentActivity,
     });

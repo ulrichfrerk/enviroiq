@@ -2,6 +2,7 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { requireAuth, requireOrgAccess } from "../lib/auth.js";
+import { sqlRow, sqlRows, numCol, intCol, strCol } from "../lib/sql-result.js";
 
 const router = Router({ mergeParams: true });
 
@@ -49,8 +50,8 @@ router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
         `)
       : { rows: [] };
 
-    const fleetData = (fleetRows as any).rows || fleetRows || [];
-    const energyData = (energyRows as any).rows || energyRows || [];
+    const fleetData = sqlRows(fleetRows);
+    const energyData = sqlRows(energyRows);
     const items = [...fleetData, ...energyData];
 
     res.json({ items, total: items.length, page, limit });
@@ -94,8 +95,8 @@ router.get("/totals", requireAuth, requireOrgAccess, async (req, res) => {
         AND period_start >= ${fromDate}
     `);
 
-    const fleetCo2e = parseFloat((fleetTotals as any).rows?.[0]?.total || (fleetTotals as any)[0]?.total || "0");
-    const energyCo2e = parseFloat((energyTotals as any).rows?.[0]?.total || (energyTotals as any)[0]?.total || "0");
+    const fleetCo2e = parseFloat(String(sqlRow(fleetTotals).total ?? "0")) || 0;
+    const energyCo2e = parseFloat(String(sqlRow(energyTotals).total ?? "0")) || 0;
     const totalCo2e = fleetCo2e + energyCo2e;
 
     // Time series (monthly buckets)
@@ -110,7 +111,7 @@ router.get("/totals", requireAuth, requireOrgAccess, async (req, res) => {
       ORDER BY date ASC
     `);
 
-    const timeSeriesRows = (timeSeries as any).rows || timeSeries || [];
+    const timeSeriesRows = sqlRows(timeSeries);
 
     const breakdowns = [
       {

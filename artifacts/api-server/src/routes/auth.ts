@@ -80,13 +80,16 @@ router.post("/passkey/register/begin", async (req, res) => {
       },
     });
 
+    const challengeId = uuidv4();
     await db.insert(webAuthnChallengesTable).values({
-      id: uuidv4(),
+      id: challengeId,
       challenge: options.challenge,
       email,
       type: "registration",
       expiresAt: new Date(Date.now() + 5 * 60 * 1000),
     });
+
+    req.session.webAuthnChallengeId = challengeId;
 
     res.json(options);
   } catch (err) {
@@ -104,11 +107,17 @@ router.post("/passkey/register/complete", async (req, res) => {
       return;
     }
 
+    const challengeId = req.session.webAuthnChallengeId;
+    if (!challengeId) {
+      res.status(400).json({ error: "Bad Request", message: "No active registration challenge for this session" });
+      return;
+    }
+
     const challengeRecord = await db.query.webAuthnChallengesTable.findFirst({
-      where: eq(webAuthnChallengesTable.email, email),
+      where: eq(webAuthnChallengesTable.id, challengeId),
     });
 
-    if (!challengeRecord || challengeRecord.expiresAt < new Date()) {
+    if (!challengeRecord || challengeRecord.expiresAt < new Date() || challengeRecord.type !== "registration") {
       res.status(400).json({ error: "Bad Request", message: "Challenge expired or not found" });
       return;
     }
@@ -154,6 +163,7 @@ router.post("/passkey/register/complete", async (req, res) => {
     session.name = user.name;
     session.role = user.role as "super_admin" | "org_admin" | "org_viewer";
     session.organisationId = user.organisationId;
+    delete session.webAuthnChallengeId;
 
     await logAudit({ req, action: "passkey.register", outcome: "success", userId: user.id, userEmail: email });
 
@@ -196,13 +206,16 @@ router.post("/passkey/authenticate/begin", async (req, res) => {
       userVerification: "preferred",
     });
 
+    const challengeId = uuidv4();
     await db.insert(webAuthnChallengesTable).values({
-      id: uuidv4(),
+      id: challengeId,
       challenge: options.challenge,
       email: email || null,
       type: "authentication",
       expiresAt: new Date(Date.now() + 5 * 60 * 1000),
     });
+
+    req.session.webAuthnChallengeId = challengeId;
 
     res.json(options);
   } catch (err) {
@@ -220,12 +233,18 @@ router.post("/passkey/authenticate/complete", async (req, res) => {
       return;
     }
 
+    const challengeId = req.session.webAuthnChallengeId;
+    if (!challengeId) {
+      res.status(400).json({ error: "Bad Request", message: "No active authentication challenge for this session" });
+      return;
+    }
+
     const challengeRecord = await db.query.webAuthnChallengesTable.findFirst({
-      where: eq(webAuthnChallengesTable.type, "authentication"),
+      where: eq(webAuthnChallengesTable.id, challengeId),
     });
 
-    if (!challengeRecord || challengeRecord.expiresAt < new Date()) {
-      res.status(400).json({ error: "Bad Request", message: "Challenge expired" });
+    if (!challengeRecord || challengeRecord.expiresAt < new Date() || challengeRecord.type !== "authentication") {
+      res.status(400).json({ error: "Bad Request", message: "Challenge expired or not found" });
       return;
     }
 
@@ -279,6 +298,7 @@ router.post("/passkey/authenticate/complete", async (req, res) => {
     session.name = user.name;
     session.role = user.role as "super_admin" | "org_admin" | "org_viewer";
     session.organisationId = user.organisationId;
+    delete session.webAuthnChallengeId;
 
     await logAudit({ req, action: "passkey.authenticate", outcome: "success", userId: user.id, userEmail: user.email });
 
@@ -393,8 +413,9 @@ router.post("/magic-link/verify", async (req, res) => {
 // POST /auth/logout
 router.post("/logout", async (req, res) => {
   await logAudit({ req, action: "auth.logout", outcome: "success" });
-  (req as any).session.destroy();
-  res.json({ message: "Logged out successfully" });
+  req.session.destroy(() => {
+    res.json({ message: "Logged out successfully" });
+  });
 });
 
 export default router;

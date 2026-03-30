@@ -3,6 +3,7 @@ import { db, widgetConfigsTable, organisationsTable, goalsTable } from "@workspa
 import { eq, sql } from "drizzle-orm";
 import { requireAuth, requireOrgAccess, requireOrgAdmin } from "../lib/auth.js";
 import { calcSustainabilityScore } from "../lib/emissions.js";
+import { sqlRow, numCol, intCol } from "../lib/sql-result.js";
 
 const router = Router({ mergeParams: true });
 export const widgetPublicRouter = Router();
@@ -109,55 +110,65 @@ widgetPublicRouter.get("/:widgetKey/widget.js", async (req, res) => {
     const title = config.title || org.name;
     const theme = config.theme || "light";
 
+    const showTotalCo2e = config.showTotalCo2e !== false;
+    const showSustainabilityScore = config.showSustainabilityScore !== false;
+    const showFleetStats = config.showFleetStats !== false;
+    const showEnergyUsage = config.showEnergyUsage !== false;
+    const showGoals = config.showGoals !== false;
+    const showLastUpdated = config.showLastUpdated !== false;
+
     const js = `(function(){
   'use strict';
-  var key = ${JSON.stringify(widgetKey)};
   var apiBase = ${JSON.stringify(apiBase)};
   var accent = ${JSON.stringify(accentColor)};
   var widgetTitle = ${JSON.stringify(title)};
   var theme = ${JSON.stringify(theme)};
+  var cfg = {
+    showTotalCo2e: ${showTotalCo2e},
+    showSustainabilityScore: ${showSustainabilityScore},
+    showFleetStats: ${showFleetStats},
+    showEnergyUsage: ${showEnergyUsage},
+    showGoals: ${showGoals},
+    showLastUpdated: ${showLastUpdated}
+  };
 
   function el(tag, attrs, children) {
     var e = document.createElement(tag);
-    if (attrs) Object.keys(attrs).forEach(function(k){ if(k==='style'){Object.assign(e.style,attrs[k])}else{e.setAttribute(k,attrs[k]);} });
+    if (attrs) Object.keys(attrs).forEach(function(k){ if(k==='style'){Object.assign(e.style,attrs[k]);}else{e.setAttribute(k,attrs[k]);} });
     if (children) children.forEach(function(c){ if(c) e.appendChild(typeof c==='string'?document.createTextNode(c):c); });
     return e;
   }
 
-  function fmt(n) { return typeof n==='number' ? n.toLocaleString(undefined,{maximumFractionDigits:1}) : '—'; }
+  function fmt(n) { return typeof n==='number' ? n.toLocaleString(undefined,{maximumFractionDigits:1}) : '\u2014'; }
 
   function render(data, container) {
     var bg = theme==='dark'?'#1a1a1a':'#ffffff';
     var fg = theme==='dark'?'#f1f5f9':'#0f172a';
     var muted = theme==='dark'?'#94a3b8':'#64748b';
     var border = theme==='dark'?'#334155':'#e2e8f0';
+    var card = theme==='dark'?'#0f172a':'#f8fafc';
 
-    container.innerHTML = '';
-    container.appendChild(el('div',{style:{fontFamily:'system-ui,sans-serif',background:bg,color:fg,borderRadius:'12px',border:'1px solid '+border,padding:'20px',maxWidth:'420px',boxSizing:'border-box'}},[
-      el('div',{style:{display:'flex',alignItems:'center',marginBottom:'16px',gap:'8px'}},[
-        el('div',{style:{width:'10px',height:'10px',borderRadius:'50%',background:accent}}),
-        el('span',{style:{fontWeight:'700',fontSize:'15px',color:fg}},[ widgetTitle ]),
-        el('span',{style:{marginLeft:'auto',fontSize:'11px',color:muted}},[ 'Powered by EnviroIQ' ])
-      ]),
-      el('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'12px'}},[
-        el('div',{style:{background:theme==='dark'?'#0f172a':'#f8fafc',borderRadius:'8px',padding:'12px'}},[
-          el('div',{style:{fontSize:'11px',color:muted,marginBottom:'4px'}},['Total CO\u2082e']),
-          el('div',{style:{fontSize:'22px',fontWeight:'700',color:accent}},[fmt(data.totalCo2eKg/1000)+' t']),
-        ]),
-        el('div',{style:{background:theme==='dark'?'#0f172a':'#f8fafc',borderRadius:'8px',padding:'12px'}},[
-          el('div',{style:{fontSize:'11px',color:muted,marginBottom:'4px'}},['Sustainability']),
-          el('div',{style:{fontSize:'22px',fontWeight:'700',color:accent}},[fmt(data.sustainabilityScore)+'/100']),
-        ]),
-        el('div',{style:{background:theme==='dark'?'#0f172a':'#f8fafc',borderRadius:'8px',padding:'12px'}},[
-          el('div',{style:{fontSize:'11px',color:muted,marginBottom:'4px'}},['Fleet Distance']),
-          el('div',{style:{fontSize:'18px',fontWeight:'600',color:fg}},[fmt(data.fleetDistanceKm)+' km']),
-        ]),
-        el('div',{style:{background:theme==='dark'?'#0f172a':'#f8fafc',borderRadius:'8px',padding:'12px'}},[
-          el('div',{style:{fontSize:'11px',color:muted,marginBottom:'4px'}},['Energy (kWh)']),
-          el('div',{style:{fontSize:'18px',fontWeight:'600',color:fg}},[fmt(data.totalEnergyKwh)]),
-        ]),
-      ]),
-      data.goals && data.goals.length ? el('div',{style:{marginTop:'14px'}},[
+    var metrics = [];
+    if (cfg.showTotalCo2e) metrics.push(el('div',{style:{background:card,borderRadius:'8px',padding:'12px'}},[
+      el('div',{style:{fontSize:'11px',color:muted,marginBottom:'4px'}},['Total CO\u2082e']),
+      el('div',{style:{fontSize:'22px',fontWeight:'700',color:accent}},[fmt(data.totalCo2eKg/1000)+' t']),
+    ]));
+    if (cfg.showSustainabilityScore) metrics.push(el('div',{style:{background:card,borderRadius:'8px',padding:'12px'}},[
+      el('div',{style:{fontSize:'11px',color:muted,marginBottom:'4px'}},['Sustainability']),
+      el('div',{style:{fontSize:'22px',fontWeight:'700',color:accent}},[fmt(data.sustainabilityScore)+'/100']),
+    ]));
+    if (cfg.showFleetStats) metrics.push(el('div',{style:{background:card,borderRadius:'8px',padding:'12px'}},[
+      el('div',{style:{fontSize:'11px',color:muted,marginBottom:'4px'}},['Fleet Distance']),
+      el('div',{style:{fontSize:'18px',fontWeight:'600',color:fg}},[fmt(data.fleetDistanceKm)+' km']),
+    ]));
+    if (cfg.showEnergyUsage) metrics.push(el('div',{style:{background:card,borderRadius:'8px',padding:'12px'}},[
+      el('div',{style:{fontSize:'11px',color:muted,marginBottom:'4px'}},['Energy (kWh)']),
+      el('div',{style:{fontSize:'18px',fontWeight:'600',color:fg}},[fmt(data.totalEnergyKwh)]),
+    ]));
+
+    var goalEls = null;
+    if (cfg.showGoals && data.goals && data.goals.length) {
+      goalEls = el('div',{style:{marginTop:'14px'}},[
         el('div',{style:{fontSize:'12px',color:muted,marginBottom:'8px',fontWeight:'600'}},['Sustainability Goals']),
         ...data.goals.slice(0,3).map(function(g){
           return el('div',{style:{display:'flex',alignItems:'center',gap:'8px',marginBottom:'6px'}},[
@@ -165,10 +176,21 @@ widgetPublicRouter.get("/:widgetKey/widget.js", async (req, res) => {
             el('span',{style:{fontSize:'12px',color:fg}},[g.title])
           ]);
         })
-      ]) : null,
-      el('div',{style:{marginTop:'14px',fontSize:'10px',color:muted,textAlign:'right'}},[
+      ]);
+    }
+
+    container.innerHTML = '';
+    container.appendChild(el('div',{style:{fontFamily:'system-ui,sans-serif',background:bg,color:fg,borderRadius:'12px',border:'1px solid '+border,padding:'20px',maxWidth:'420px',boxSizing:'border-box'}},[
+      el('div',{style:{display:'flex',alignItems:'center',marginBottom:'16px',gap:'8px'}},[
+        el('div',{style:{width:'10px',height:'10px',borderRadius:'50%',background:accent}}),
+        el('span',{style:{fontWeight:'700',fontSize:'15px',color:fg}},[widgetTitle]),
+        el('span',{style:{marginLeft:'auto',fontSize:'11px',color:muted}},['Powered by EnviroIQ'])
+      ]),
+      metrics.length ? el('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'12px'}},metrics) : null,
+      goalEls,
+      cfg.showLastUpdated ? el('div',{style:{marginTop:'14px',fontSize:'10px',color:muted,textAlign:'right'}},[
         'Updated: '+new Date(data.lastUpdated).toLocaleDateString()
-      ])
+      ]) : null
     ]));
   }
 
@@ -233,12 +255,12 @@ widgetPublicRouter.get("/:widgetKey/data", async (req, res) => {
       db.query.goalsTable.findMany({ where: eq(goalsTable.organisationId, org.id) }),
     ]);
 
-    const fr = (fleetResult as any).rows?.[0] || (fleetResult as any)[0] || {};
-    const er = (energyResult as any).rows?.[0] || (energyResult as any)[0] || {};
+    const fr = sqlRow(fleetResult);
+    const er = sqlRow(energyResult);
 
-    const fleetCo2e = parseFloat(fr.co2e) || 0;
-    const energyCo2e = parseFloat(er.co2e) || 0;
-    const fleetDist = parseFloat(fr.dist) || 0;
+    const fleetCo2e = numCol(fr, "co2e");
+    const energyCo2e = numCol(er, "co2e");
+    const fleetDist = numCol(fr, "dist");
     const goalsOnTrack = goals.filter((g) => g.status === "on_track").length;
 
     const score = calcSustainabilityScore({
@@ -255,10 +277,10 @@ widgetPublicRouter.get("/:widgetKey/data", async (req, res) => {
       totalCo2eKg: fleetCo2e + energyCo2e,
       fleetCo2eKg: fleetCo2e,
       energyCo2eKg: energyCo2e,
-      totalEnergyKwh: parseFloat(er.kwh) || 0,
+      totalEnergyKwh: numCol(er, "kwh"),
       fleetDistanceKm: fleetDist,
       sustainabilityScore: score,
-      activeVehicles: parseInt(fr.vehicles) || 0,
+      activeVehicles: intCol(fr, "vehicles"),
       goals: goals
         .filter((g) => g.isPublic)
         .map((g) => ({ title: g.title, progressPercent: 0, status: g.status })),

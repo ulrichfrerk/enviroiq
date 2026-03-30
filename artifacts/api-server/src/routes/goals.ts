@@ -3,6 +3,7 @@ import { db, goalsTable, fleetEventsTable, energyReadingsTable } from "@workspac
 import { eq, and, count, sql } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
 import { requireAuth, requireOrgAccess, requireOrgAdmin } from "../lib/auth.js";
+import { sqlRow, sqlRows, numCol, intCol, strCol } from "../lib/sql-result.js";
 import { logAudit } from "../lib/audit.js";
 
 const router = Router({ mergeParams: true });
@@ -115,7 +116,7 @@ router.get("/:goalId", requireAuth, requireOrgAccess, async (req, res) => {
         WHERE organisation_id = ${orgId}
           AND recorded_at >= ${fromDate}
       `);
-      currentValue = parseFloat((result as any).rows?.[0]?.total || (result as any)[0]?.total || "0");
+      currentValue = parseFloat(String(sqlRow(result).total ?? "0")) || 0;
     } else if (goal.category === "energy") {
       const result = await db.execute(sql`
         SELECT COALESCE(SUM(co2e_kg), 0) as total
@@ -123,7 +124,7 @@ router.get("/:goalId", requireAuth, requireOrgAccess, async (req, res) => {
         WHERE organisation_id = ${orgId}
           AND period_start >= ${fromDate}
       `);
-      currentValue = parseFloat((result as any).rows?.[0]?.total || (result as any)[0]?.total || "0");
+      currentValue = parseFloat(String(sqlRow(result).total ?? "0")) || 0;
     }
 
     const { progressPercent, status } = calcGoalProgress(goal, currentValue);

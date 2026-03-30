@@ -3,6 +3,7 @@ import { db, reportsTable, goalsTable } from "@workspace/db";
 import { eq, and, count, sql } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
 import { requireAuth, requireOrgAccess, requireOrgAdmin } from "../lib/auth.js";
+import { sqlRow, sqlRows, numCol, intCol, strCol } from "../lib/sql-result.js";
 import { logAudit } from "../lib/audit.js";
 import { calcSustainabilityScore } from "../lib/emissions.js";
 
@@ -60,13 +61,13 @@ router.post("/", requireAuth, requireOrgAdmin, async (req, res) => {
           db.execute(sql`SELECT COALESCE(SUM(co2e_kg),0) as co2e, COALESCE(SUM(usage_kwh),0) as kwh FROM energy_readings WHERE organisation_id = ${orgId} AND period_start >= ${from} AND period_end <= ${to}`),
         ]);
 
-        const fr = (fleetResult as any).rows?.[0] || (fleetResult as any)[0] || {};
-        const er = (energyResult as any).rows?.[0] || (energyResult as any)[0] || {};
+        const fr = sqlRow(fleetResult);
+        const er = sqlRow(energyResult);
         const goals = await db.query.goalsTable.findMany({ where: eq(goalsTable.organisationId, orgId) });
 
-        const fleetCo2e = parseFloat(fr.co2e) || 0;
-        const energyCo2e = parseFloat(er.co2e) || 0;
-        const fleetDist = parseFloat(fr.dist) || 0;
+        const fleetCo2e = numCol(fr, "co2e");
+        const energyCo2e = numCol(er, "co2e");
+        const fleetDist = numCol(fr, "dist");
         const goalsOnTrack = goals.filter((g) => g.status === "on_track").length;
 
         const score = calcSustainabilityScore({
@@ -81,7 +82,7 @@ router.post("/", requireAuth, requireOrgAdmin, async (req, res) => {
             totalCo2eKg: fleetCo2e + energyCo2e,
             fleetCo2eKg: fleetCo2e,
             energyCo2eKg: energyCo2e,
-            totalEnergyKwh: parseFloat(er.kwh) || 0,
+            totalEnergyKwh: numCol(er, "kwh"),
             sustainabilityScore: score,
           },
           goals: goals.map((g) => ({ title: g.title, status: g.status, targetValue: g.targetValue, targetUnit: g.targetUnit })),

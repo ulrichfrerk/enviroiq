@@ -7,6 +7,15 @@ import { logAudit } from "../lib/audit.js";
 
 const router = Router({ mergeParams: true });
 
+const VALID_ORG_ROLES = ["org_admin", "org_viewer"] as const;
+type OrgRole = (typeof VALID_ORG_ROLES)[number];
+
+function resolveAllowedRoles(callerRole: string | undefined): OrgRole[] {
+  if (callerRole === "super_admin") return ["org_admin", "org_viewer"];
+  if (callerRole === "org_admin") return ["org_viewer"];
+  return [];
+}
+
 // GET /organisations/:orgId/users
 router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
   try {
@@ -35,6 +44,16 @@ router.post("/", requireAuth, requireRole("super_admin", "org_admin"), requireOr
       return;
     }
 
+    const callerRole = req.session.role;
+    const allowedRoles = resolveAllowedRoles(callerRole);
+    if (!allowedRoles.includes(role as OrgRole)) {
+      res.status(403).json({
+        error: "Forbidden",
+        message: `Cannot assign role '${role}'. Allowed roles for your level: ${allowedRoles.join(", ")}`,
+      });
+      return;
+    }
+
     const existing = await db.query.usersTable.findFirst({ where: eq(usersTable.email, email) });
     if (existing) {
       res.status(409).json({ error: "Conflict", message: "User with this email already exists" });
@@ -57,7 +76,8 @@ router.post("/", requireAuth, requireRole("super_admin", "org_admin"), requireOr
 // GET /organisations/:orgId/users/:userId
 router.get("/:userId", requireAuth, requireOrgAccess, async (req, res) => {
   try {
-    const orgId = req.params.orgId as string; const userId = req.params.userId as string;
+    const orgId = req.params.orgId as string;
+    const userId = req.params.userId as string;
     const user = await db.query.usersTable.findFirst({
       where: and(eq(usersTable.id, userId), eq(usersTable.organisationId, orgId)),
     });
@@ -75,12 +95,30 @@ router.get("/:userId", requireAuth, requireOrgAccess, async (req, res) => {
 // PATCH /organisations/:orgId/users/:userId
 router.patch("/:userId", requireAuth, requireRole("super_admin", "org_admin"), requireOrgAccess, async (req, res) => {
   try {
-    const orgId = req.params.orgId as string; const userId = req.params.userId as string;
+    const orgId = req.params.orgId as string;
+    const userId = req.params.userId as string;
     const { name, role, isActive } = req.body;
+
+    if (role !== undefined) {
+      const callerRole = req.session.role;
+      const allowedRoles = resolveAllowedRoles(callerRole);
+      if (!allowedRoles.includes(role as OrgRole)) {
+        res.status(403).json({
+          error: "Forbidden",
+          message: `Cannot assign role '${role}'. Allowed roles for your level: ${allowedRoles.join(", ")}`,
+        });
+        return;
+      }
+    }
+
+    const updateFields: Record<string, unknown> = { updatedAt: new Date() };
+    if (name !== undefined) updateFields.name = name;
+    if (role !== undefined) updateFields.role = role;
+    if (isActive !== undefined) updateFields.isActive = isActive;
 
     const [user] = await db
       .update(usersTable)
-      .set({ name, role, isActive, updatedAt: new Date() })
+      .set(updateFields)
       .where(and(eq(usersTable.id, userId), eq(usersTable.organisationId, orgId)))
       .returning();
 
@@ -88,7 +126,7 @@ router.patch("/:userId", requireAuth, requireRole("super_admin", "org_admin"), r
       res.status(404).json({ error: "Not Found", message: "User not found" });
       return;
     }
-    await logAudit({ req, action: "user.update", resourceType: "user", resourceId: userId });
+    await logAudit({ req, action: "user.update", resourceType: "user", resourceId: userId, details: { role } });
     res.json(user);
   } catch (err) {
     req.log.error({ err }, "Update user failed");
@@ -99,13 +137,19 @@ router.patch("/:userId", requireAuth, requireRole("super_admin", "org_admin"), r
 // DELETE /organisations/:orgId/users/:userId
 router.delete("/:userId", requireAuth, requireRole("super_admin", "org_admin"), requireOrgAccess, async (req, res) => {
   try {
-    const orgId = req.params.orgId as string; const userId = req.params.userId as string;
+    const orgId = req.params.orgId as string;
+    const userId = req.params.userId as string;
 
     const existing = await db.query.usersTable.findFirst({
       where: and(eq(usersTable.id, userId), eq(usersTable.organisationId, orgId)),
     });
     if (!existing) {
       res.status(404).json({ error: "Not Found", message: "User not found" });
+      return;
+    }
+
+    if (existing.role === "super_admin") {
+      res.status(403).json({ error: "Forbidden", message: "Cannot delete a super_admin user" });
       return;
     }
 
