@@ -209,13 +209,14 @@ router.post("/passkey/register/complete", async (req, res) => {
 
     await db.update(usersTable).set({ lastLoginAt: new Date() }).where(eq(usersTable.id, user.id));
 
+    // Regenerate session ID to prevent session fixation after privilege transition
+    await new Promise<void>((resolve, reject) => req.session.regenerate((err) => err ? reject(err) : resolve()));
     const session = req.session;
     session.userId = user.id;
     session.email = user.email;
     session.name = user.name;
     session.role = user.role as "super_admin" | "org_admin" | "org_viewer";
     session.organisationId = user.organisationId;
-    delete session.webAuthnChallengeId;
 
     await logAudit({ req, action: "passkey.register", outcome: "success", userId: user.id, userEmail: email });
 
@@ -347,13 +348,14 @@ router.post("/passkey/authenticate/complete", async (req, res) => {
 
     await db.update(usersTable).set({ lastLoginAt: new Date() }).where(eq(usersTable.id, user.id));
 
+    // Regenerate session ID to prevent session fixation after privilege transition
+    await new Promise<void>((resolve, reject) => req.session.regenerate((err) => err ? reject(err) : resolve()));
     const session = req.session;
     session.userId = user.id;
     session.email = user.email;
     session.name = user.name;
     session.role = user.role as "super_admin" | "org_admin" | "org_viewer";
     session.organisationId = user.organisationId;
-    delete session.webAuthnChallengeId;
 
     await logAudit({ req, action: "passkey.authenticate", outcome: "success", userId: user.id, userEmail: user.email });
 
@@ -450,6 +452,8 @@ router.post("/magic-link/verify", async (req, res) => {
 
     await db.update(usersTable).set({ lastLoginAt: new Date() }).where(eq(usersTable.id, user.id));
 
+    // Regenerate session ID to prevent session fixation after privilege transition
+    await new Promise<void>((resolve, reject) => req.session.regenerate((err) => err ? reject(err) : resolve()));
     const session = req.session;
     session.userId = user.id;
     session.email = user.email;
