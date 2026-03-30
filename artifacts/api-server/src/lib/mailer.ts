@@ -1,36 +1,43 @@
-import nodemailer from "nodemailer";
+// Email sending via Replit Resend integration
+import { Resend } from "resend";
 import { logger } from "./logger.js";
 
-let transporter: nodemailer.Transporter | null = null;
+// Resend integration — credentials fetched fresh per-send (tokens expire)
+async function getResendClient(): Promise<{ client: Resend; from: string } | null> {
+  const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
+  const xReplitToken = process.env.REPL_IDENTITY
+    ? "repl " + process.env.REPL_IDENTITY
+    : process.env.WEB_REPL_RENEWAL
+      ? "depl " + process.env.WEB_REPL_RENEWAL
+      : null;
 
-function getTransporter(): nodemailer.Transporter | null {
-  if (transporter) return transporter;
-
-  const smtpHost = process.env.SMTP_HOST;
-  const smtpPort = parseInt(process.env.SMTP_PORT || "587");
-  const smtpUser = process.env.SMTP_USER;
-  const smtpPass = process.env.SMTP_PASS;
-  const smtpFrom = process.env.SMTP_FROM;
-
-  if (!smtpHost || !smtpUser || !smtpPass || !smtpFrom) {
+  if (!hostname || !xReplitToken) {
     return null;
   }
 
-  transporter = nodemailer.createTransport({
-    host: smtpHost,
-    port: smtpPort,
-    secure: smtpPort === 465,
-    auth: { user: smtpUser, pass: smtpPass },
-  });
+  try {
+    const data = await fetch(
+      `https://${hostname}/api/v2/connection?include_secrets=true&connector_names=resend`,
+      {
+        headers: {
+          Accept: "application/json",
+          "X-Replit-Token": xReplitToken,
+        },
+      },
+    ).then((res) => res.json()) as { items?: Array<{ settings?: { api_key?: string; from_email?: string } }> };
 
-  return transporter;
+    const settings = data?.items?.[0]?.settings;
+    if (!settings?.api_key) return null;
+
+    const from = settings.from_email || "EnviroIQ <noreply@enviroiq.app>";
+    return { client: new Resend(settings.api_key), from };
+  } catch (err) {
+    logger.warn({ err }, "Failed to fetch Resend credentials");
+    return null;
+  }
 }
 
-export async function sendMagicLinkEmail(to: string, magicUrl: string): Promise<{ sent: boolean; devMode: boolean }> {
-  const smtp = getTransporter();
-  const from = process.env.SMTP_FROM || "noreply@enviroiq.app";
-
-  const html = `<!DOCTYPE html>
+const emailHtml = (magicUrl: string) => `<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8"><title>Sign in to EnviroIQ</title></head>
 <body style="font-family:system-ui,sans-serif;background:#f9fafb;margin:0;padding:40px 20px;">
@@ -46,26 +53,38 @@ export async function sendMagicLinkEmail(to: string, magicUrl: string): Promise<
 </body>
 </html>`;
 
-  const text = `Sign in to EnviroIQ\n\nClick this link to sign in (expires in 15 minutes):\n${magicUrl}\n\nIf you didn't request this, ignore this email.`;
+export async function sendMagicLinkEmail(
+  to: string,
+  magicUrl: string,
+): Promise<{ sent: boolean; devMode: boolean }> {
+  const resend = await getResendClient();
 
-  if (smtp) {
-    try {
-      await smtp.sendMail({ from, to, subject: "Sign in to EnviroIQ", html, text });
-      logger.info({ to }, "Magic link email sent");
-      return { sent: true, devMode: false };
-    } catch (err) {
-      logger.error({ err, to }, "Failed to send magic link email via SMTP");
-      throw err;
+  if (resend) {
+    const { data, error } = await resend.client.emails.send({
+      from: resend.from,
+      to,
+      subject: "Sign in to EnviroIQ",
+      html: emailHtml(magicUrl),
+      text: `Sign in to EnviroIQ\n\nClick this link to sign in (expires in 15 minutes):\n${magicUrl}\n\nIf you didn't request this, ignore this email.`,
+    });
+
+    if (error) {
+      logger.error({ error, to }, "Resend failed to send magic link email");
+      throw new Error(`Email send failed: ${error.message}`);
     }
+
+    logger.info({ to, messageId: data?.id }, "Magic link email sent via Resend");
+    return { sent: true, devMode: false };
   }
 
-  // SMTP not configured — log to console in dev, warn in production
+  // Resend not available — fall back to console in dev, fail in production
   if (process.env.NODE_ENV !== "production") {
     // eslint-disable-next-line no-console
-    console.log(`\n[MAGIC LINK - EMAIL NOT CONFIGURED]\n  To: ${to}\n  URL: ${magicUrl}\n  Configure SMTP_HOST, SMTP_USER, SMTP_PASS, SMTP_FROM to send real emails.\n`);
+    console.log(
+      `\n[MAGIC LINK — RESEND NOT CONFIGURED]\n  To: ${to}\n  URL: ${magicUrl}\n`,
+    );
     return { sent: false, devMode: true };
   }
 
-  // In production without SMTP: throw so the caller can return a meaningful error
-  throw new Error("SMTP not configured — cannot send magic link email in production");
+  throw new Error("Resend not configured — cannot send magic link email in production");
 }
