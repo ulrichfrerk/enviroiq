@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { db, vehiclesTable, fleetEventsTable } from "@workspace/db";
+import { db, vehiclesTable, fleetEventsTable, organisationsTable } from "@workspace/db";
 import { eq, and, gte, lte, count, sql } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
 import { requireAuth, requireOrgAccess } from "../lib/auth.js";
@@ -14,7 +14,7 @@ const webhookRouter = Router();
 // GET /organisations/:orgId/fleet/vehicles
 router.get("/vehicles", requireAuth, requireOrgAccess, async (req, res) => {
   try {
-    const { orgId } = req.params;
+    const orgId = req.params.orgId as string as string;
     const vehicles = await db.query.vehiclesTable.findMany({
       where: eq(vehiclesTable.organisationId, orgId),
     });
@@ -30,7 +30,7 @@ router.get("/vehicles", requireAuth, requireOrgAccess, async (req, res) => {
 // POST /organisations/:orgId/fleet/vehicles
 router.post("/vehicles", requireAuth, requireOrgAccess, async (req, res) => {
   try {
-    const { orgId } = req.params;
+    const orgId = req.params.orgId as string as string;
     const { name, registration, make, model, year, fuelType, emissionFactorKgPerKm, gpsProvider, gpsDeviceId } = req.body;
     if (!name || !fuelType) {
       res.status(400).json({ error: "Bad Request", message: "name, fuelType required" });
@@ -62,8 +62,8 @@ router.get("/vehicles/:vehicleId", requireAuth, requireOrgAccess, async (req, re
   try {
     const vehicle = await db.query.vehiclesTable.findFirst({
       where: and(
-        eq(vehiclesTable.id, req.params.vehicleId),
-        eq(vehiclesTable.organisationId, req.params.orgId),
+        eq(vehiclesTable.id, req.params.vehicleId as string),
+        eq(vehiclesTable.organisationId, req.params.orgId as string),
       ),
     });
     if (!vehicle) {
@@ -84,13 +84,13 @@ router.patch("/vehicles/:vehicleId", requireAuth, requireOrgAccess, async (req, 
     const [vehicle] = await db
       .update(vehiclesTable)
       .set({ name, registration, make, model, year, fuelType, emissionFactorKgPerKm, gpsProvider, gpsDeviceId, isActive, updatedAt: new Date() })
-      .where(and(eq(vehiclesTable.id, req.params.vehicleId), eq(vehiclesTable.organisationId, req.params.orgId)))
+      .where(and(eq(vehiclesTable.id, req.params.vehicleId as string), eq(vehiclesTable.organisationId, req.params.orgId as string)))
       .returning();
     if (!vehicle) {
       res.status(404).json({ error: "Not Found", message: "Vehicle not found" });
       return;
     }
-    await logAudit({ req, action: "vehicle.update", resourceType: "vehicle", resourceId: req.params.vehicleId });
+    await logAudit({ req, action: "vehicle.update", resourceType: "vehicle", resourceId: req.params.vehicleId as string });
     res.json(vehicle);
   } catch (err) {
     req.log.error({ err }, "Update vehicle failed");
@@ -102,9 +102,9 @@ router.patch("/vehicles/:vehicleId", requireAuth, requireOrgAccess, async (req, 
 router.delete("/vehicles/:vehicleId", requireAuth, requireOrgAccess, async (req, res) => {
   try {
     await db.delete(vehiclesTable).where(
-      and(eq(vehiclesTable.id, req.params.vehicleId), eq(vehiclesTable.organisationId, req.params.orgId)),
+      and(eq(vehiclesTable.id, req.params.vehicleId as string), eq(vehiclesTable.organisationId, req.params.orgId as string)),
     );
-    await logAudit({ req, action: "vehicle.delete", resourceType: "vehicle", resourceId: req.params.vehicleId });
+    await logAudit({ req, action: "vehicle.delete", resourceType: "vehicle", resourceId: req.params.vehicleId as string });
     res.json({ message: "Vehicle removed" });
   } catch (err) {
     req.log.error({ err }, "Delete vehicle failed");
@@ -115,7 +115,7 @@ router.delete("/vehicles/:vehicleId", requireAuth, requireOrgAccess, async (req,
 // GET /organisations/:orgId/fleet/events
 router.get("/events", requireAuth, requireOrgAccess, async (req, res) => {
   try {
-    const { orgId } = req.params;
+    const orgId = req.params.orgId as string as string;
     const { vehicleId, from, to } = req.query;
     const page = parseInt(req.query.page as string) || 1;
     const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
@@ -159,7 +159,15 @@ router.get("/events", requireAuth, requireOrgAccess, async (req, res) => {
   }
 });
 
-// ─── Webhooks (no auth — uses API key) ──────────────────────────────────────
+// ─── Webhooks (authenticated via per-org webhook secret) ─────────────────────
+
+async function validateWebhookSecret(secret: string): Promise<typeof organisationsTable.$inferSelect | null> {
+  if (!secret || secret.trim().length < 8) return null;
+  const org = await db.query.organisationsTable.findFirst({
+    where: eq(organisationsTable.webhookSecret, secret),
+  });
+  return org ?? null;
+}
 
 async function findVehicleByDeviceId(deviceId: string, orgId?: string) {
   if (orgId) {
@@ -215,12 +223,13 @@ async function insertFleetEvent(data: {
 webhookRouter.post("/navman", async (req, res) => {
   try {
     const { deviceId, eventType, latitude, longitude, speed, odometer, timestamp, apiKey } = req.body;
-    if (!apiKey) {
-      res.status(401).json({ error: "Unauthorized", message: "API key required" });
+    const org = await validateWebhookSecret(apiKey);
+    if (!org) {
+      res.status(401).json({ error: "Unauthorized", message: "Invalid or missing API key" });
       return;
     }
 
-    const vehicle = await findVehicleByDeviceId(deviceId);
+    const vehicle = await findVehicleByDeviceId(deviceId, org.id);
     if (!vehicle) {
       res.json({ message: "Device not registered, event ignored" });
       return;
@@ -242,7 +251,6 @@ webhookRouter.post("/navman", async (req, res) => {
 
     res.json({ message: "Event recorded" });
   } catch (err) {
-    req.log?.error({ err }, "Navman webhook failed");
     res.status(500).json({ error: "Internal Server Error", message: "Failed to process event" });
   }
 });
@@ -251,12 +259,13 @@ webhookRouter.post("/navman", async (req, res) => {
 webhookRouter.post("/blackhawk", async (req, res) => {
   try {
     const { unit_id, event, lat, lng, spd, dist, ts, token } = req.body;
-    if (!token) {
-      res.status(401).json({ error: "Unauthorized", message: "Token required" });
+    const org = await validateWebhookSecret(token);
+    if (!org) {
+      res.status(401).json({ error: "Unauthorized", message: "Invalid or missing token" });
       return;
     }
 
-    const vehicle = await findVehicleByDeviceId(unit_id);
+    const vehicle = await findVehicleByDeviceId(unit_id, org.id);
     if (!vehicle) {
       res.json({ message: "Device not registered, event ignored" });
       return;
@@ -279,7 +288,6 @@ webhookRouter.post("/blackhawk", async (req, res) => {
 
     res.json({ message: "Event recorded" });
   } catch (err) {
-    req.log?.error({ err }, "Blackhawk webhook failed");
     res.status(500).json({ error: "Internal Server Error", message: "Failed to process event" });
   }
 });
@@ -287,13 +295,14 @@ webhookRouter.post("/blackhawk", async (req, res) => {
 // POST /webhooks/fleet/generic
 webhookRouter.post("/generic", async (req, res) => {
   try {
-    const { deviceId, orgId, eventType, latitude, longitude, speedKmh, distanceKm, fuelLitres, timestamp, apiKey } = req.body;
-    if (!apiKey) {
-      res.status(401).json({ error: "Unauthorized", message: "API key required" });
+    const { deviceId, eventType, latitude, longitude, speedKmh, distanceKm, fuelLitres, timestamp, apiKey } = req.body;
+    const org = await validateWebhookSecret(apiKey);
+    if (!org) {
+      res.status(401).json({ error: "Unauthorized", message: "Invalid or missing API key" });
       return;
     }
 
-    const vehicle = await findVehicleByDeviceId(deviceId, orgId);
+    const vehicle = await findVehicleByDeviceId(deviceId, org.id);
     if (!vehicle) {
       res.json({ message: "Device not registered, event ignored" });
       return;
@@ -317,7 +326,6 @@ webhookRouter.post("/generic", async (req, res) => {
 
     res.json({ message: "Event recorded" });
   } catch (err) {
-    req.log?.error({ err }, "Generic fleet webhook failed");
     res.status(500).json({ error: "Internal Server Error", message: "Failed to process event" });
   }
 });

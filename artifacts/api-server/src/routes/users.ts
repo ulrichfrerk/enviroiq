@@ -10,11 +10,14 @@ const router = Router({ mergeParams: true });
 // GET /organisations/:orgId/users
 router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
   try {
-    const { orgId } = req.params;
+    const orgId = req.params.orgId as string as string;
     const users = await db.query.usersTable.findMany({
       where: eq(usersTable.organisationId, orgId),
     });
-    const [{ total }] = await db.select({ total: count() }).from(usersTable).where(eq(usersTable.organisationId, orgId));
+    const [{ total }] = await db
+      .select({ total: count() })
+      .from(usersTable)
+      .where(eq(usersTable.organisationId, orgId));
     res.json({ items: users, total });
   } catch (err) {
     req.log.error({ err }, "List users failed");
@@ -25,7 +28,7 @@ router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
 // POST /organisations/:orgId/users
 router.post("/", requireAuth, requireRole("super_admin", "org_admin"), requireOrgAccess, async (req, res) => {
   try {
-    const { orgId } = req.params;
+    const orgId = req.params.orgId as string as string;
     const { email, name, role } = req.body;
     if (!email || !name || !role) {
       res.status(400).json({ error: "Bad Request", message: "email, name, role required" });
@@ -38,13 +41,10 @@ router.post("/", requireAuth, requireRole("super_admin", "org_admin"), requireOr
       return;
     }
 
-    const [user] = await db.insert(usersTable).values({
-      id: uuidv4(),
-      email,
-      name,
-      role,
-      organisationId: orgId,
-    }).returning();
+    const [user] = await db
+      .insert(usersTable)
+      .values({ id: uuidv4(), email, name, role, organisationId: orgId })
+      .returning();
 
     await logAudit({ req, action: "user.create", resourceType: "user", resourceId: user.id, details: { email, role } });
     res.status(201).json(user);
@@ -57,8 +57,10 @@ router.post("/", requireAuth, requireRole("super_admin", "org_admin"), requireOr
 // GET /organisations/:orgId/users/:userId
 router.get("/:userId", requireAuth, requireOrgAccess, async (req, res) => {
   try {
-    const { userId } = req.params;
-    const user = await db.query.usersTable.findFirst({ where: eq(usersTable.id, userId) });
+    const orgId = req.params.orgId as string as string; const userId = req.params.userId as string as string;
+    const user = await db.query.usersTable.findFirst({
+      where: and(eq(usersTable.id, userId), eq(usersTable.organisationId, orgId)),
+    });
     if (!user) {
       res.status(404).json({ error: "Not Found", message: "User not found" });
       return;
@@ -73,13 +75,15 @@ router.get("/:userId", requireAuth, requireOrgAccess, async (req, res) => {
 // PATCH /organisations/:orgId/users/:userId
 router.patch("/:userId", requireAuth, requireRole("super_admin", "org_admin"), requireOrgAccess, async (req, res) => {
   try {
-    const { userId } = req.params;
+    const orgId = req.params.orgId as string as string; const userId = req.params.userId as string as string;
     const { name, role, isActive } = req.body;
+
     const [user] = await db
       .update(usersTable)
       .set({ name, role, isActive, updatedAt: new Date() })
-      .where(eq(usersTable.id, userId))
+      .where(and(eq(usersTable.id, userId), eq(usersTable.organisationId, orgId)))
       .returning();
+
     if (!user) {
       res.status(404).json({ error: "Not Found", message: "User not found" });
       return;
@@ -95,8 +99,17 @@ router.patch("/:userId", requireAuth, requireRole("super_admin", "org_admin"), r
 // DELETE /organisations/:orgId/users/:userId
 router.delete("/:userId", requireAuth, requireRole("super_admin", "org_admin"), requireOrgAccess, async (req, res) => {
   try {
-    const { userId } = req.params;
-    await db.delete(usersTable).where(eq(usersTable.id, userId));
+    const orgId = req.params.orgId as string as string; const userId = req.params.userId as string as string;
+
+    const existing = await db.query.usersTable.findFirst({
+      where: and(eq(usersTable.id, userId), eq(usersTable.organisationId, orgId)),
+    });
+    if (!existing) {
+      res.status(404).json({ error: "Not Found", message: "User not found" });
+      return;
+    }
+
+    await db.delete(usersTable).where(and(eq(usersTable.id, userId), eq(usersTable.organisationId, orgId)));
     await logAudit({ req, action: "user.delete", resourceType: "user", resourceId: userId });
     res.json({ message: "User removed" });
   } catch (err) {

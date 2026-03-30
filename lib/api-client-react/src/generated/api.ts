@@ -16,6 +16,8 @@ import type {
   UseQueryResult,
 } from "@tanstack/react-query";
 
+type PartialQueryOptions<TData, TError = unknown, TSelected = TData> = Omit<UseQueryOptions<TData, TError, TSelected>, "queryKey"> & { queryKey?: QueryKey };
+
 import type {
   AdminStats,
   AuditLogList,
@@ -112,7 +114,7 @@ export const getHealthCheckQueryOptions = <
   TData = Awaited<ReturnType<typeof healthCheck>>,
   TError = ErrorType<unknown>,
 >(options?: {
-  query?: UseQueryOptions<
+  query?: PartialQueryOptions<
     Awaited<ReturnType<typeof healthCheck>>,
     TError,
     TData
@@ -147,7 +149,7 @@ export function useHealthCheck<
   TData = Awaited<ReturnType<typeof healthCheck>>,
   TError = ErrorType<unknown>,
 >(options?: {
-  query?: UseQueryOptions<
+  query?: PartialQueryOptions<
     Awaited<ReturnType<typeof healthCheck>>,
     TError,
     TData
@@ -187,7 +189,7 @@ export const getGetSessionQueryOptions = <
   TData = Awaited<ReturnType<typeof getSession>>,
   TError = ErrorType<ErrorResponse>,
 >(options?: {
-  query?: UseQueryOptions<
+  query?: PartialQueryOptions<
     Awaited<ReturnType<typeof getSession>>,
     TError,
     TData
@@ -222,7 +224,7 @@ export function useGetSession<
   TData = Awaited<ReturnType<typeof getSession>>,
   TError = ErrorType<ErrorResponse>,
 >(options?: {
-  query?: UseQueryOptions<
+  query?: PartialQueryOptions<
     Awaited<ReturnType<typeof getSession>>,
     TError,
     TData
@@ -884,7 +886,7 @@ export const getListOrganisationsQueryOptions = <
 >(
   params?: ListOrganisationsParams,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof listOrganisations>>,
       TError,
       TData
@@ -923,7 +925,7 @@ export function useListOrganisations<
 >(
   params?: ListOrganisationsParams,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof listOrganisations>>,
       TError,
       TData
@@ -1054,7 +1056,7 @@ export const getGetOrganisationQueryOptions = <
 >(
   orgId: string,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof getOrganisation>>,
       TError,
       TData
@@ -1097,7 +1099,7 @@ export function useGetOrganisation<
 >(
   orgId: string,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof getOrganisation>>,
       TError,
       TData
@@ -1336,7 +1338,7 @@ export const getGetOrganisationSummaryQueryOptions = <
   orgId: string,
   params?: GetOrganisationSummaryParams,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof getOrganisationSummary>>,
       TError,
       TData
@@ -1382,7 +1384,7 @@ export function useGetOrganisationSummary<
   orgId: string,
   params?: GetOrganisationSummaryParams,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof getOrganisationSummary>>,
       TError,
       TData
@@ -1430,7 +1432,7 @@ export const getListUsersQueryOptions = <
 >(
   orgId: string,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof listUsers>>,
       TError,
       TData
@@ -1471,7 +1473,7 @@ export function useListUsers<
 >(
   orgId: string,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof listUsers>>,
       TError,
       TData
@@ -1604,7 +1606,7 @@ export const getGetUserQueryOptions = <
   orgId: string,
   userId: string,
   options?: {
-    query?: UseQueryOptions<Awaited<ReturnType<typeof getUser>>, TError, TData>;
+    query?: PartialQueryOptions<Awaited<ReturnType<typeof getUser>>, TError, TData>;
     request?: SecondParameter<typeof customFetch>;
   },
 ) => {
@@ -1642,7 +1644,7 @@ export function useGetUser<
   orgId: string,
   userId: string,
   options?: {
-    query?: UseQueryOptions<Awaited<ReturnType<typeof getUser>>, TError, TData>;
+    query?: PartialQueryOptions<Awaited<ReturnType<typeof getUser>>, TError, TData>;
     request?: SecondParameter<typeof customFetch>;
   },
 ): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
@@ -1855,7 +1857,7 @@ export const getListVehiclesQueryOptions = <
 >(
   orgId: string,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof listVehicles>>,
       TError,
       TData
@@ -1898,7 +1900,7 @@ export function useListVehicles<
 >(
   orgId: string,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof listVehicles>>,
       TError,
       TData
@@ -2031,7 +2033,7 @@ export const getGetVehicleQueryOptions = <
   orgId: string,
   vehicleId: string,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof getVehicle>>,
       TError,
       TData
@@ -2076,7 +2078,7 @@ export function useGetVehicle<
   orgId: string,
   vehicleId: string,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof getVehicle>>,
       TError,
       TData
@@ -2575,7 +2577,7 @@ export const getListFleetEventsQueryOptions = <
   orgId: string,
   params?: ListFleetEventsParams,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof listFleetEvents>>,
       TError,
       TData
@@ -2620,7 +2622,7 @@ export function useListFleetEvents<
   orgId: string,
   params?: ListFleetEventsParams,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof listFleetEvents>>,
       TError,
       TData
@@ -2690,7 +2692,7 @@ export const getListEnergyReadingsQueryOptions = <
   orgId: string,
   params?: ListEnergyReadingsParams,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof listEnergyReadings>>,
       TError,
       TData
@@ -2736,7 +2738,7 @@ export function useListEnergyReadings<
   orgId: string,
   params?: ListEnergyReadingsParams,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof listEnergyReadings>>,
       TError,
       TData
@@ -2965,7 +2967,7 @@ export const getGetEnergyEmailAddressQueryOptions = <
 >(
   orgId: string,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof getEnergyEmailAddress>>,
       TError,
       TData
@@ -3010,7 +3012,7 @@ export function useGetEnergyEmailAddress<
 >(
   orgId: string,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof getEnergyEmailAddress>>,
       TError,
       TData
@@ -3166,7 +3168,7 @@ export const getListEmissionReadingsQueryOptions = <
   orgId: string,
   params?: ListEmissionReadingsParams,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof listEmissionReadings>>,
       TError,
       TData
@@ -3212,7 +3214,7 @@ export function useListEmissionReadings<
   orgId: string,
   params?: ListEmissionReadingsParams,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof listEmissionReadings>>,
       TError,
       TData
@@ -3283,7 +3285,7 @@ export const getGetEmissionTotalsQueryOptions = <
   orgId: string,
   params?: GetEmissionTotalsParams,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof getEmissionTotals>>,
       TError,
       TData
@@ -3329,7 +3331,7 @@ export function useGetEmissionTotals<
   orgId: string,
   params?: GetEmissionTotalsParams,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof getEmissionTotals>>,
       TError,
       TData
@@ -3373,7 +3375,7 @@ export const getListGoalsQueryOptions = <
 >(
   orgId: string,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof listGoals>>,
       TError,
       TData
@@ -3414,7 +3416,7 @@ export function useListGoals<
 >(
   orgId: string,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof listGoals>>,
       TError,
       TData
@@ -3547,7 +3549,7 @@ export const getGetGoalQueryOptions = <
   orgId: string,
   goalId: string,
   options?: {
-    query?: UseQueryOptions<Awaited<ReturnType<typeof getGoal>>, TError, TData>;
+    query?: PartialQueryOptions<Awaited<ReturnType<typeof getGoal>>, TError, TData>;
     request?: SecondParameter<typeof customFetch>;
   },
 ) => {
@@ -3585,7 +3587,7 @@ export function useGetGoal<
   orgId: string,
   goalId: string,
   options?: {
-    query?: UseQueryOptions<Awaited<ReturnType<typeof getGoal>>, TError, TData>;
+    query?: PartialQueryOptions<Awaited<ReturnType<typeof getGoal>>, TError, TData>;
     request?: SecondParameter<typeof customFetch>;
   },
 ): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
@@ -3798,7 +3800,7 @@ export const getListReportsQueryOptions = <
 >(
   orgId: string,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof listReports>>,
       TError,
       TData
@@ -3841,7 +3843,7 @@ export function useListReports<
 >(
   orgId: string,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof listReports>>,
       TError,
       TData
@@ -3974,7 +3976,7 @@ export const getGetReportQueryOptions = <
   orgId: string,
   reportId: string,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof getReport>>,
       TError,
       TData
@@ -4017,7 +4019,7 @@ export function useGetReport<
   orgId: string,
   reportId: string,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof getReport>>,
       TError,
       TData
@@ -4061,7 +4063,7 @@ export const getGetWidgetConfigQueryOptions = <
 >(
   orgId: string,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof getWidgetConfig>>,
       TError,
       TData
@@ -4104,7 +4106,7 @@ export function useGetWidgetConfig<
 >(
   orgId: string,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof getWidgetConfig>>,
       TError,
       TData
@@ -4236,7 +4238,7 @@ export const getGetWidgetPublicDataQueryOptions = <
 >(
   widgetKey: string,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof getWidgetPublicData>>,
       TError,
       TData
@@ -4281,7 +4283,7 @@ export function useGetWidgetPublicData<
 >(
   widgetKey: string,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof getWidgetPublicData>>,
       TError,
       TData
@@ -4348,7 +4350,7 @@ export const getListAuditLogsQueryOptions = <
   orgId: string,
   params?: ListAuditLogsParams,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof listAuditLogs>>,
       TError,
       TData
@@ -4393,7 +4395,7 @@ export function useListAuditLogs<
   orgId: string,
   params?: ListAuditLogsParams,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof listAuditLogs>>,
       TError,
       TData
@@ -4434,7 +4436,7 @@ export const getGetAdminStatsQueryOptions = <
   TData = Awaited<ReturnType<typeof getAdminStats>>,
   TError = ErrorType<unknown>,
 >(options?: {
-  query?: UseQueryOptions<
+  query?: PartialQueryOptions<
     Awaited<ReturnType<typeof getAdminStats>>,
     TError,
     TData
@@ -4469,7 +4471,7 @@ export function useGetAdminStats<
   TData = Awaited<ReturnType<typeof getAdminStats>>,
   TError = ErrorType<unknown>,
 >(options?: {
-  query?: UseQueryOptions<
+  query?: PartialQueryOptions<
     Awaited<ReturnType<typeof getAdminStats>>,
     TError,
     TData
@@ -4526,7 +4528,7 @@ export const getListAllAuditLogsQueryOptions = <
 >(
   params?: ListAllAuditLogsParams,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof listAllAuditLogs>>,
       TError,
       TData
@@ -4565,7 +4567,7 @@ export function useListAllAuditLogs<
 >(
   params?: ListAllAuditLogsParams,
   options?: {
-    query?: UseQueryOptions<
+    query?: PartialQueryOptions<
       Awaited<ReturnType<typeof listAllAuditLogs>>,
       TError,
       TData

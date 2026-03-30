@@ -14,7 +14,7 @@ export default function Reports() {
   const { toast } = useToast();
   const [isOpen, setIsOpen] = useState(false);
 
-  const { data: reports, isLoading, refetch } = useListReports(orgId!, undefined, { query: { enabled: !!orgId } });
+  const { data: reports, isLoading, refetch } = useListReports(orgId!, { query: { enabled: !!orgId } });
   const generate = useGenerateReport();
 
   const [reportType, setReportType] = useState("board_summary");

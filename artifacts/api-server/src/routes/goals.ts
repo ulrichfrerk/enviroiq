@@ -42,7 +42,7 @@ function calcGoalProgress(goal: any, currentValue: number): { progressPercent: n
 // GET /organisations/:orgId/goals
 router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
   try {
-    const { orgId } = req.params;
+    const orgId = req.params.orgId as string as string;
     const goals = await db.query.goalsTable.findMany({
       where: eq(goalsTable.organisationId, orgId),
     });
@@ -57,7 +57,7 @@ router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
 // POST /organisations/:orgId/goals
 router.post("/", requireAuth, requireOrgAccess, async (req, res) => {
   try {
-    const { orgId } = req.params;
+    const orgId = req.params.orgId as string as string;
     const { title, description, category, targetType, targetValue, targetUnit, baselineValue, baselineYear, targetYear, dueDate, isPublic } = req.body;
     if (!title || !category || !targetType || targetValue === undefined || !targetUnit) {
       res.status(400).json({ error: "Bad Request", message: "title, category, targetType, targetValue, targetUnit required" });
@@ -92,7 +92,7 @@ router.post("/", requireAuth, requireOrgAccess, async (req, res) => {
 // GET /organisations/:orgId/goals/:goalId
 router.get("/:goalId", requireAuth, requireOrgAccess, async (req, res) => {
   try {
-    const { orgId, goalId } = req.params;
+    const orgId = req.params.orgId as string as string; const goalId = req.params.goalId as string as string;
     const goal = await db.query.goalsTable.findFirst({
       where: and(eq(goalsTable.id, goalId), eq(goalsTable.organisationId, orgId)),
     });
@@ -139,7 +139,7 @@ router.get("/:goalId", requireAuth, requireOrgAccess, async (req, res) => {
 // PATCH /organisations/:orgId/goals/:goalId
 router.patch("/:goalId", requireAuth, requireOrgAccess, async (req, res) => {
   try {
-    const { orgId, goalId } = req.params;
+    const orgId = req.params.orgId as string as string; const goalId = req.params.goalId as string as string;
     const { title, description, targetValue, targetUnit, dueDate, status, isPublic } = req.body;
     const [goal] = await db
       .update(goalsTable)
@@ -161,7 +161,7 @@ router.patch("/:goalId", requireAuth, requireOrgAccess, async (req, res) => {
 // DELETE /organisations/:orgId/goals/:goalId
 router.delete("/:goalId", requireAuth, requireOrgAccess, async (req, res) => {
   try {
-    const { orgId, goalId } = req.params;
+    const orgId = req.params.orgId as string as string; const goalId = req.params.goalId as string as string;
     await db.delete(goalsTable).where(and(eq(goalsTable.id, goalId), eq(goalsTable.organisationId, orgId)));
     await logAudit({ req, action: "goal.delete", resourceType: "goal", resourceId: goalId });
     res.json({ message: "Goal deleted" });

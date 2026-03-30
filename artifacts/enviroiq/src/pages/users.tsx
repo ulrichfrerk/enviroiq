@@ -15,7 +15,7 @@ export default function Users() {
   const { toast } = useToast();
   const [isOpen, setIsOpen] = useState(false);
 
-  const { data: users, isLoading } = useListUsers(orgId!, undefined, { query: { enabled: !!orgId } });
+  const { data: users, isLoading } = useListUsers(orgId!, { query: { enabled: !!orgId } });
   const createUser = useCreateUser();
   const deleteUser = useDeleteUser();
 

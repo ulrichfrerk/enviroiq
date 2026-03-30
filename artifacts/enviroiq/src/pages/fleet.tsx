@@ -28,7 +28,7 @@ export default function Fleet() {
   const { toast } = useToast();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
 
-  const { data: vehicles, isLoading } = useListVehicles(orgId!, undefined, { query: { enabled: !!orgId } });
+  const { data: vehicles, isLoading } = useListVehicles(orgId!, { query: { enabled: !!orgId } });
   const createVehicle = useCreateVehicle();
   const deleteVehicle = useDeleteVehicle();
 

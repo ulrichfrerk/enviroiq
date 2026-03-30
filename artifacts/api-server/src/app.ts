@@ -7,16 +7,24 @@ import rateLimit from "express-rate-limit";
 import router from "./routes/index.js";
 import { logger } from "./lib/logger.js";
 
+const sessionSecret = process.env.SESSION_SECRET;
+if (!sessionSecret && process.env.NODE_ENV === "production") {
+  logger.error("SESSION_SECRET env var is required in production");
+  process.exit(1);
+}
+
 const app: Express = express();
 
 // Trust proxy (needed for X-Forwarded-For in Replit/reverse proxy environments)
 app.set("trust proxy", 1);
 
 // Security headers
-app.use(helmet({
-  contentSecurityPolicy: false,
-  crossOriginEmbedderPolicy: false,
-}));
+app.use(
+  helmet({
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false,
+  }),
+);
 
 // Logging
 app.use(
@@ -39,11 +47,17 @@ app.use(
   }),
 );
 
-// CORS
-app.use(cors({
-  origin: true,
-  credentials: true,
-}));
+// CORS — allow the specific Replit domain and localhost for dev
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim())
+  : [/\.replit\.app$/, /\.replit\.dev$/, /localhost/];
+
+app.use(
+  cors({
+    origin: allowedOrigins,
+    credentials: true,
+  }),
+);
 
 // Rate limiting
 const limiter = rateLimit({
@@ -68,10 +82,9 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
 // Session
-const sessionSecret = process.env.SESSION_SECRET || "enviroiq-dev-secret-change-in-production-12345";
 app.use(
   session({
-    secret: sessionSecret,
+    secret: sessionSecret || "enviroiq-dev-only-secret-do-not-use-in-production",
     resave: false,
     saveUninitialized: false,
     cookie: {

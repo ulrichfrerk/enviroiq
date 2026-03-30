@@ -11,7 +11,7 @@ const router = Router({ mergeParams: true });
 // GET /organisations/:orgId/reports
 router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
   try {
-    const { orgId } = req.params;
+    const orgId = req.params.orgId as string as string;
     const reports = await db.query.reportsTable.findMany({
       where: eq(reportsTable.organisationId, orgId),
     });
@@ -26,7 +26,7 @@ router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
 // POST /organisations/:orgId/reports
 router.post("/", requireAuth, requireOrgAccess, async (req, res) => {
   try {
-    const { orgId } = req.params;
+    const orgId = req.params.orgId as string as string;
     const session = (req as any).session;
     const { title, periodStart, periodEnd, reportType } = req.body;
 
@@ -111,7 +111,7 @@ router.post("/", requireAuth, requireOrgAccess, async (req, res) => {
 // GET /organisations/:orgId/reports/:reportId
 router.get("/:reportId", requireAuth, requireOrgAccess, async (req, res) => {
   try {
-    const { orgId, reportId } = req.params;
+    const orgId = req.params.orgId as string as string; const reportId = req.params.reportId as string as string;
     const report = await db.query.reportsTable.findFirst({
       where: and(eq(reportsTable.id, reportId), eq(reportsTable.organisationId, orgId)),
     });

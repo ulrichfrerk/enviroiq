@@ -17,7 +17,7 @@ export default function Goals() {
   const { toast } = useToast();
   const [isOpen, setIsOpen] = useState(false);
 
-  const { data: goals, isLoading } = useListGoals(orgId!, undefined, { query: { enabled: !!orgId } });
+  const { data: goals, isLoading } = useListGoals(orgId!, { query: { enabled: !!orgId } });
   const createGoal = useCreateGoal();
 
   const form = useForm({

@@ -52,7 +52,7 @@ Login via "Continue with Email" → magic link flow (tokens are logged in API se
 │   │   ├── src/lib/        # auth.ts (middleware), audit.ts, emissions.ts, logger.ts
 │   │   └── src/seed.ts     # Demo data seeder
 │   └── enviroiq/           # React/Vite frontend (previewPath /)
-│       ├── src/pages/      # login, dashboard, fleet, energy, goals, reports, users, not-found
+│       ├── src/pages/      # login, dashboard, fleet, energy, goals, reports, users, widget, audit, admin
 │       ├── src/components/ # layout (AppLayout, AppSidebar), ui (shadcn)
 │       ├── src/hooks/      # use-auth.ts (WebAuthn flow), use-toast, use-mobile
 │       └── src/lib/        # webauthn.ts, queryClient.ts
@@ -75,7 +75,7 @@ All under `/api`:
 - `GET/POST /organisations/:orgId/users`
 - `GET/POST/DELETE /organisations/:orgId/fleet/vehicles`
 - `GET /organisations/:orgId/fleet/events`
-- `POST /webhooks/fleet/navman|blackhawk|generic`
+- `POST /webhooks/fleet/navman|blackhawk|generic` — authenticated via per-org `webhookSecret` from `organisations.webhook_secret`
 - `GET /organisations/:orgId/energy/readings`
 - `POST /organisations/:orgId/energy/upload` — PDF bill upload
 - `GET /organisations/:orgId/energy/email-address` — inbound email

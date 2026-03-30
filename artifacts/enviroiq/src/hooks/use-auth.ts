@@ -37,7 +37,8 @@ export function useAuth() {
           ...options.user,
           id: bufferDecode(options.user.id),
         },
-      };
+        attestation: (options.attestation ?? "none") as AttestationConveyancePreference,
+      } as unknown as PublicKeyCredentialCreationOptions;
 
       // 3. Create credential
       const credential = await navigator.credentials.create({ publicKey }) as PublicKeyCredential;

@@ -10,6 +10,7 @@ export const organisationsTable = pgTable("organisations", {
   country: text("country"),
   logoUrl: text("logo_url"),
   widgetKey: text("widget_key").notNull().unique(),
+  webhookSecret: text("webhook_secret"),
   inboundEmailAddress: text("inbound_email_address").notNull().unique(),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

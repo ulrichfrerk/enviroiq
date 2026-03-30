@@ -282,7 +282,6 @@ async function seed() {
       await db.insert(goalsTable).values({
         id: uuidv4(),
         organisationId: org.id,
-        createdBy: orgAdmin.id,
         ...g,
       });
     }

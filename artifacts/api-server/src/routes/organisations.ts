@@ -112,7 +112,7 @@ router.post("/", requireRole("super_admin"), async (req, res) => {
 router.get("/:orgId", requireAuth, requireOrgAccess, async (req, res) => {
   try {
     const org = await db.query.organisationsTable.findFirst({
-      where: eq(organisationsTable.id, req.params.orgId),
+      where: eq(organisationsTable.id, req.params.orgId as string),
     });
     if (!org) {
       res.status(404).json({ error: "Not Found", message: "Organisation not found" });
@@ -134,13 +134,13 @@ router.patch("/:orgId", requireAuth, requireOrgAccess, async (req, res) => {
     const [org] = await db
       .update(organisationsTable)
       .set({ name, industry, country, logoUrl, isActive, updatedAt: new Date() })
-      .where(eq(organisationsTable.id, req.params.orgId))
+      .where(eq(organisationsTable.id, req.params.orgId as string))
       .returning();
     if (!org) {
       res.status(404).json({ error: "Not Found", message: "Organisation not found" });
       return;
     }
-    await logAudit({ req, action: "organisation.update", resourceType: "organisation", resourceId: req.params.orgId });
+    await logAudit({ req, action: "organisation.update", resourceType: "organisation", resourceId: req.params.orgId as string });
     res.json(org);
   } catch (err) {
     req.log.error({ err }, "Update organisation failed");
@@ -151,8 +151,8 @@ router.patch("/:orgId", requireAuth, requireOrgAccess, async (req, res) => {
 // DELETE /organisations/:orgId
 router.delete("/:orgId", requireRole("super_admin"), async (req, res) => {
   try {
-    await db.delete(organisationsTable).where(eq(organisationsTable.id, req.params.orgId));
-    await logAudit({ req, action: "organisation.delete", resourceType: "organisation", resourceId: req.params.orgId });
+    await db.delete(organisationsTable).where(eq(organisationsTable.id, req.params.orgId as string));
+    await logAudit({ req, action: "organisation.delete", resourceType: "organisation", resourceId: req.params.orgId as string });
     res.json({ message: "Organisation deleted" });
   } catch (err) {
     req.log.error({ err }, "Delete organisation failed");
@@ -163,7 +163,7 @@ router.delete("/:orgId", requireRole("super_admin"), async (req, res) => {
 // GET /organisations/:orgId/summary
 router.get("/:orgId/summary", requireAuth, requireOrgAccess, async (req, res) => {
   try {
-    const { orgId } = req.params;
+    const orgId = req.params.orgId as string as string;
     const period = (req.query.period as string) || "month";
 
     const now = new Date();
@@ -208,9 +208,9 @@ router.get("/:orgId/summary", requireAuth, requireOrgAccess, async (req, res) =>
       WHERE organisation_id = ${orgId}
     `);
 
-    const fr = (fleetResult as any).rows?.[0] || fleetResult[0] || {};
-    const er = (energyResult as any).rows?.[0] || energyResult[0] || {};
-    const gr = (goalsResult as any).rows?.[0] || goalsResult[0] || {};
+    const fr: any = (fleetResult as any).rows?.[0] || (fleetResult as any)[0] || {};
+    const er: any = (energyResult as any).rows?.[0] || (energyResult as any)[0] || {};
+    const gr: any = (goalsResult as any).rows?.[0] || (goalsResult as any)[0] || {};
 
     const fleetCo2e = parseFloat(fr.total_co2e) || 0;
     const energyCo2e = parseFloat(er.total_co2e) || 0;

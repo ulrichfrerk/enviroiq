@@ -10,7 +10,7 @@ export const widgetPublicRouter = Router();
 // GET /organisations/:orgId/widget/config
 router.get("/config", requireAuth, requireOrgAccess, async (req, res) => {
   try {
-    const { orgId } = req.params;
+    const orgId = req.params.orgId as string as string;
     const org = await db.query.organisationsTable.findFirst({ where: eq(organisationsTable.id, orgId) });
     if (!org) {
       res.status(404).json({ error: "Not Found", message: "Organisation not found" });
@@ -39,7 +39,7 @@ router.get("/config", requireAuth, requireOrgAccess, async (req, res) => {
 // PUT /organisations/:orgId/widget/config
 router.put("/config", requireAuth, requireOrgAccess, async (req, res) => {
   try {
-    const { orgId } = req.params;
+    const orgId = req.params.orgId as string as string;
     const {
       isEnabled, title, showTotalCo2e, showFleetStats, showEnergyUsage,
       showGoals, showSustainabilityScore, showLastUpdated,
@@ -83,7 +83,7 @@ router.put("/config", requireAuth, requireOrgAccess, async (req, res) => {
 // GET /widget/:widgetKey/data — public, no auth
 widgetPublicRouter.get("/:widgetKey/data", async (req, res) => {
   try {
-    const { widgetKey } = req.params;
+    const widgetKey = req.params.widgetKey as string as string;
     const org = await db.query.organisationsTable.findFirst({
       where: eq(organisationsTable.widgetKey, widgetKey),
     });
