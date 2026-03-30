@@ -49,7 +49,25 @@ router.post("/passkey/register/begin", async (req, res) => {
       return;
     }
 
-    let user = await db.query.usersTable.findFirst({ where: eq(usersTable.email, email) });
+    const existingUser = await db.query.usersTable.findFirst({ where: eq(usersTable.email, email) });
+
+    // If an account already exists for this email, require proof of ownership:
+    // either an active authenticated session for this email, or email verified via magic link
+    if (existingUser) {
+      const session = req.session;
+      const isAuthenticated = session.userId === existingUser.id;
+      const emailVerified = session.verifiedEmail === email || session.email === email;
+      if (!isAuthenticated && !emailVerified) {
+        await logAudit({ req, action: "passkey.register", outcome: "failure", userEmail: email });
+        res.status(403).json({
+          error: "Forbidden",
+          message: "Email ownership must be verified before adding a passkey to an existing account. Please sign in with a magic link first.",
+        });
+        return;
+      }
+    }
+
+    let user = existingUser;
     if (!user) {
       const id = uuidv4();
       const [newUser] = await db
@@ -109,6 +127,7 @@ router.post("/passkey/register/complete", async (req, res) => {
 
     const challengeId = req.session.webAuthnChallengeId;
     if (!challengeId) {
+      await logAudit({ req, action: "passkey.register", outcome: "failure", userEmail: email });
       res.status(400).json({ error: "Bad Request", message: "No active registration challenge for this session" });
       return;
     }
@@ -245,6 +264,7 @@ router.post("/passkey/authenticate/complete", async (req, res) => {
 
     const challengeId = req.session.webAuthnChallengeId;
     if (!challengeId) {
+      await logAudit({ req, action: "passkey.authenticate", outcome: "failure" });
       res.status(400).json({ error: "Bad Request", message: "No active authentication challenge for this session" });
       return;
     }
@@ -254,6 +274,7 @@ router.post("/passkey/authenticate/complete", async (req, res) => {
     });
 
     if (!challengeRecord || challengeRecord.expiresAt < new Date() || challengeRecord.type !== "authentication") {
+      await logAudit({ req, action: "passkey.authenticate", outcome: "failure" });
       res.status(400).json({ error: "Bad Request", message: "Challenge expired or not found" });
       return;
     }
@@ -405,6 +426,8 @@ router.post("/magic-link/verify", async (req, res) => {
     session.name = user.name;
     session.role = user.role as "super_admin" | "org_admin" | "org_viewer";
     session.organisationId = user.organisationId;
+    // Mark email as verified in session — permits passkey enrollment without re-proving ownership
+    session.verifiedEmail = user.email;
 
     await logAudit({ req, action: "magic_link.verify", outcome: "success", userId: user.id, userEmail: user.email });
 

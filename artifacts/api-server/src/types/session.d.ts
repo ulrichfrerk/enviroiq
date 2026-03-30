@@ -8,5 +8,7 @@ declare module "express-session" {
     role: "super_admin" | "org_admin" | "org_viewer";
     organisationId: string | null;
     webAuthnChallengeId?: string;
+    /** Set after email ownership is verified via magic-link; permits passkey enrollment for this email */
+    verifiedEmail?: string;
   }
 }
