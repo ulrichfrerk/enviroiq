@@ -16,6 +16,7 @@ import {
 } from "@simplewebauthn/server";
 type AuthenticatorTransportFuture = "ble" | "cable" | "hybrid" | "internal" | "nfc" | "smart-card" | "usb";
 import { logAudit } from "../lib/audit.js";
+import { sendMagicLinkEmail } from "../lib/mailer.js";
 
 const router = Router();
 
@@ -394,14 +395,21 @@ router.post("/magic-link/request", async (req, res) => {
       expiresAt: new Date(Date.now() + 15 * 60 * 1000),
     });
 
-    // In dev mode, print the token to console so developers can test the flow
-    // Never log full tokens to structured logs — they are valid auth credentials
-    if (process.env.NODE_ENV !== "production") {
-      req.log.info({ email }, "Magic link generated (dev mode — token printed to console)");
-      const domain = process.env.REPLIT_DOMAINS?.split(",")[0] || "localhost:3001";
-      const verifyUrl = `https://${domain}/auth/verify?token=${token}`;
-      // eslint-disable-next-line no-console
-      console.log(`\n[MAGIC LINK DEV]\n  Email: ${email}\n  Token: ${token}\n  URL:   ${verifyUrl}\n`);
+    const domain = process.env.REPLIT_DOMAINS?.split(",")[0]?.trim()
+      || process.env.REPLIT_DEV_DOMAIN?.trim()
+      || "localhost:3001";
+    const verifyUrl = `https://${domain}/auth/verify?token=${token}`;
+
+    try {
+      const { devMode } = await sendMagicLinkEmail(email, verifyUrl);
+      if (devMode) {
+        req.log.info({ email }, "Magic link generated (dev mode — SMTP not configured, link printed to console)");
+      }
+    } catch (err) {
+      req.log.error({ err, email }, "Failed to send magic link email");
+      await logAudit({ req, action: "magic_link.request", outcome: "failure", userEmail: email, details: { reason: "email_send_failed" } });
+      res.status(503).json({ error: "Service Unavailable", message: "Email service unavailable. Please try again or contact support." });
+      return;
     }
 
     await logAudit({ req, action: "magic_link.request", outcome: "success", userEmail: email });

@@ -69,7 +69,15 @@ async function refreshAllOrgMetrics(): Promise<void> {
     try {
       const metrics = await computeOrgMetrics(org.id);
       await db.update(organisationsTable)
-        .set({ updatedAt: metrics.computedAt })
+        .set({
+          esgFleetCo2eKg: metrics.fleetCo2eKg,
+          esgEnergyCo2eKg: metrics.energyCo2eKg,
+          esgTotalCo2eKg: metrics.totalCo2eKg,
+          esgEnergyKwh: metrics.totalEnergyKwh,
+          esgSustainabilityScore: metrics.sustainabilityScore,
+          esgComputedAt: metrics.computedAt,
+          updatedAt: metrics.computedAt,
+        })
         .where(eq(organisationsTable.id, org.id));
       refreshed++;
     } catch (err) {
