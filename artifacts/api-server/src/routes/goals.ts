@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { db, goalsTable, fleetEventsTable, energyReadingsTable } from "@workspace/db";
+import { db, goalsTable, fleetEventsTable, energyReadingsTable, type Goal } from "@workspace/db";
 import { eq, and, count, sql } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
 import { requireAuth, requireOrgAccess, requireOrgAdmin } from "../lib/auth.js";
@@ -8,7 +8,7 @@ import { logAudit } from "../lib/audit.js";
 
 const router = Router({ mergeParams: true });
 
-function calcGoalProgress(goal: any, currentValue: number): { progressPercent: number; status: string } {
+function calcGoalProgress(goal: Goal, currentValue: number): { progressPercent: number; status: string } {
   if (!goal.targetValue) return { progressPercent: 0, status: "not_started" };
 
   let progressPercent = 0;

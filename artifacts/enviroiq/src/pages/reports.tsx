@@ -42,8 +42,9 @@ export default function Reports() {
     }
   };
 
-  const handlePrint = () => {
-    window.print();
+  const handleDownload = (reportId: string) => {
+    const apiBase = import.meta.env.BASE_URL?.replace(/\/$/, "") || "";
+    window.open(`${apiBase}/api-server/api/organisations/${orgId}/reports/${reportId}/pdf`, "_blank");
   };
 
   if (isLoading) return <div className="p-8 flex justify-center"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
@@ -112,8 +113,8 @@ export default function Reports() {
               </div>
             </div>
             <div className="w-full sm:w-auto flex justify-end">
-              <Button variant="outline" size="sm" onClick={handlePrint} disabled={report.status !== 'ready'}>
-                <Download className="w-4 h-4 mr-2" /> Download
+              <Button variant="outline" size="sm" onClick={() => handleDownload(report.id)} disabled={report.status !== 'ready'}>
+                <Download className="w-4 h-4 mr-2" /> Download PDF
               </Button>
             </div>
           </Card>
@@ -125,38 +126,6 @@ export default function Reports() {
         )}
       </div>
 
-      {/* Mock Print Layout - Visible only when printing or when a report is selected (simplified for demo) */}
-      <div className="hidden print:block p-8 bg-white text-black min-h-[100vh]">
-        <div className="border-b-2 border-green-600 pb-6 mb-8 flex justify-between items-end">
-          <div>
-            <h1 className="text-4xl font-bold text-gray-900">ESG Board Summary</h1>
-            <p className="text-xl text-gray-600 mt-2">{session?.organisationName} • {format(new Date(), "MMMM yyyy")}</p>
-          </div>
-          <div className="text-right">
-            <p className="font-bold text-green-600 text-2xl">EnviroIQ</p>
-          </div>
-        </div>
-        
-        <div className="grid grid-cols-2 gap-8 mb-8">
-          <div className="bg-gray-50 p-6 rounded-lg border border-gray-200">
-            <p className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Total CO2e Emissions</p>
-            <p className="text-4xl font-bold text-gray-900 mt-2">1,245 <span className="text-xl font-normal text-gray-500">kg</span></p>
-            <p className="text-green-600 font-medium mt-2 flex items-center">↓ 12% vs last quarter</p>
-          </div>
-          <div className="bg-gray-50 p-6 rounded-lg border border-gray-200">
-            <p className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Sustainability Score</p>
-            <p className="text-4xl font-bold text-gray-900 mt-2">85<span className="text-xl font-normal text-gray-500">/100</span></p>
-            <p className="text-green-600 font-medium mt-2 flex items-center">↑ Top 15% in industry</p>
-          </div>
-        </div>
-
-        <h3 className="text-xl font-bold text-gray-900 border-b border-gray-200 pb-2 mb-4">Highlights & Commentary</h3>
-        <ul className="list-disc pl-5 space-y-2 text-gray-700 mb-8">
-          <li>Successfully integrated 100% of fleet vehicles into active monitoring.</li>
-          <li>Identified 15% reduction opportunity in idle times across delivery routes.</li>
-          <li>Transitioned headquarters to renewable energy provider, reducing Scope 2 emissions.</li>
-        </ul>
-      </div>
     </div>
   );
 }

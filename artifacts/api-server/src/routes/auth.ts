@@ -186,7 +186,7 @@ router.post("/passkey/authenticate/begin", async (req, res) => {
   try {
     const { email } = req.body || {};
 
-    let allowCredentials: { id: string; transports?: any[] }[] = [];
+    let allowCredentials: { id: string; transports?: AuthenticatorTransportFuture[] }[] = [];
     if (email) {
       const user = await db.query.usersTable.findFirst({ where: eq(usersTable.email, email) });
       if (user) {

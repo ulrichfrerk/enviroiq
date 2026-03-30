@@ -196,7 +196,8 @@ energyEmailWebhookRouter.post("/inbound-email", async (req, res) => {
     }
 
     // Process attachments (PDFs)
-    const pdfAttachments = (attachments || []).filter((a: any) =>
+    interface EmailAttachment { contentType?: string; filename?: string; content?: string; }
+    const pdfAttachments = ((attachments || []) as EmailAttachment[]).filter((a) =>
       a.contentType?.includes("pdf") || a.filename?.toLowerCase().endsWith(".pdf"),
     );
 

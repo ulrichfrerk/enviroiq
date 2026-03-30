@@ -24,7 +24,7 @@ export async function logAudit({
   userEmail?: string;
 }) {
   try {
-    const session = (req as any)?.session;
+    const session = req?.session;
     await db.insert(auditLogsTable).values({
       id: uuidv4(),
       organisationId: organisationId ?? session?.organisationId,

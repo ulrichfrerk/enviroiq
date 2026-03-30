@@ -131,9 +131,9 @@ router.get("/totals", requireAuth, requireOrgAccess, async (req, res) => {
       period,
       totalCo2eKg: totalCo2e,
       breakdowns,
-      timeSeries: timeSeriesRows.map((r: any) => ({
-        date: r.date,
-        co2eKg: parseFloat(r.co2e_kg) || 0,
+      timeSeries: timeSeriesRows.map((r) => ({
+        date: strCol(r, "date"),
+        co2eKg: numCol(r, "co2e_kg"),
       })),
     });
   } catch (err) {

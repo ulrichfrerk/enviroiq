@@ -1,4 +1,4 @@
-import express, { type Express } from "express";
+import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import cors from "cors";
 import helmet from "helmet";
 import pinoHttp from "pino-http";
@@ -6,6 +6,7 @@ import session from "express-session";
 import rateLimit from "express-rate-limit";
 import router from "./routes/index.js";
 import { logger } from "./lib/logger.js";
+import { logAudit } from "./lib/audit.js";
 
 const sessionSecret = process.env.SESSION_SECRET;
 if (!sessionSecret && process.env.NODE_ENV === "production") {
@@ -95,6 +96,24 @@ app.use(
     },
   }),
 );
+
+// Centralized audit middleware — logs all mutating API calls after response
+app.use("/api", (req: Request, res: Response, next: NextFunction) => {
+  const mutatingMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+  if (!mutatingMethods.has(req.method)) { next(); return; }
+  // Skip auth endpoints (they log their own outcomes) and webhook endpoints
+  const skipPrefixes = ["/api/auth/", "/api/webhooks/", "/api/widget/"];
+  if (skipPrefixes.some((p) => req.path.startsWith(p.slice("/api".length)))) { next(); return; }
+  res.on("finish", () => {
+    const outcome: "success" | "failure" = res.statusCode >= 400 ? "failure" : "success";
+    void logAudit({
+      req,
+      action: `api.${req.method.toLowerCase()}.${req.path.replace(/\/[0-9a-f-]{8,}/g, "/:id").replace(/\//g, ".")}`,
+      outcome,
+    });
+  });
+  next();
+});
 
 app.use("/api", router);
 
