@@ -1070,6 +1070,37 @@ paths:
               schema:
                 $ref: "#/components/schemas/ReportDetail"
 
+  /organisations/{orgId}/reports/{reportId}/pdf:
+    get:
+      operationId: downloadReportPdf
+      tags: [reports]
+      summary: Download report as PDF
+      parameters:
+        - in: path
+          name: orgId
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: reportId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: PDF file
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: Report not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   # ─── WIDGET ─────────────────────────────────────────────────────────────────
 
   /organisations/{orgId}/widget/config:
@@ -1113,6 +1144,31 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/WidgetConfig"
+
+  /widget/{widgetKey}/widget.js:
+    get:
+      operationId: getWidgetScript
+      tags: [widget]
+      summary: Public embeddable widget JavaScript (no auth required)
+      parameters:
+        - in: path
+          name: widgetKey
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: JavaScript bundle for embedding
+          content:
+            application/javascript:
+              schema:
+                type: string
+        "404":
+          description: Widget not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /widget/{widgetKey}/data:
     get:

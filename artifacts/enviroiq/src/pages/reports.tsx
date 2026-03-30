@@ -43,8 +43,7 @@ export default function Reports() {
   };
 
   const handleDownload = (reportId: string) => {
-    const apiBase = import.meta.env.BASE_URL?.replace(/\/$/, "") || "";
-    window.open(`${apiBase}/api-server/api/organisations/${orgId}/reports/${reportId}/pdf`, "_blank");
+    window.open(`/api/organisations/${orgId}/reports/${reportId}/pdf`, "_blank");
   };
 
   if (isLoading) return <div className="p-8 flex justify-center"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;

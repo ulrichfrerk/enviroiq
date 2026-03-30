@@ -1164,6 +1164,14 @@ export const GetReportResponse = zod
   );
 
 /**
+ * @summary Download report as PDF
+ */
+export const DownloadReportPdfParams = zod.object({
+  orgId: zod.coerce.string(),
+  reportId: zod.coerce.string(),
+});
+
+/**
  * @summary Get widget configuration
  */
 export const GetWidgetConfigParams = zod.object({
@@ -1223,6 +1231,13 @@ export const UpdateWidgetConfigResponse = zod.object({
   theme: zod.enum(["light", "dark", "auto"]).optional(),
   period: zod.enum(["month", "quarter", "year"]).optional(),
   embedScript: zod.string().optional(),
+});
+
+/**
+ * @summary Public embeddable widget JavaScript (no auth required)
+ */
+export const GetWidgetScriptParams = zod.object({
+  widgetKey: zod.coerce.string(),
 });
 
 /**
