@@ -1,22 +1,43 @@
 openapi: 3.1.0
 info:
-  # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: EnviroIQ ESG Platform API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: auth
+    description: Authentication (passkey/WebAuthn + session)
+  - name: organisations
+    description: Tenant organisation management
+  - name: users
+    description: User management
+  - name: fleet
+    description: Fleet GPS data ingestion and management
+  - name: energy
+    description: Energy bill ingestion and readings
+  - name: emissions
+    description: Emission readings and metrics
+  - name: goals
+    description: Sustainability goals
+  - name: reports
+    description: Board reporting
+  - name: widget
+    description: Public embeddable widget
+  - name: audit
+    description: Audit log
+  - name: admin
+    description: Super-admin operations
+
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,6 +45,1188 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  # ─── AUTH ───────────────────────────────────────────────────────────────────
+
+  /auth/session:
+    get:
+      operationId: getSession
+      tags: [auth]
+      summary: Get current session
+      responses:
+        "200":
+          description: Current session info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionInfo"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/passkey/register/begin:
+    post:
+      operationId: beginPasskeyRegistration
+      tags: [auth]
+      summary: Begin passkey registration (WebAuthn)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BeginPasskeyRegistrationRequest"
+      responses:
+        "200":
+          description: Registration options
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PasskeyRegistrationOptions"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/passkey/register/complete:
+    post:
+      operationId: completePasskeyRegistration
+      tags: [auth]
+      summary: Complete passkey registration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompletePasskeyRegistrationRequest"
+      responses:
+        "200":
+          description: Registration complete
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionInfo"
+        "400":
+          description: Registration failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/passkey/authenticate/begin:
+    post:
+      operationId: beginPasskeyAuthentication
+      tags: [auth]
+      summary: Begin passkey authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BeginPasskeyAuthRequest"
+      responses:
+        "200":
+          description: Authentication options
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PasskeyAuthOptions"
+
+  /auth/passkey/authenticate/complete:
+    post:
+      operationId: completePasskeyAuthentication
+      tags: [auth]
+      summary: Complete passkey authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompletePasskeyAuthRequest"
+      responses:
+        "200":
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionInfo"
+        "401":
+          description: Authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/magic-link/request:
+    post:
+      operationId: requestMagicLink
+      tags: [auth]
+      summary: Request magic link email fallback
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MagicLinkRequest"
+      responses:
+        "200":
+          description: Magic link sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /auth/magic-link/verify:
+    post:
+      operationId: verifyMagicLink
+      tags: [auth]
+      summary: Verify magic link token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MagicLinkVerifyRequest"
+      responses:
+        "200":
+          description: Authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionInfo"
+        "401":
+          description: Invalid or expired token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/logout:
+    post:
+      operationId: logout
+      tags: [auth]
+      summary: Log out current session
+      responses:
+        "200":
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  # ─── ORGANISATIONS ──────────────────────────────────────────────────────────
+
+  /organisations:
+    get:
+      operationId: listOrganisations
+      tags: [organisations]
+      summary: List all organisations (super-admin only)
+      parameters:
+        - in: query
+          name: page
+          schema:
+            type: integer
+        - in: query
+          name: limit
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of organisations
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganisationList"
+    post:
+      operationId: createOrganisation
+      tags: [organisations]
+      summary: Create a new organisation (super-admin only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrganisationRequest"
+      responses:
+        "201":
+          description: Organisation created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Organisation"
+
+  /organisations/{orgId}:
+    get:
+      operationId: getOrganisation
+      tags: [organisations]
+      summary: Get organisation details
+      parameters:
+        - in: path
+          name: orgId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Organisation details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Organisation"
+    patch:
+      operationId: updateOrganisation
+      tags: [organisations]
+      summary: Update organisation
+      parameters:
+        - in: path
+          name: orgId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateOrganisationRequest"
+      responses:
+        "200":
+          description: Updated organisation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Organisation"
+    delete:
+      operationId: deleteOrganisation
+      tags: [organisations]
+      summary: Delete organisation (super-admin only)
+      parameters:
+        - in: path
+          name: orgId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /organisations/{orgId}/summary:
+    get:
+      operationId: getOrganisationSummary
+      tags: [organisations]
+      summary: Get ESG summary metrics for an organisation
+      parameters:
+        - in: path
+          name: orgId
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: period
+          schema:
+            type: string
+            enum: [day, week, month, quarter, year]
+      responses:
+        "200":
+          description: ESG summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EsgSummary"
+
+  # ─── USERS ──────────────────────────────────────────────────────────────────
+
+  /organisations/{orgId}/users:
+    get:
+      operationId: listUsers
+      tags: [users]
+      summary: List users in organisation
+      parameters:
+        - in: path
+          name: orgId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Users list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserList"
+    post:
+      operationId: createUser
+      tags: [users]
+      summary: Invite/create user in organisation
+      parameters:
+        - in: path
+          name: orgId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUserRequest"
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+
+  /organisations/{orgId}/users/{userId}:
+    get:
+      operationId: getUser
+      tags: [users]
+      summary: Get user details
+      parameters:
+        - in: path
+          name: orgId
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: userId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: User
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+    patch:
+      operationId: updateUser
+      tags: [users]
+      summary: Update user role/status
+      parameters:
+        - in: path
+          name: orgId
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: userId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUserRequest"
+      responses:
+        "200":
+          description: Updated user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+    delete:
+      operationId: deleteUser
+      tags: [users]
+      summary: Remove user from organisation
+      parameters:
+        - in: path
+          name: orgId
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: userId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  # ─── FLEET ──────────────────────────────────────────────────────────────────
+
+  /organisations/{orgId}/fleet/vehicles:
+    get:
+      operationId: listVehicles
+      tags: [fleet]
+      summary: List vehicles for organisation
+      parameters:
+        - in: path
+          name: orgId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Vehicles
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VehicleList"
+    post:
+      operationId: createVehicle
+      tags: [fleet]
+      summary: Register a vehicle
+      parameters:
+        - in: path
+          name: orgId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVehicleRequest"
+      responses:
+        "201":
+          description: Vehicle registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Vehicle"
+
+  /organisations/{orgId}/fleet/vehicles/{vehicleId}:
+    get:
+      operationId: getVehicle
+      tags: [fleet]
+      summary: Get vehicle details
+      parameters:
+        - in: path
+          name: orgId
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: vehicleId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Vehicle
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Vehicle"
+    patch:
+      operationId: updateVehicle
+      tags: [fleet]
+      summary: Update vehicle
+      parameters:
+        - in: path
+          name: orgId
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: vehicleId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateVehicleRequest"
+      responses:
+        "200":
+          description: Updated vehicle
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Vehicle"
+    delete:
+      operationId: deleteVehicle
+      tags: [fleet]
+      summary: Remove vehicle
+      parameters:
+        - in: path
+          name: orgId
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: vehicleId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /webhooks/fleet/navman:
+    post:
+      operationId: navmanWebhook
+      tags: [fleet]
+      summary: Navman GPS webhook endpoint
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NavmanWebhookPayload"
+      responses:
+        "200":
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /webhooks/fleet/blackhawk:
+    post:
+      operationId: blackhawkWebhook
+      tags: [fleet]
+      summary: Blackhawk GPS webhook endpoint
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BlackhawkWebhookPayload"
+      responses:
+        "200":
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /webhooks/fleet/generic:
+    post:
+      operationId: genericFleetWebhook
+      tags: [fleet]
+      summary: Generic GPS/fleet webhook endpoint
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GenericFleetWebhookPayload"
+      responses:
+        "200":
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /organisations/{orgId}/fleet/events:
+    get:
+      operationId: listFleetEvents
+      tags: [fleet]
+      summary: Get fleet events/readings
+      parameters:
+        - in: path
+          name: orgId
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: vehicleId
+          schema:
+            type: string
+        - in: query
+          name: from
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: to
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: page
+          schema:
+            type: integer
+        - in: query
+          name: limit
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Fleet events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FleetEventList"
+
+  # ─── ENERGY ─────────────────────────────────────────────────────────────────
+
+  /organisations/{orgId}/energy/readings:
+    get:
+      operationId: listEnergyReadings
+      tags: [energy]
+      summary: List energy readings
+      parameters:
+        - in: path
+          name: orgId
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: from
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: to
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: page
+          schema:
+            type: integer
+        - in: query
+          name: limit
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Energy readings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnergyReadingList"
+    post:
+      operationId: createEnergyReading
+      tags: [energy]
+      summary: Manually create energy reading
+      parameters:
+        - in: path
+          name: orgId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateEnergyReadingRequest"
+      responses:
+        "201":
+          description: Energy reading created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnergyReading"
+
+  /organisations/{orgId}/energy/upload:
+    post:
+      operationId: uploadEnergyBill
+      tags: [energy]
+      summary: Upload energy bill PDF
+      parameters:
+        - in: path
+          name: orgId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                utilityType:
+                  type: string
+                  enum: [electricity, gas, water, other]
+              required:
+                - file
+                - utilityType
+      responses:
+        "201":
+          description: Bill uploaded and parsed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnergyBillUploadResult"
+
+  /organisations/{orgId}/energy/email-address:
+    get:
+      operationId: getEnergyEmailAddress
+      tags: [energy]
+      summary: Get inbound email address for energy bill submission
+      parameters:
+        - in: path
+          name: orgId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Email address info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnergyEmailAddressInfo"
+
+  /webhooks/energy/inbound-email:
+    post:
+      operationId: inboundEnergyEmail
+      tags: [energy]
+      summary: Inbound email webhook for energy bills
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InboundEmailPayload"
+      responses:
+        "200":
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  # ─── EMISSIONS ──────────────────────────────────────────────────────────────
+
+  /organisations/{orgId}/emissions:
+    get:
+      operationId: listEmissionReadings
+      tags: [emissions]
+      summary: List emission readings
+      parameters:
+        - in: path
+          name: orgId
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: source
+          schema:
+            type: string
+            enum: [fleet, energy, manual, all]
+        - in: query
+          name: from
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: to
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: page
+          schema:
+            type: integer
+        - in: query
+          name: limit
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Emission readings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmissionReadingList"
+
+  /organisations/{orgId}/emissions/totals:
+    get:
+      operationId: getEmissionTotals
+      tags: [emissions]
+      summary: Get aggregated emission totals
+      parameters:
+        - in: path
+          name: orgId
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: period
+          schema:
+            type: string
+            enum: [day, week, month, quarter, year]
+        - in: query
+          name: groupBy
+          schema:
+            type: string
+            enum: [source, vehicle, day, month]
+      responses:
+        "200":
+          description: Emission totals
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmissionTotals"
+
+  # ─── GOALS ──────────────────────────────────────────────────────────────────
+
+  /organisations/{orgId}/goals:
+    get:
+      operationId: listGoals
+      tags: [goals]
+      summary: List sustainability goals
+      parameters:
+        - in: path
+          name: orgId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Goals
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GoalList"
+    post:
+      operationId: createGoal
+      tags: [goals]
+      summary: Create sustainability goal
+      parameters:
+        - in: path
+          name: orgId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateGoalRequest"
+      responses:
+        "201":
+          description: Goal created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Goal"
+
+  /organisations/{orgId}/goals/{goalId}:
+    get:
+      operationId: getGoal
+      tags: [goals]
+      summary: Get goal details and progress
+      parameters:
+        - in: path
+          name: orgId
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: goalId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Goal with progress
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GoalWithProgress"
+    patch:
+      operationId: updateGoal
+      tags: [goals]
+      summary: Update goal
+      parameters:
+        - in: path
+          name: orgId
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: goalId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateGoalRequest"
+      responses:
+        "200":
+          description: Updated goal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Goal"
+    delete:
+      operationId: deleteGoal
+      tags: [goals]
+      summary: Delete goal
+      parameters:
+        - in: path
+          name: orgId
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: goalId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  # ─── REPORTS ────────────────────────────────────────────────────────────────
+
+  /organisations/{orgId}/reports:
+    get:
+      operationId: listReports
+      tags: [reports]
+      summary: List generated reports
+      parameters:
+        - in: path
+          name: orgId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Reports
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReportList"
+    post:
+      operationId: generateReport
+      tags: [reports]
+      summary: Generate a board ESG report
+      parameters:
+        - in: path
+          name: orgId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GenerateReportRequest"
+      responses:
+        "201":
+          description: Report generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Report"
+
+  /organisations/{orgId}/reports/{reportId}:
+    get:
+      operationId: getReport
+      tags: [reports]
+      summary: Get report data
+      parameters:
+        - in: path
+          name: orgId
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: reportId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReportDetail"
+
+  # ─── WIDGET ─────────────────────────────────────────────────────────────────
+
+  /organisations/{orgId}/widget/config:
+    get:
+      operationId: getWidgetConfig
+      tags: [widget]
+      summary: Get widget configuration
+      parameters:
+        - in: path
+          name: orgId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Widget config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WidgetConfig"
+    put:
+      operationId: updateWidgetConfig
+      tags: [widget]
+      summary: Update widget configuration
+      parameters:
+        - in: path
+          name: orgId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateWidgetConfigRequest"
+      responses:
+        "200":
+          description: Updated widget config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WidgetConfig"
+
+  /widget/{widgetKey}/data:
+    get:
+      operationId: getWidgetPublicData
+      tags: [widget]
+      summary: Public endpoint for widget data (no auth required)
+      parameters:
+        - in: path
+          name: widgetKey
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Widget public data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WidgetPublicData"
+        "404":
+          description: Widget not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ─── AUDIT ──────────────────────────────────────────────────────────────────
+
+  /organisations/{orgId}/audit-logs:
+    get:
+      operationId: listAuditLogs
+      tags: [audit]
+      summary: List audit logs for organisation
+      parameters:
+        - in: path
+          name: orgId
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: userId
+          schema:
+            type: string
+        - in: query
+          name: action
+          schema:
+            type: string
+        - in: query
+          name: from
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: to
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: page
+          schema:
+            type: integer
+        - in: query
+          name: limit
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Audit logs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditLogList"
+
+  # ─── ADMIN ──────────────────────────────────────────────────────────────────
+
+  /admin/stats:
+    get:
+      operationId: getAdminStats
+      tags: [admin]
+      summary: Get platform-wide stats (super-admin only)
+      responses:
+        "200":
+          description: Platform stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminStats"
+
+  /admin/audit-logs:
+    get:
+      operationId: listAllAuditLogs
+      tags: [admin]
+      summary: List all audit logs across all organisations
+      parameters:
+        - in: query
+          name: orgId
+          schema:
+            type: string
+        - in: query
+          name: page
+          schema:
+            type: integer
+        - in: query
+          name: limit
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Audit logs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditLogList"
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +1237,1287 @@ components:
       required:
         - status
 
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+      required:
+        - error
+        - message
+
+    MessageResponse:
+      type: object
+      properties:
+        message:
+          type: string
+      required:
+        - message
+
+    # ─── AUTH ────────────────────────────────────────────────────────────────
+
+    SessionInfo:
+      type: object
+      properties:
+        userId:
+          type: string
+        email:
+          type: string
+        name:
+          type: string
+        role:
+          type: string
+          enum: [super_admin, org_admin, org_viewer]
+        organisationId:
+          type: string
+        organisationName:
+          type: string
+        isAuthenticated:
+          type: boolean
+      required:
+        - userId
+        - email
+        - role
+        - isAuthenticated
+
+    BeginPasskeyRegistrationRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+      required:
+        - email
+        - name
+
+    PasskeyRegistrationOptions:
+      type: object
+      properties:
+        challenge:
+          type: string
+        rp:
+          type: object
+          properties:
+            name:
+              type: string
+            id:
+              type: string
+          required: [name, id]
+        user:
+          type: object
+          properties:
+            id:
+              type: string
+            name:
+              type: string
+            displayName:
+              type: string
+          required: [id, name, displayName]
+        pubKeyCredParams:
+          type: array
+          items:
+            type: object
+        timeout:
+          type: integer
+        attestation:
+          type: string
+      required:
+        - challenge
+        - rp
+        - user
+        - pubKeyCredParams
+
+    CompletePasskeyRegistrationRequest:
+      type: object
+      properties:
+        credential:
+          type: object
+          additionalProperties: true
+        email:
+          type: string
+        name:
+          type: string
+      required:
+        - credential
+        - email
+
+    BeginPasskeyAuthRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+      required: []
+
+    PasskeyAuthOptions:
+      type: object
+      properties:
+        challenge:
+          type: string
+        rpId:
+          type: string
+        allowCredentials:
+          type: array
+          items:
+            type: object
+        timeout:
+          type: integer
+      required:
+        - challenge
+
+    CompletePasskeyAuthRequest:
+      type: object
+      properties:
+        credential:
+          type: object
+          additionalProperties: true
+      required:
+        - credential
+
+    MagicLinkRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+      required:
+        - email
+
+    MagicLinkVerifyRequest:
+      type: object
+      properties:
+        token:
+          type: string
+      required:
+        - token
+
+    # ─── ORGANISATION ────────────────────────────────────────────────────────
+
+    Organisation:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        slug:
+          type: string
+        industry:
+          type: string
+        country:
+          type: string
+        logoUrl:
+          type: string
+        widgetKey:
+          type: string
+        inboundEmailAddress:
+          type: string
+        isActive:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        userCount:
+          type: integer
+        vehicleCount:
+          type: integer
+      required:
+        - id
+        - name
+        - slug
+        - isActive
+        - createdAt
+        - updatedAt
+
+    OrganisationList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Organisation"
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+      required:
+        - items
+        - total
+
+    CreateOrganisationRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        industry:
+          type: string
+        country:
+          type: string
+        adminEmail:
+          type: string
+          format: email
+        adminName:
+          type: string
+      required:
+        - name
+        - adminEmail
+        - adminName
+
+    UpdateOrganisationRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        industry:
+          type: string
+        country:
+          type: string
+        logoUrl:
+          type: string
+        isActive:
+          type: boolean
+
+    EsgSummary:
+      type: object
+      properties:
+        organisationId:
+          type: string
+        period:
+          type: string
+        totalCo2eKg:
+          type: number
+        fleetCo2eKg:
+          type: number
+        energyCo2eKg:
+          type: number
+        totalEnergyKwh:
+          type: number
+        fleetDistanceKm:
+          type: number
+        activeVehicles:
+          type: integer
+        sustainabilityScore:
+          type: number
+        goalsOnTrack:
+          type: integer
+        goalsBehind:
+          type: integer
+        periodOverPeriodChange:
+          type: number
+        lastUpdated:
+          type: string
+          format: date-time
+      required:
+        - organisationId
+        - period
+        - totalCo2eKg
+        - fleetCo2eKg
+        - energyCo2eKg
+        - totalEnergyKwh
+        - sustainabilityScore
+        - lastUpdated
+
+    # ─── USERS ───────────────────────────────────────────────────────────────
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+        name:
+          type: string
+        role:
+          type: string
+          enum: [super_admin, org_admin, org_viewer]
+        organisationId:
+          type: string
+        isActive:
+          type: boolean
+        lastLoginAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - email
+        - role
+        - isActive
+        - createdAt
+
+    UserList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/User"
+        total:
+          type: integer
+      required:
+        - items
+        - total
+
+    CreateUserRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        role:
+          type: string
+          enum: [org_admin, org_viewer]
+      required:
+        - email
+        - name
+        - role
+
+    UpdateUserRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        role:
+          type: string
+          enum: [org_admin, org_viewer]
+        isActive:
+          type: boolean
+
+    # ─── FLEET ───────────────────────────────────────────────────────────────
+
+    Vehicle:
+      type: object
+      properties:
+        id:
+          type: string
+        organisationId:
+          type: string
+        name:
+          type: string
+        registration:
+          type: string
+        make:
+          type: string
+        model:
+          type: string
+        year:
+          type: integer
+        fuelType:
+          type: string
+          enum: [petrol, diesel, electric, hybrid, lpg, hydrogen, other]
+        emissionFactorKgPerKm:
+          type: number
+        gpsProvider:
+          type: string
+          enum: [navman, blackhawk, generic, none]
+        gpsDeviceId:
+          type: string
+        isActive:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - organisationId
+        - name
+        - fuelType
+        - isActive
+        - createdAt
+
+    VehicleList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Vehicle"
+        total:
+          type: integer
+      required:
+        - items
+        - total
+
+    CreateVehicleRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        registration:
+          type: string
+        make:
+          type: string
+        model:
+          type: string
+        year:
+          type: integer
+        fuelType:
+          type: string
+          enum: [petrol, diesel, electric, hybrid, lpg, hydrogen, other]
+        emissionFactorKgPerKm:
+          type: number
+        gpsProvider:
+          type: string
+          enum: [navman, blackhawk, generic, none]
+        gpsDeviceId:
+          type: string
+      required:
+        - name
+        - fuelType
+
+    UpdateVehicleRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        registration:
+          type: string
+        make:
+          type: string
+        model:
+          type: string
+        year:
+          type: integer
+        fuelType:
+          type: string
+          enum: [petrol, diesel, electric, hybrid, lpg, hydrogen, other]
+        emissionFactorKgPerKm:
+          type: number
+        gpsProvider:
+          type: string
+          enum: [navman, blackhawk, generic, none]
+        gpsDeviceId:
+          type: string
+        isActive:
+          type: boolean
+
+    FleetEvent:
+      type: object
+      properties:
+        id:
+          type: string
+        organisationId:
+          type: string
+        vehicleId:
+          type: string
+        vehicleName:
+          type: string
+        eventType:
+          type: string
+          enum: [ignition_on, ignition_off, position, trip_start, trip_end, fuel_fill, idle]
+        latitude:
+          type: number
+        longitude:
+          type: number
+        speedKmh:
+          type: number
+        distanceKm:
+          type: number
+        fuelLitres:
+          type: number
+        co2eKg:
+          type: number
+        source:
+          type: string
+          enum: [navman, blackhawk, generic, manual]
+        recordedAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - organisationId
+        - vehicleId
+        - eventType
+        - source
+        - recordedAt
+        - createdAt
+
+    FleetEventList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/FleetEvent"
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+      required:
+        - items
+        - total
+
+    NavmanWebhookPayload:
+      type: object
+      properties:
+        deviceId:
+          type: string
+        eventType:
+          type: string
+        latitude:
+          type: number
+        longitude:
+          type: number
+        speed:
+          type: number
+        odometer:
+          type: number
+        timestamp:
+          type: string
+        apiKey:
+          type: string
+      required:
+        - deviceId
+        - timestamp
+        - apiKey
+
+    BlackhawkWebhookPayload:
+      type: object
+      properties:
+        unit_id:
+          type: string
+        event:
+          type: string
+        lat:
+          type: number
+        lng:
+          type: number
+        spd:
+          type: number
+        dist:
+          type: number
+        ts:
+          type: string
+        token:
+          type: string
+      required:
+        - unit_id
+        - ts
+        - token
+
+    GenericFleetWebhookPayload:
+      type: object
+      properties:
+        deviceId:
+          type: string
+        orgId:
+          type: string
+        eventType:
+          type: string
+        latitude:
+          type: number
+        longitude:
+          type: number
+        speedKmh:
+          type: number
+        distanceKm:
+          type: number
+        fuelLitres:
+          type: number
+        timestamp:
+          type: string
+        apiKey:
+          type: string
+      required:
+        - deviceId
+        - orgId
+        - timestamp
+        - apiKey
+
+    # ─── ENERGY ──────────────────────────────────────────────────────────────
+
+    EnergyReading:
+      type: object
+      properties:
+        id:
+          type: string
+        organisationId:
+          type: string
+        utilityType:
+          type: string
+          enum: [electricity, gas, water, other]
+        provider:
+          type: string
+        periodStart:
+          type: string
+          format: date-time
+        periodEnd:
+          type: string
+          format: date-time
+        usageKwh:
+          type: number
+        usageMj:
+          type: number
+        costAmount:
+          type: number
+        costCurrency:
+          type: string
+        co2eKg:
+          type: number
+        source:
+          type: string
+          enum: [manual, pdf_upload, email_inbound]
+        originalFileName:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - organisationId
+        - utilityType
+        - periodStart
+        - periodEnd
+        - source
+        - createdAt
+
+    EnergyReadingList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/EnergyReading"
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+      required:
+        - items
+        - total
+
+    CreateEnergyReadingRequest:
+      type: object
+      properties:
+        utilityType:
+          type: string
+          enum: [electricity, gas, water, other]
+        provider:
+          type: string
+        periodStart:
+          type: string
+          format: date-time
+        periodEnd:
+          type: string
+          format: date-time
+        usageKwh:
+          type: number
+        usageMj:
+          type: number
+        costAmount:
+          type: number
+        costCurrency:
+          type: string
+      required:
+        - utilityType
+        - periodStart
+        - periodEnd
+
+    EnergyBillUploadResult:
+      type: object
+      properties:
+        reading:
+          $ref: "#/components/schemas/EnergyReading"
+        parsedFields:
+          type: object
+          properties:
+            usageKwh:
+              type: number
+            periodStart:
+              type: string
+            periodEnd:
+              type: string
+            cost:
+              type: number
+            provider:
+              type: string
+          additionalProperties: true
+        confidence:
+          type: number
+        requiresReview:
+          type: boolean
+      required:
+        - reading
+        - requiresReview
+
+    EnergyEmailAddressInfo:
+      type: object
+      properties:
+        emailAddress:
+          type: string
+        instructions:
+          type: string
+      required:
+        - emailAddress
+        - instructions
+
+    InboundEmailPayload:
+      type: object
+      properties:
+        to:
+          type: string
+        from:
+          type: string
+        subject:
+          type: string
+        text:
+          type: string
+        html:
+          type: string
+        attachments:
+          type: array
+          items:
+            type: object
+            properties:
+              filename:
+                type: string
+              content:
+                type: string
+              contentType:
+                type: string
+      required:
+        - to
+        - from
+
+    # ─── EMISSIONS ───────────────────────────────────────────────────────────
+
+    EmissionReading:
+      type: object
+      properties:
+        id:
+          type: string
+        organisationId:
+          type: string
+        source:
+          type: string
+          enum: [fleet, energy, manual]
+        sourceId:
+          type: string
+        co2eKg:
+          type: number
+        scope:
+          type: integer
+        description:
+          type: string
+        recordedAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - organisationId
+        - source
+        - co2eKg
+        - scope
+        - recordedAt
+        - createdAt
+
+    EmissionReadingList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/EmissionReading"
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+      required:
+        - items
+        - total
+
+    EmissionTotals:
+      type: object
+      properties:
+        organisationId:
+          type: string
+        period:
+          type: string
+        totalCo2eKg:
+          type: number
+        breakdowns:
+          type: array
+          items:
+            type: object
+            properties:
+              label:
+                type: string
+              co2eKg:
+                type: number
+              percentage:
+                type: number
+            required:
+              - label
+              - co2eKg
+              - percentage
+        timeSeries:
+          type: array
+          items:
+            type: object
+            properties:
+              date:
+                type: string
+              co2eKg:
+                type: number
+            required:
+              - date
+              - co2eKg
+      required:
+        - organisationId
+        - period
+        - totalCo2eKg
+        - breakdowns
+        - timeSeries
+
+    # ─── GOALS ───────────────────────────────────────────────────────────────
+
+    Goal:
+      type: object
+      properties:
+        id:
+          type: string
+        organisationId:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+          enum: [emissions, energy, fleet, waste, water, other]
+        targetType:
+          type: string
+          enum: [reduce_by_percent, reduce_to_absolute, increase_to_absolute, achieve_by_date]
+        targetValue:
+          type: number
+        targetUnit:
+          type: string
+        baselineValue:
+          type: number
+        baselineYear:
+          type: integer
+        targetYear:
+          type: integer
+        dueDate:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [on_track, at_risk, behind, achieved, not_started]
+        isPublic:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - organisationId
+        - title
+        - category
+        - targetType
+        - targetValue
+        - targetUnit
+        - status
+        - isPublic
+        - createdAt
+
+    GoalWithProgress:
+      allOf:
+        - $ref: "#/components/schemas/Goal"
+        - type: object
+          properties:
+            currentValue:
+              type: number
+            progressPercent:
+              type: number
+            daysRemaining:
+              type: integer
+          required:
+            - currentValue
+            - progressPercent
+
+    GoalList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Goal"
+        total:
+          type: integer
+      required:
+        - items
+        - total
+
+    CreateGoalRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+          enum: [emissions, energy, fleet, waste, water, other]
+        targetType:
+          type: string
+          enum: [reduce_by_percent, reduce_to_absolute, increase_to_absolute, achieve_by_date]
+        targetValue:
+          type: number
+        targetUnit:
+          type: string
+        baselineValue:
+          type: number
+        baselineYear:
+          type: integer
+        targetYear:
+          type: integer
+        dueDate:
+          type: string
+          format: date-time
+        isPublic:
+          type: boolean
+      required:
+        - title
+        - category
+        - targetType
+        - targetValue
+        - targetUnit
+
+    UpdateGoalRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        targetValue:
+          type: number
+        targetUnit:
+          type: string
+        dueDate:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [on_track, at_risk, behind, achieved, not_started]
+        isPublic:
+          type: boolean
+
+    # ─── REPORTS ─────────────────────────────────────────────────────────────
+
+    Report:
+      type: object
+      properties:
+        id:
+          type: string
+        organisationId:
+          type: string
+        title:
+          type: string
+        periodStart:
+          type: string
+          format: date-time
+        periodEnd:
+          type: string
+          format: date-time
+        reportType:
+          type: string
+          enum: [board_summary, full_esg, fleet_only, energy_only]
+        status:
+          type: string
+          enum: [generating, ready, failed]
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          type: string
+      required:
+        - id
+        - organisationId
+        - title
+        - periodStart
+        - periodEnd
+        - reportType
+        - status
+        - createdAt
+        - createdBy
+
+    ReportList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Report"
+        total:
+          type: integer
+      required:
+        - items
+        - total
+
+    ReportDetail:
+      allOf:
+        - $ref: "#/components/schemas/Report"
+        - type: object
+          properties:
+            summary:
+              $ref: "#/components/schemas/EsgSummary"
+            emissions:
+              $ref: "#/components/schemas/EmissionTotals"
+            goals:
+              type: array
+              items:
+                $ref: "#/components/schemas/GoalWithProgress"
+            highlights:
+              type: array
+              items:
+                type: string
+            recommendations:
+              type: array
+              items:
+                type: string
+
+    GenerateReportRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        periodStart:
+          type: string
+          format: date-time
+        periodEnd:
+          type: string
+          format: date-time
+        reportType:
+          type: string
+          enum: [board_summary, full_esg, fleet_only, energy_only]
+      required:
+        - periodStart
+        - periodEnd
+        - reportType
+
+    # ─── WIDGET ──────────────────────────────────────────────────────────────
+
+    WidgetConfig:
+      type: object
+      properties:
+        organisationId:
+          type: string
+        widgetKey:
+          type: string
+        isEnabled:
+          type: boolean
+        title:
+          type: string
+        showTotalCo2e:
+          type: boolean
+        showFleetStats:
+          type: boolean
+        showEnergyUsage:
+          type: boolean
+        showGoals:
+          type: boolean
+        showSustainabilityScore:
+          type: boolean
+        showLastUpdated:
+          type: boolean
+        accentColor:
+          type: string
+        theme:
+          type: string
+          enum: [light, dark, auto]
+        period:
+          type: string
+          enum: [month, quarter, year]
+        embedScript:
+          type: string
+      required:
+        - organisationId
+        - widgetKey
+        - isEnabled
+
+    UpdateWidgetConfigRequest:
+      type: object
+      properties:
+        isEnabled:
+          type: boolean
+        title:
+          type: string
+        showTotalCo2e:
+          type: boolean
+        showFleetStats:
+          type: boolean
+        showEnergyUsage:
+          type: boolean
+        showGoals:
+          type: boolean
+        showSustainabilityScore:
+          type: boolean
+        showLastUpdated:
+          type: boolean
+        accentColor:
+          type: string
+        theme:
+          type: string
+          enum: [light, dark, auto]
+        period:
+          type: string
+          enum: [month, quarter, year]
+
+    WidgetPublicData:
+      type: object
+      properties:
+        organisationName:
+          type: string
+        period:
+          type: string
+        config:
+          $ref: "#/components/schemas/WidgetConfig"
+        totalCo2eKg:
+          type: number
+        fleetCo2eKg:
+          type: number
+        energyCo2eKg:
+          type: number
+        totalEnergyKwh:
+          type: number
+        fleetDistanceKm:
+          type: number
+        sustainabilityScore:
+          type: number
+        activeVehicles:
+          type: integer
+        goals:
+          type: array
+          items:
+            type: object
+            properties:
+              title:
+                type: string
+              progressPercent:
+                type: number
+              status:
+                type: string
+            required:
+              - title
+              - progressPercent
+              - status
+        lastUpdated:
+          type: string
+          format: date-time
+      required:
+        - organisationName
+        - period
+        - lastUpdated
+
+    # ─── AUDIT ───────────────────────────────────────────────────────────────
+
+    AuditLog:
+      type: object
+      properties:
+        id:
+          type: string
+        organisationId:
+          type: string
+        userId:
+          type: string
+        userEmail:
+          type: string
+        action:
+          type: string
+        resourceType:
+          type: string
+        resourceId:
+          type: string
+        ipAddress:
+          type: string
+        userAgent:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+        outcome:
+          type: string
+          enum: [success, failure]
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - action
+        - outcome
+        - createdAt
+
+    AuditLogList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditLog"
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+      required:
+        - items
+        - total
+
+    # ─── ADMIN ───────────────────────────────────────────────────────────────
+
+    AdminStats:
+      type: object
+      properties:
+        totalOrganisations:
+          type: integer
+        activeOrganisations:
+          type: integer
+        totalUsers:
+          type: integer
+        totalVehicles:
+          type: integer
+        totalCo2eKgThisMonth:
+          type: number
+        totalEnergyKwhThisMonth:
+          type: number
+        recentActivity:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditLog"
+      required:
+        - totalOrganisations
+        - activeOrganisations
+        - totalUsers
+        - totalVehicles
+        - totalCo2eKgThisMonth
+        - totalEnergyKwhThisMonth
+        - recentActivity

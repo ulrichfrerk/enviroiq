@@ -1,96 +1,112 @@
-# Workspace
+# EnviroIQ — ESG Sustainability Platform
 
 ## Overview
 
-pnpm workspace monorepo using TypeScript. Each package manages its own dependencies.
+Real-time multi-tenant ESG sustainability measurement platform. Companies track CO2 emissions from fleet vehicles (Navman, Blackhawk GPS integration) and energy consumption (PDF upload + inbound email bill parsing). Features passkey/WebAuthn authentication, super-admin portal, board-ready PDF reports, an embeddable public widget, full audit logging (SOC 2 mindset), and role-based access.
 
 ## Stack
 
 - **Monorepo tool**: pnpm workspaces
-- **Node.js version**: 24
+- **Node.js**: 24
 - **Package manager**: pnpm
-- **TypeScript version**: 5.9
-- **API framework**: Express 5
+- **TypeScript**: 5.9
+- **API framework**: Express 5 + Helmet + express-rate-limit + express-session
 - **Database**: PostgreSQL + Drizzle ORM
-- **Validation**: Zod (`zod/v4`), `drizzle-zod`
+- **Auth**: WebAuthn/Passkeys (@simplewebauthn/server) + magic link fallback
+- **Validation**: Zod (zod/v4), drizzle-zod
 - **API codegen**: Orval (from OpenAPI spec)
-- **Build**: esbuild (CJS bundle)
+- **Frontend**: React + Vite + TanStack Query + Wouter + Recharts + shadcn/ui
+- **Build**: esbuild (ESM bundle for API), Vite (frontend)
+
+## Roles
+
+- `super_admin` — platform management, create/manage organisations
+- `org_admin` — manage their organisation, users, vehicles, energy, reports
+- `org_viewer` — read-only access
+
+## Demo Data
+
+The database has been seeded with:
+- **Super Admin**: `admin@enviroiq.app`
+- **Org Admin**: `sarah@acmelogistics.co.nz`
+- **Viewer**: `james@acmelogistics.co.nz`
+- **Organisation**: Acme Logistics Ltd (4 vehicles, 30 fleet events, 12 energy readings, 3 goals, 1 report)
+
+Login via "Continue with Email" → magic link flow (tokens are logged in API server console in dev)
+
+## Emission Factors
+
+- Diesel: 2.68 kg CO2e per litre
+- Petrol: 2.31 kg CO2e per litre
+- Electricity: 0.0977 kg CO2e per kWh
+- Gas: 0.0535 kg CO2e per MJ
 
 ## Structure
 
-```text
-artifacts-monorepo/
-├── artifacts/              # Deployable applications
-│   └── api-server/         # Express API server
-├── lib/                    # Shared libraries
-│   ├── api-spec/           # OpenAPI spec + Orval codegen config
+```
+.
+├── artifacts/
+│   ├── api-server/         # Express API (port 8080)
+│   │   ├── src/app.ts      # Helmet, CORS, session, rate-limit
+│   │   ├── src/routes/     # auth, organisations, users, fleet, energy, emissions, goals, reports, widget, audit, admin
+│   │   ├── src/lib/        # auth.ts (middleware), audit.ts, emissions.ts, logger.ts
+│   │   └── src/seed.ts     # Demo data seeder
+│   └── enviroiq/           # React/Vite frontend (previewPath /)
+│       ├── src/pages/      # login, dashboard, fleet, energy, goals, reports, users, not-found
+│       ├── src/components/ # layout (AppLayout, AppSidebar), ui (shadcn)
+│       ├── src/hooks/      # use-auth.ts (WebAuthn flow), use-toast, use-mobile
+│       └── src/lib/        # webauthn.ts, queryClient.ts
+├── lib/
+│   ├── api-spec/           # OpenAPI 3.1 spec + Orval config
 │   ├── api-client-react/   # Generated React Query hooks
-│   ├── api-zod/            # Generated Zod schemas from OpenAPI
-│   └── db/                 # Drizzle ORM schema + DB connection
-├── scripts/                # Utility scripts (single workspace package)
-│   └── src/                # Individual .ts scripts, run via `pnpm --filter @workspace/scripts run <script>`
-├── pnpm-workspace.yaml     # pnpm workspace (artifacts/*, lib/*, lib/integrations/*, scripts)
-├── tsconfig.base.json      # Shared TS options (composite, bundler resolution, es2022)
-├── tsconfig.json           # Root TS project references
-└── package.json            # Root package with hoisted devDeps
+│   ├── api-zod/            # Generated Zod schemas
+│   └── db/                 # Drizzle schema + DB connection
+│       └── src/schema/     # organisations, users, fleet, energy, goals, reports, widget, audit
+└── scripts/                # Utility scripts
+```
+
+## API Routes
+
+All under `/api`:
+- `GET /healthz` — health check
+- `GET/POST /auth/session|passkey/*|magic-link/*|logout`
+- `GET/POST/PATCH/DELETE /organisations/:orgId`
+- `GET /organisations/:orgId/summary` — ESG summary dashboard
+- `GET/POST /organisations/:orgId/users`
+- `GET/POST/DELETE /organisations/:orgId/fleet/vehicles`
+- `GET /organisations/:orgId/fleet/events`
+- `POST /webhooks/fleet/navman|blackhawk|generic`
+- `GET /organisations/:orgId/energy/readings`
+- `POST /organisations/:orgId/energy/upload` — PDF bill upload
+- `GET /organisations/:orgId/energy/email-address` — inbound email
+- `POST /webhooks/energy/inbound-email`
+- `GET /organisations/:orgId/emissions` — with period and groupBy
+- `GET/POST/PATCH /organisations/:orgId/goals`
+- `GET/POST /organisations/:orgId/reports`
+- `GET/PUT /organisations/:orgId/widget`
+- `GET /widget/:widgetKey/data` — public (no auth)
+- `GET /organisations/:orgId/audit-logs`
+- `GET /admin/stats` — super_admin only
+
+## Key Environment Variables
+
+- `DATABASE_URL` — PostgreSQL connection (auto-set by Replit)
+- `SESSION_SECRET` — express-session secret (defaults to dev value)
+- `RP_ID` — WebAuthn relying party ID (defaults to `localhost`)
+- `ORIGIN` — WebAuthn expected origin (defaults to `http://localhost`)
+- `INBOUND_EMAIL_DOMAIN` — email domain for energy bill forwarding (defaults to `bills.enviroiq.app`)
+- `PORT` — server port (auto-set per artifact)
+
+## Running Seed
+
+```bash
+node_modules/.bin/tsx artifacts/api-server/src/seed.ts
 ```
 
 ## TypeScript & Composite Projects
 
-Every package extends `tsconfig.base.json` which sets `composite: true`. The root `tsconfig.json` lists all packages as project references. This means:
+Every package extends `tsconfig.base.json` with `composite: true`. Root `tsconfig.json` lists all packages as references. Always typecheck from root: `pnpm run typecheck`.
 
-- **Always typecheck from the root** — run `pnpm run typecheck` (which runs `tsc --build --emitDeclarationOnly`). This builds the full dependency graph so that cross-package imports resolve correctly. Running `tsc` inside a single package will fail if its dependencies haven't been built yet.
-- **`emitDeclarationOnly`** — we only emit `.d.ts` files during typecheck; actual JS bundling is handled by esbuild/tsx/vite...etc, not `tsc`.
-- **Project references** — when package A depends on package B, A's `tsconfig.json` must list B in its `references` array. `tsc --build` uses this to determine build order and skip up-to-date packages.
-
-## Root Scripts
-
-- `pnpm run build` — runs `typecheck` first, then recursively runs `build` in all packages that define it
-- `pnpm run typecheck` — runs `tsc --build --emitDeclarationOnly` using project references
-
-## Packages
-
-### `artifacts/api-server` (`@workspace/api-server`)
-
-Express 5 API server. Routes live in `src/routes/` and use `@workspace/api-zod` for request and response validation and `@workspace/db` for persistence.
-
-- Entry: `src/index.ts` — reads `PORT`, starts Express
-- App setup: `src/app.ts` — mounts CORS, JSON/urlencoded parsing, routes at `/api`
-- Routes: `src/routes/index.ts` mounts sub-routers; `src/routes/health.ts` exposes `GET /health` (full path: `/api/health`)
-- Depends on: `@workspace/db`, `@workspace/api-zod`
-- `pnpm --filter @workspace/api-server run dev` — run the dev server
-- `pnpm --filter @workspace/api-server run build` — production esbuild bundle (`dist/index.cjs`)
-- Build bundles an allowlist of deps (express, cors, pg, drizzle-orm, zod, etc.) and externalizes the rest
-
-### `lib/db` (`@workspace/db`)
-
-Database layer using Drizzle ORM with PostgreSQL. Exports a Drizzle client instance and schema models.
-
-- `src/index.ts` — creates a `Pool` + Drizzle instance, exports schema
-- `src/schema/index.ts` — barrel re-export of all models
-- `src/schema/<modelname>.ts` — table definitions with `drizzle-zod` insert schemas (no models definitions exist right now)
-- `drizzle.config.ts` — Drizzle Kit config (requires `DATABASE_URL`, automatically provided by Replit)
-- Exports: `.` (pool, db, schema), `./schema` (schema only)
-
-Production migrations are handled by Replit when publishing. In development, we just use `pnpm --filter @workspace/db run push`, and we fallback to `pnpm --filter @workspace/db run push-force`.
-
-### `lib/api-spec` (`@workspace/api-spec`)
-
-Owns the OpenAPI 3.1 spec (`openapi.yaml`) and the Orval config (`orval.config.ts`). Running codegen produces output into two sibling packages:
-
-1. `lib/api-client-react/src/generated/` — React Query hooks + fetch client
-2. `lib/api-zod/src/generated/` — Zod schemas
-
-Run codegen: `pnpm --filter @workspace/api-spec run codegen`
-
-### `lib/api-zod` (`@workspace/api-zod`)
-
-Generated Zod schemas from the OpenAPI spec (e.g. `HealthCheckResponse`). Used by `api-server` for response validation.
-
-### `lib/api-client-react` (`@workspace/api-client-react`)
-
-Generated React Query hooks and fetch client from the OpenAPI spec (e.g. `useHealthCheck`, `healthCheck`).
-
-### `scripts` (`@workspace/scripts`)
-
-Utility scripts package. Each script is a `.ts` file in `src/` with a corresponding npm script in `package.json`. Run scripts via `pnpm --filter @workspace/scripts run <script>`. Scripts can import any workspace package (e.g., `@workspace/db`) by adding it as a dependency in `scripts/package.json`.
+- `emitDeclarationOnly` — only .d.ts files via typecheck; actual JS by esbuild/vite
+- Run codegen: `pnpm --filter @workspace/api-spec run codegen`
+- Push DB schema: `pnpm --filter @workspace/db run push`

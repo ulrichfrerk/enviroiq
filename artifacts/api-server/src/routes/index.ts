@@ -1,8 +1,45 @@
-import { Router, type IRouter } from "express";
-import healthRouter from "./health";
+import { Router } from "express";
+import healthRouter from "./health.js";
+import authRouter from "./auth.js";
+import organisationsRouter from "./organisations.js";
+import usersRouter from "./users.js";
+import fleetRouter, { webhookRouter as fleetWebhookRouter } from "./fleet.js";
+import energyRouter, { energyEmailWebhookRouter } from "./energy.js";
+import emissionsRouter from "./emissions.js";
+import goalsRouter from "./goals.js";
+import reportsRouter from "./reports.js";
+import widgetRouter, { widgetPublicRouter } from "./widget.js";
+import auditRouter, { globalAuditRouter } from "./audit.js";
+import adminRouter from "./admin.js";
 
-const router: IRouter = Router();
+const router = Router();
 
-router.use(healthRouter);
+// Health
+router.use("/", healthRouter);
+
+// Auth
+router.use("/auth", authRouter);
+
+// Organisations + nested routes
+router.use("/organisations", organisationsRouter);
+router.use("/organisations/:orgId/users", usersRouter);
+router.use("/organisations/:orgId/fleet", fleetRouter);
+router.use("/organisations/:orgId/energy", energyRouter);
+router.use("/organisations/:orgId/emissions", emissionsRouter);
+router.use("/organisations/:orgId/goals", goalsRouter);
+router.use("/organisations/:orgId/reports", reportsRouter);
+router.use("/organisations/:orgId/widget", widgetRouter);
+router.use("/organisations/:orgId/audit-logs", auditRouter);
+
+// Webhooks (no auth - use API keys/tokens)
+router.use("/webhooks/fleet", fleetWebhookRouter);
+router.use("/webhooks/energy", energyEmailWebhookRouter);
+
+// Public widget data
+router.use("/widget", widgetPublicRouter);
+
+// Admin
+router.use("/admin", adminRouter);
+router.use("/admin/audit-logs", globalAuditRouter);
 
 export default router;

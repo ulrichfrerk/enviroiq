@@ -1,0 +1,250 @@
+import { Router } from "express";
+import { db, organisationsTable, usersTable, vehiclesTable, widgetConfigsTable } from "@workspace/db";
+import { eq, count, sql } from "drizzle-orm";
+import { v4 as uuidv4 } from "uuid";
+import { requireAuth, requireRole, requireOrgAccess } from "../lib/auth.js";
+import { logAudit } from "../lib/audit.js";
+import { calcSustainabilityScore } from "../lib/emissions.js";
+
+const router = Router();
+
+function generateSlug(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+function generateWidgetKey(): string {
+  return `wk_${uuidv4().replace(/-/g, "").substring(0, 24)}`;
+}
+
+function generateInboundEmail(slug: string): string {
+  const domain = process.env.INBOUND_EMAIL_DOMAIN || "bills.enviroiq.app";
+  return `${slug}-${uuidv4().substring(0, 8)}@${domain}`;
+}
+
+// GET /organisations
+router.get("/", requireRole("super_admin"), async (req, res) => {
+  try {
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 20;
+    const offset = (page - 1) * limit;
+
+    const [items, [{ total }]] = await Promise.all([
+      db.select().from(organisationsTable).limit(limit).offset(offset),
+      db.select({ total: count() }).from(organisationsTable),
+    ]);
+
+    const userCounts = await db
+      .select({ orgId: usersTable.organisationId, cnt: count() })
+      .from(usersTable)
+      .groupBy(usersTable.organisationId);
+    const vehicleCounts = await db
+      .select({ orgId: vehiclesTable.organisationId, cnt: count() })
+      .from(vehiclesTable)
+      .groupBy(vehiclesTable.organisationId);
+
+    const ucMap = Object.fromEntries(userCounts.map((r) => [r.orgId, r.cnt]));
+    const vcMap = Object.fromEntries(vehicleCounts.map((r) => [r.orgId, r.cnt]));
+
+    res.json({
+      items: items.map((o) => ({ ...o, userCount: ucMap[o.id] || 0, vehicleCount: vcMap[o.id] || 0 })),
+      total,
+      page,
+      limit,
+    });
+  } catch (err) {
+    req.log.error({ err }, "List organisations failed");
+    res.status(500).json({ error: "Internal Server Error", message: "Failed to list organisations" });
+  }
+});
+
+// POST /organisations
+router.post("/", requireRole("super_admin"), async (req, res) => {
+  try {
+    const { name, industry, country, adminEmail, adminName } = req.body;
+    if (!name || !adminEmail || !adminName) {
+      res.status(400).json({ error: "Bad Request", message: "name, adminEmail, adminName required" });
+      return;
+    }
+
+    const slug = generateSlug(name);
+    const orgId = uuidv4();
+    const widgetKey = generateWidgetKey();
+    const inboundEmail = generateInboundEmail(slug);
+
+    const [org] = await db.insert(organisationsTable).values({
+      id: orgId,
+      name,
+      slug,
+      industry,
+      country,
+      widgetKey,
+      inboundEmailAddress: inboundEmail,
+    }).returning();
+
+    // Create admin user
+    let adminUser = await db.query.usersTable.findFirst({ where: eq(usersTable.email, adminEmail) });
+    if (!adminUser) {
+      const [newUser] = await db.insert(usersTable).values({
+        id: uuidv4(),
+        email: adminEmail,
+        name: adminName,
+        role: "org_admin",
+        organisationId: orgId,
+      }).returning();
+      adminUser = newUser;
+    } else {
+      await db.update(usersTable).set({ organisationId: orgId, role: "org_admin" }).where(eq(usersTable.id, adminUser.id));
+    }
+
+    // Create default widget config
+    await db.insert(widgetConfigsTable).values({ organisationId: orgId }).onConflictDoNothing();
+
+    await logAudit({ req, action: "organisation.create", resourceType: "organisation", resourceId: orgId, details: { name } });
+
+    res.status(201).json({ ...org, userCount: 1, vehicleCount: 0 });
+  } catch (err) {
+    req.log.error({ err }, "Create organisation failed");
+    res.status(500).json({ error: "Internal Server Error", message: "Failed to create organisation" });
+  }
+});
+
+// GET /organisations/:orgId
+router.get("/:orgId", requireAuth, requireOrgAccess, async (req, res) => {
+  try {
+    const org = await db.query.organisationsTable.findFirst({
+      where: eq(organisationsTable.id, req.params.orgId),
+    });
+    if (!org) {
+      res.status(404).json({ error: "Not Found", message: "Organisation not found" });
+      return;
+    }
+    const [{ uc }] = await db.select({ uc: count() }).from(usersTable).where(eq(usersTable.organisationId, org.id));
+    const [{ vc }] = await db.select({ vc: count() }).from(vehiclesTable).where(eq(vehiclesTable.organisationId, org.id));
+    res.json({ ...org, userCount: uc, vehicleCount: vc });
+  } catch (err) {
+    req.log.error({ err }, "Get organisation failed");
+    res.status(500).json({ error: "Internal Server Error", message: "Failed to get organisation" });
+  }
+});
+
+// PATCH /organisations/:orgId
+router.patch("/:orgId", requireAuth, requireOrgAccess, async (req, res) => {
+  try {
+    const { name, industry, country, logoUrl, isActive } = req.body;
+    const [org] = await db
+      .update(organisationsTable)
+      .set({ name, industry, country, logoUrl, isActive, updatedAt: new Date() })
+      .where(eq(organisationsTable.id, req.params.orgId))
+      .returning();
+    if (!org) {
+      res.status(404).json({ error: "Not Found", message: "Organisation not found" });
+      return;
+    }
+    await logAudit({ req, action: "organisation.update", resourceType: "organisation", resourceId: req.params.orgId });
+    res.json(org);
+  } catch (err) {
+    req.log.error({ err }, "Update organisation failed");
+    res.status(500).json({ error: "Internal Server Error", message: "Failed to update organisation" });
+  }
+});
+
+// DELETE /organisations/:orgId
+router.delete("/:orgId", requireRole("super_admin"), async (req, res) => {
+  try {
+    await db.delete(organisationsTable).where(eq(organisationsTable.id, req.params.orgId));
+    await logAudit({ req, action: "organisation.delete", resourceType: "organisation", resourceId: req.params.orgId });
+    res.json({ message: "Organisation deleted" });
+  } catch (err) {
+    req.log.error({ err }, "Delete organisation failed");
+    res.status(500).json({ error: "Internal Server Error", message: "Failed to delete organisation" });
+  }
+});
+
+// GET /organisations/:orgId/summary
+router.get("/:orgId/summary", requireAuth, requireOrgAccess, async (req, res) => {
+  try {
+    const { orgId } = req.params;
+    const period = (req.query.period as string) || "month";
+
+    const now = new Date();
+    let fromDate = new Date();
+    switch (period) {
+      case "day": fromDate.setDate(now.getDate() - 1); break;
+      case "week": fromDate.setDate(now.getDate() - 7); break;
+      case "month": fromDate.setMonth(now.getMonth() - 1); break;
+      case "quarter": fromDate.setMonth(now.getMonth() - 3); break;
+      case "year": fromDate.setFullYear(now.getFullYear() - 1); break;
+    }
+
+    // Get fleet emission totals
+    const fleetResult = await db.execute(sql`
+      SELECT COALESCE(SUM(co2e_kg), 0) as total_co2e, COALESCE(SUM(distance_km), 0) as total_distance
+      FROM fleet_events
+      WHERE organisation_id = ${orgId}
+        AND recorded_at >= ${fromDate}
+        AND recorded_at <= ${now}
+    `);
+
+    // Get energy emission totals
+    const energyResult = await db.execute(sql`
+      SELECT COALESCE(SUM(co2e_kg), 0) as total_co2e, COALESCE(SUM(usage_kwh), 0) as total_kwh
+      FROM energy_readings
+      WHERE organisation_id = ${orgId}
+        AND period_start >= ${fromDate}
+        AND period_end <= ${now}
+    `);
+
+    // Get active vehicles
+    const [{ vc }] = await db.select({ vc: count() }).from(vehiclesTable)
+      .where(eq(vehiclesTable.organisationId, orgId));
+
+    // Get goals summary
+    const goalsResult = await db.execute(sql`
+      SELECT
+        COUNT(*) FILTER (WHERE status = 'on_track') as on_track,
+        COUNT(*) FILTER (WHERE status = 'behind' OR status = 'at_risk') as behind,
+        COUNT(*) as total
+      FROM goals
+      WHERE organisation_id = ${orgId}
+    `);
+
+    const fr = (fleetResult as any).rows?.[0] || fleetResult[0] || {};
+    const er = (energyResult as any).rows?.[0] || energyResult[0] || {};
+    const gr = (goalsResult as any).rows?.[0] || goalsResult[0] || {};
+
+    const fleetCo2e = parseFloat(fr.total_co2e) || 0;
+    const energyCo2e = parseFloat(er.total_co2e) || 0;
+    const fleetDistance = parseFloat(fr.total_distance) || 0;
+    const energyKwh = parseFloat(er.total_kwh) || 0;
+    const goalsOnTrack = parseInt(gr.on_track) || 0;
+    const totalGoals = parseInt(gr.total) || 0;
+
+    const score = calcSustainabilityScore({
+      totalCo2eKg: fleetCo2e + energyCo2e,
+      fleetDistanceKm: fleetDistance,
+      goalsOnTrack,
+      totalGoals,
+    });
+
+    res.json({
+      organisationId: orgId,
+      period,
+      totalCo2eKg: fleetCo2e + energyCo2e,
+      fleetCo2eKg: fleetCo2e,
+      energyCo2eKg: energyCo2e,
+      totalEnergyKwh: energyKwh,
+      fleetDistanceKm: fleetDistance,
+      activeVehicles: parseInt(String(vc)) || 0,
+      sustainabilityScore: score,
+      goalsOnTrack,
+      goalsBehind: parseInt(gr.behind) || 0,
+      periodOverPeriodChange: 0,
+      lastUpdated: now.toISOString(),
+    });
+  } catch (err) {
+    req.log.error({ err }, "Get summary failed");
+    res.status(500).json({ error: "Internal Server Error", message: "Failed to get summary" });
+  }
+});
+
+export default router;
