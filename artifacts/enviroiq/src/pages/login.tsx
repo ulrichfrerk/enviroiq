@@ -29,8 +29,9 @@ export default function Login() {
     try {
       await reqMagicLink.mutateAsync({ data: { email } });
       setMode("magic-sent");
-    } catch (err: any) {
-      toast({ variant: "destructive", title: "Error", description: err.message || "Failed to send magic link." });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to send magic link.";
+      toast({ variant: "destructive", title: "Error", description: message });
     }
   };
 
@@ -40,7 +41,6 @@ export default function Login() {
       <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-primary/20 blur-[120px] rounded-full pointer-events-none" />
       <div className="absolute bottom-[-20%] right-[-10%] w-[40%] h-[40%] bg-emerald-500/10 blur-[100px] rounded-full pointer-events-none" />
 
-      {/* user uploaded image for background if needed, but CSS gradient meshes look more modern for this app type */}
       <img 
         src={`${import.meta.env.BASE_URL}images/auth-bg.png`} 
         alt="Background" 

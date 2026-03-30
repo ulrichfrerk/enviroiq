@@ -118,7 +118,16 @@ router.post("/passkey/register/complete", async (req, res) => {
     });
 
     if (!challengeRecord || challengeRecord.expiresAt < new Date() || challengeRecord.type !== "registration") {
+      await logAudit({ req, action: "passkey.register", outcome: "failure", userEmail: email });
       res.status(400).json({ error: "Bad Request", message: "Challenge expired or not found" });
+      return;
+    }
+
+    // Verify the email on the challenge matches the email in the request to prevent
+    // credential hijacking (attaching a passkey to a different account)
+    if (challengeRecord.email !== email) {
+      await logAudit({ req, action: "passkey.register", outcome: "failure", userEmail: email });
+      res.status(400).json({ error: "Bad Request", message: "Email mismatch for this registration challenge" });
       return;
     }
 

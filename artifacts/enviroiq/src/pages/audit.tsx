@@ -52,7 +52,7 @@ export default function Audit() {
               </tr>
             </thead>
             <tbody className="divide-y divide-border/50">
-              {logs?.items.map((log: any) => (
+              {logs?.items.map((log) => (
                 <tr key={log.id} className="hover:bg-secondary/20 transition-colors">
                   <td className="px-6 py-4 whitespace-nowrap font-mono text-xs text-muted-foreground">
                     {format(new Date(log.createdAt), "MMM d, HH:mm:ss")}

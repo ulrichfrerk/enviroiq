@@ -1,3 +1,4 @@
+import React from "react";
 import { Switch, Route, Router as WouterRouter, Redirect } from "wouter";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
@@ -21,7 +22,7 @@ import { AppLayout } from "@/components/layout/app-layout";
 import { useAuth } from "@/hooks/use-auth";
 import { Loader2 } from "lucide-react";
 
-const ProtectedRoute = ({ component: Component }: { component: any }) => {
+const ProtectedRoute = ({ component: Component }: { component: React.ComponentType }) => {
   const { session, isLoading } = useAuth();
 
   if (isLoading) {

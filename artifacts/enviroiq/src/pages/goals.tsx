@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
-import { useListGoals, useCreateGoal } from "@workspace/api-client-react";
+import { useListGoals, useCreateGoal, CreateGoalRequestCategory, CreateGoalRequestTargetType } from "@workspace/api-client-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Target, Plus, Loader2, Calendar, TrendingDown } from "lucide-react";
@@ -30,7 +30,13 @@ export default function Goals() {
     }
   });
 
-  const onSubmit = async (data: any) => {
+  const onSubmit = async (data: {
+    title: string;
+    category: CreateGoalRequestCategory;
+    targetType: CreateGoalRequestTargetType;
+    targetValue: number;
+    targetUnit: string;
+  }) => {
     try {
       await createGoal.mutateAsync({ 
         orgId: orgId!, 
@@ -42,8 +48,9 @@ export default function Goals() {
       toast({ title: "Goal created" });
       setIsOpen(false);
       form.reset();
-    } catch (e: any) {
-      toast({ variant: "destructive", title: "Error", description: e.message });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Failed to create goal";
+      toast({ variant: "destructive", title: "Error", description: message });
     }
   };
 
@@ -105,9 +112,8 @@ export default function Goals() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {goals?.items.map((goal: any) => {
-          // Mock progress for UI visual fidelity since API might not return it directly in the list view depending on the backend implementation
-          const mockProgress = Math.floor(Math.random() * 80) + 10; 
+        {goals?.items.map((goal) => {
+          const mockProgress = Math.floor(Math.random() * 80) + 10;
           
           return (
             <Card key={goal.id} className="p-6 bg-card hover:border-primary/50 transition-colors flex flex-col h-full shadow-lg shadow-black/5">

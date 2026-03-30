@@ -1,3 +1,4 @@
+import React from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { useGetOrganisationSummary, useGetEmissionTotals, useListFleetEvents } from "@workspace/api-client-react";
 import { Card } from "@/components/ui/card";
@@ -27,13 +28,19 @@ export default function Dashboard() {
     { name: 'Other', value: Math.max(0, summary.totalCo2eKg - summary.fleetCo2eKg - summary.energyCo2eKg) }
   ].filter(d => d.value > 0);
 
-  const StatCard = ({ title, value, icon: Icon, trend, trendGood }: any) => (
+  const StatCard = ({ title, value, icon: Icon, trend, trendGood }: {
+    title: string;
+    value: string;
+    icon: React.ComponentType<{ className?: string }>;
+    trend?: number | null;
+    trendGood?: boolean;
+  }) => (
     <Card className="p-6 bg-card border-border/50 shadow-lg shadow-black/5 hover:border-border transition-all">
       <div className="flex justify-between items-start mb-4">
         <div className="p-3 bg-secondary/50 rounded-xl">
           <Icon className="w-5 h-5 text-primary" />
         </div>
-        {trend !== undefined && (
+        {trend != null && (
           <div className={`flex items-center text-sm font-medium ${trendGood ? 'text-emerald-400' : 'text-destructive'}`}>
             {trend > 0 ? <ArrowUpRight className="w-4 h-4 mr-1" /> : <ArrowDownRight className="w-4 h-4 mr-1" />}
             {Math.abs(trend)}%
