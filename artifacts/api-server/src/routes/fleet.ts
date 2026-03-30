@@ -225,12 +225,14 @@ webhookRouter.post("/navman", async (req, res) => {
     const { deviceId, eventType, latitude, longitude, speed, odometer, timestamp, apiKey } = req.body;
     const org = await validateWebhookSecret(apiKey);
     if (!org) {
+      await logAudit({ req, action: "webhook.fleet.navman", outcome: "failure", details: { reason: "invalid_api_key", deviceId } });
       res.status(401).json({ error: "Unauthorized", message: "Invalid or missing API key" });
       return;
     }
 
     const vehicle = await findVehicleByDeviceId(deviceId, org.id);
     if (!vehicle) {
+      await logAudit({ req, action: "webhook.fleet.navman", outcome: "failure", details: { reason: "device_not_registered", deviceId }, organisationId: org.id });
       res.json({ message: "Device not registered, event ignored" });
       return;
     }
@@ -249,6 +251,7 @@ webhookRouter.post("/navman", async (req, res) => {
       emissionFactor: vehicle.emissionFactorKgPerKm || undefined,
     });
 
+    await logAudit({ req, action: "webhook.fleet.navman", outcome: "success", resourceType: "fleet_event", details: { deviceId, vehicleId: vehicle.id, provider: "navman" }, organisationId: org.id });
     res.json({ message: "Event recorded" });
   } catch (err) {
     res.status(500).json({ error: "Internal Server Error", message: "Failed to process event" });
@@ -261,12 +264,14 @@ webhookRouter.post("/blackhawk", async (req, res) => {
     const { unit_id, event, lat, lng, spd, dist, ts, token } = req.body;
     const org = await validateWebhookSecret(token);
     if (!org) {
+      await logAudit({ req, action: "webhook.fleet.blackhawk", outcome: "failure", details: { reason: "invalid_token", deviceId: unit_id } });
       res.status(401).json({ error: "Unauthorized", message: "Invalid or missing token" });
       return;
     }
 
     const vehicle = await findVehicleByDeviceId(unit_id, org.id);
     if (!vehicle) {
+      await logAudit({ req, action: "webhook.fleet.blackhawk", outcome: "failure", details: { reason: "device_not_registered", deviceId: unit_id }, organisationId: org.id });
       res.json({ message: "Device not registered, event ignored" });
       return;
     }
@@ -286,6 +291,7 @@ webhookRouter.post("/blackhawk", async (req, res) => {
       emissionFactor: vehicle.emissionFactorKgPerKm || undefined,
     });
 
+    await logAudit({ req, action: "webhook.fleet.blackhawk", outcome: "success", resourceType: "fleet_event", details: { deviceId: unit_id, vehicleId: vehicle.id, provider: "blackhawk" }, organisationId: org.id });
     res.json({ message: "Event recorded" });
   } catch (err) {
     res.status(500).json({ error: "Internal Server Error", message: "Failed to process event" });
@@ -298,12 +304,14 @@ webhookRouter.post("/generic", async (req, res) => {
     const { deviceId, eventType, latitude, longitude, speedKmh, distanceKm, fuelLitres, timestamp, apiKey } = req.body;
     const org = await validateWebhookSecret(apiKey);
     if (!org) {
+      await logAudit({ req, action: "webhook.fleet.generic", outcome: "failure", details: { reason: "invalid_api_key", deviceId } });
       res.status(401).json({ error: "Unauthorized", message: "Invalid or missing API key" });
       return;
     }
 
     const vehicle = await findVehicleByDeviceId(deviceId, org.id);
     if (!vehicle) {
+      await logAudit({ req, action: "webhook.fleet.generic", outcome: "failure", details: { reason: "device_not_registered", deviceId }, organisationId: org.id });
       res.json({ message: "Device not registered, event ignored" });
       return;
     }
@@ -324,6 +332,7 @@ webhookRouter.post("/generic", async (req, res) => {
       emissionFactor: vehicle.emissionFactorKgPerKm || undefined,
     });
 
+    await logAudit({ req, action: "webhook.fleet.generic", outcome: "success", resourceType: "fleet_event", details: { deviceId, vehicleId: vehicle.id, provider: "generic" }, organisationId: org.id });
     res.json({ message: "Event recorded" });
   } catch (err) {
     res.status(500).json({ error: "Internal Server Error", message: "Failed to process event" });

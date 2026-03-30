@@ -164,8 +164,6 @@ export const energyEmailWebhookRouter = Router();
 
 energyEmailWebhookRouter.post("/inbound-email", async (req, res) => {
   try {
-    // Require a shared secret so only the configured email provider can post here.
-    // Set INBOUND_EMAIL_WEBHOOK_SECRET env var to the value expected in the Authorization header.
     const expectedSecret = process.env.INBOUND_EMAIL_WEBHOOK_SECRET;
     if (expectedSecret) {
       const authHeader = req.headers["authorization"] || req.headers["x-webhook-secret"];
@@ -173,34 +171,35 @@ energyEmailWebhookRouter.post("/inbound-email", async (req, res) => {
         ? authHeader.replace(/^Bearer\s+/i, "")
         : "";
       if (providedSecret !== expectedSecret) {
+        await logAudit({ req, action: "webhook.energy.inbound_email", outcome: "failure", details: { reason: "invalid_secret" } });
         res.status(401).json({ error: "Unauthorized", message: "Invalid webhook secret" });
         return;
       }
     }
 
-    const { to, from, subject, text, html, attachments } = req.body;
+    const { to, from, subject, text, attachments } = req.body;
     if (!to) {
+      await logAudit({ req, action: "webhook.energy.inbound_email", outcome: "failure", details: { reason: "missing_to_field" } });
       res.status(400).json({ error: "Bad Request", message: "Missing 'to' field" });
       return;
     }
 
-    // Find org by inbound email address
-    const [, localPart] = to.split("@");
     const org = await db.query.organisationsTable.findFirst({
       where: eq(organisationsTable.inboundEmailAddress, to),
     });
 
     if (!org) {
+      await logAudit({ req, action: "webhook.energy.inbound_email", outcome: "failure", details: { reason: "org_not_found", to } });
       res.json({ message: "Email address not matched to any organisation" });
       return;
     }
 
-    // Process attachments (PDFs)
     interface EmailAttachment { contentType?: string; filename?: string; content?: string; }
     const pdfAttachments = ((attachments || []) as EmailAttachment[]).filter((a) =>
       a.contentType?.includes("pdf") || a.filename?.toLowerCase().endsWith(".pdf"),
     );
 
+    const insertedIds: string[] = [];
     for (const attachment of pdfAttachments) {
       const content = attachment.content || "";
       const kwhMatch = content.match(/(\d+(?:\.\d+)?)\s*(?:kWh|KWH)/i);
@@ -210,8 +209,9 @@ energyEmailWebhookRouter.post("/inbound-email", async (req, res) => {
       const periodEnd = new Date(now.getFullYear(), now.getMonth(), 0);
       const periodStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
 
+      const readingId = uuidv4();
       await db.insert(energyReadingsTable).values({
-        id: uuidv4(),
+        id: readingId,
         organisationId: org.id,
         utilityType: "electricity",
         periodStart,
@@ -222,8 +222,17 @@ energyEmailWebhookRouter.post("/inbound-email", async (req, res) => {
         originalFileName: attachment.filename,
         rawText: `From: ${from}\nSubject: ${subject}\n${text || ""}`.substring(0, 1000),
       });
+      insertedIds.push(readingId);
     }
 
+    await logAudit({
+      req,
+      action: "webhook.energy.inbound_email",
+      outcome: "success",
+      resourceType: "energy_reading",
+      organisationId: org.id,
+      details: { from, subject, attachmentsProcessed: pdfAttachments.length, readingIds: insertedIds },
+    });
     res.json({ message: "Email processed" });
   } catch (err) {
     res.status(500).json({ error: "Internal Server Error", message: "Failed to process email" });
