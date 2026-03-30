@@ -1,5 +1,5 @@
 import { useAuth } from "@/hooks/use-auth";
-import { useGetAdminStats, useListOrganisations, useCreateOrganisation } from "@workspace/api-client-react";
+import { useGetAdminStats, useListOrganisations, useCreateOrganisation, Organisation } from "@workspace/api-client-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,13 +34,14 @@ export default function Admin() {
 
   const handleCreate = async () => {
     try {
-      await createOrg.mutateAsync({ data: form as any });
+      await createOrg.mutateAsync({ data: form });
       toast({ title: "Organisation created" });
       setIsOpen(false);
       setForm({ name: "", industry: "", country: "NZ", adminEmail: "", adminName: "" });
       refetch();
-    } catch (e: any) {
-      toast({ variant: "destructive", title: "Error", description: e.message });
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Could not create organisation";
+      toast({ variant: "destructive", title: "Error", description: message });
     }
   };
 
@@ -168,7 +169,7 @@ export default function Admin() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/50">
-                {orgs?.items.map((org: any) => (
+                {orgs?.items.map((org: Organisation) => (
                   <tr key={org.id} className="hover:bg-secondary/20 transition-colors">
                     <td className="px-6 py-4">
                       <div>

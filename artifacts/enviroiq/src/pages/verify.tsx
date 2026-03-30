@@ -32,11 +32,12 @@ export default function Verify() {
           setStatus("success");
           setTimeout(() => setLocation("/dashboard"), 1500);
         },
-        onError: (err: any) => {
+        onError: (err: unknown) => {
           setStatus("error");
+          const apiErr = err as { response?: { data?: { message?: string } }; message?: string };
           setErrorMessage(
-            err?.response?.data?.message ||
-              err?.message ||
+            apiErr?.response?.data?.message ||
+              apiErr?.message ||
               "This link is invalid or has expired. Please request a new one.",
           );
         },

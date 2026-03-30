@@ -1,12 +1,14 @@
 import { useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
-import { useListReports, useGenerateReport } from "@workspace/api-client-react";
+import { useListReports, useGenerateReport, ReportReportType } from "@workspace/api-client-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { FileText, Download, Loader2, Plus, Calendar as CalIcon } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { format, subMonths } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
+
+type ReportTypeKey = keyof typeof ReportReportType;
 
 export default function Reports() {
   const { session } = useAuth();
@@ -17,7 +19,7 @@ export default function Reports() {
   const { data: reports, isLoading, refetch } = useListReports(orgId!, { query: { enabled: !!orgId } });
   const generate = useGenerateReport();
 
-  const [reportType, setReportType] = useState("board_summary");
+  const [reportType, setReportType] = useState<ReportTypeKey>("board_summary");
   const [title, setTitle] = useState("Q1 ESG Board Summary");
 
   const handleGenerate = async () => {
@@ -26,16 +28,17 @@ export default function Reports() {
         orgId: orgId!,
         data: {
           title,
-          reportType: reportType as any,
-          periodStart: subMonths(new Date(), 3).toISOString(), // Mock dates for demo
+          reportType: ReportReportType[reportType],
+          periodStart: subMonths(new Date(), 3).toISOString(),
           periodEnd: new Date().toISOString(),
         }
       });
       toast({ title: "Report generation started" });
       setIsOpen(false);
       refetch();
-    } catch (e: any) {
-      toast({ variant: "destructive", title: "Error", description: e.message });
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Report generation failed";
+      toast({ variant: "destructive", title: "Error", description: message });
     }
   };
 
@@ -75,7 +78,7 @@ export default function Reports() {
                 <label className="text-sm font-medium mb-1 block">Report Type</label>
                 <select 
                   value={reportType} 
-                  onChange={e => setReportType(e.target.value)}
+                  onChange={e => setReportType(e.target.value as ReportTypeKey)}
                   className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                 >
                   <option value="board_summary">Board Summary (1-Pager)</option>

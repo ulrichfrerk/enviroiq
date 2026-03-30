@@ -164,6 +164,20 @@ export const energyEmailWebhookRouter = Router();
 
 energyEmailWebhookRouter.post("/inbound-email", async (req, res) => {
   try {
+    // Require a shared secret so only the configured email provider can post here.
+    // Set INBOUND_EMAIL_WEBHOOK_SECRET env var to the value expected in the Authorization header.
+    const expectedSecret = process.env.INBOUND_EMAIL_WEBHOOK_SECRET;
+    if (expectedSecret) {
+      const authHeader = req.headers["authorization"] || req.headers["x-webhook-secret"];
+      const providedSecret = typeof authHeader === "string"
+        ? authHeader.replace(/^Bearer\s+/i, "")
+        : "";
+      if (providedSecret !== expectedSecret) {
+        res.status(401).json({ error: "Unauthorized", message: "Invalid webhook secret" });
+        return;
+      }
+    }
+
     const { to, from, subject, text, html, attachments } = req.body;
     if (!to) {
       res.status(400).json({ error: "Bad Request", message: "Missing 'to' field" });

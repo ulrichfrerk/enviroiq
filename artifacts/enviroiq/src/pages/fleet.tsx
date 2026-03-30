@@ -43,12 +43,20 @@ export default function Fleet() {
 
   const onSubmit = async (data: z.infer<typeof vehicleSchema>) => {
     try {
-      await createVehicle.mutateAsync({ orgId: orgId!, data: data as any });
+      await createVehicle.mutateAsync({
+        orgId: orgId!,
+        data: {
+          ...data,
+          fuelType: data.fuelType as CreateVehicleRequestFuelType,
+          gpsProvider: data.gpsProvider as CreateVehicleRequestGpsProvider,
+        },
+      });
       toast({ title: "Vehicle added" });
       setIsDialogOpen(false);
       form.reset();
-    } catch (e: any) {
-      toast({ variant: "destructive", title: "Error", description: e.message });
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Could not add vehicle";
+      toast({ variant: "destructive", title: "Error", description: message });
     }
   };
 
@@ -57,8 +65,9 @@ export default function Fleet() {
     try {
       await deleteVehicle.mutateAsync({ orgId: orgId!, vehicleId: id });
       toast({ title: "Vehicle removed" });
-    } catch (e: any) {
-      toast({ variant: "destructive", title: "Error", description: e.message });
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Could not remove vehicle";
+      toast({ variant: "destructive", title: "Error", description: message });
     }
   };
 

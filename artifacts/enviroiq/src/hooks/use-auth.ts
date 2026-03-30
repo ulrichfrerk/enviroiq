@@ -12,6 +12,26 @@ import {
 import { bufferDecode, bufferEncode } from "@/lib/webauthn";
 import { useLocation } from "wouter";
 
+type WebAuthnCredentialResponse = {
+  id: string;
+  rawId: string;
+  type: string;
+  response: {
+    attestationObject?: string;
+    clientDataJSON: string;
+    authenticatorData?: string;
+    signature?: string;
+    userHandle?: string;
+  };
+  [key: string]: unknown;
+}
+
+interface ParsedPublicKeyOptions {
+  challenge: ArrayBuffer;
+  allowCredentials?: Array<{ id: ArrayBuffer; type: string; transports?: string[] }>;
+  [key: string]: unknown;
+}
+
 export function useAuth() {
   const { data: session, isLoading } = useGetSession();
   const queryClient = useQueryClient();
@@ -30,45 +50,47 @@ export function useAuth() {
       const options = await beginReg.mutateAsync({ data: { email, name } });
 
       // 2. Format options for browser
-      const publicKey = {
-        ...options,
+      const publicKey: PublicKeyCredentialCreationOptions = {
+        ...(options as object),
         challenge: bufferDecode(options.challenge),
         user: {
-          ...options.user,
+          ...(options.user as object),
           id: bufferDecode(options.user.id),
         },
         attestation: (options.attestation ?? "none") as AttestationConveyancePreference,
-      } as unknown as PublicKeyCredentialCreationOptions;
+      } as PublicKeyCredentialCreationOptions;
 
       // 3. Create credential
       const credential = await navigator.credentials.create({ publicKey }) as PublicKeyCredential;
 
       // 4. Format response
-      const credentialResponse = {
+      const attResp = credential.response as AuthenticatorAttestationResponse;
+      const credentialResponse: WebAuthnCredentialResponse = {
         id: credential.id,
         rawId: bufferEncode(credential.rawId),
         type: credential.type,
         response: {
-          attestationObject: bufferEncode((credential.response as AuthenticatorAttestationResponse).attestationObject),
-          clientDataJSON: bufferEncode(credential.response.clientDataJSON),
+          attestationObject: bufferEncode(attResp.attestationObject),
+          clientDataJSON: bufferEncode(attResp.clientDataJSON),
         },
       };
 
       // 5. Complete registration
-      await completeReg.mutateAsync({ 
-        data: { 
-          credential: credentialResponse as any, 
+      await completeReg.mutateAsync({
+        data: {
+          credential: credentialResponse,
           email,
           name
-        } 
+        }
       });
 
       queryClient.invalidateQueries({ queryKey: getGetSessionQueryKey() });
       toast({ title: "Registration successful", description: "Your passkey has been set up." });
       setLocation("/dashboard");
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(err);
-      toast({ variant: "destructive", title: "Registration failed", description: err.message || "Could not set up passkey." });
+      const message = err instanceof Error ? err.message : "Could not set up passkey.";
+      toast({ variant: "destructive", title: "Registration failed", description: message });
     }
   };
 
@@ -78,45 +100,45 @@ export function useAuth() {
       const options = await beginAuth.mutateAsync({ data: { email } });
 
       // 2. Format options
-      const publicKey: any = {
-        ...options,
+      const parsedOptions: ParsedPublicKeyOptions = {
+        ...(options as object),
         challenge: bufferDecode(options.challenge),
       };
 
       if (options.allowCredentials) {
-        publicKey.allowCredentials = options.allowCredentials.map((c: any) => ({
+        parsedOptions.allowCredentials = (options.allowCredentials as Array<{ id: string; type: string; transports?: string[] }>).map((c) => ({
           ...c,
           id: bufferDecode(c.id),
         }));
       }
 
       // 3. Get credential
-      const credential = await navigator.credentials.get({ publicKey }) as PublicKeyCredential;
+      const credential = await navigator.credentials.get({ publicKey: parsedOptions as PublicKeyCredentialRequestOptions }) as PublicKeyCredential;
 
       // 4. Format response
-      const credentialResponse = {
+      const assertResp = credential.response as AuthenticatorAssertionResponse;
+      const credentialResponse: WebAuthnCredentialResponse = {
         id: credential.id,
         rawId: bufferEncode(credential.rawId),
         type: credential.type,
         response: {
-          authenticatorData: bufferEncode((credential.response as AuthenticatorAssertionResponse).authenticatorData),
-          clientDataJSON: bufferEncode(credential.response.clientDataJSON),
-          signature: bufferEncode((credential.response as AuthenticatorAssertionResponse).signature),
-          userHandle: (credential.response as AuthenticatorAssertionResponse).userHandle 
-            ? bufferEncode((credential.response as AuthenticatorAssertionResponse).userHandle!) 
-            : undefined,
+          authenticatorData: bufferEncode(assertResp.authenticatorData),
+          clientDataJSON: bufferEncode(assertResp.clientDataJSON),
+          signature: bufferEncode(assertResp.signature),
+          userHandle: assertResp.userHandle ? bufferEncode(assertResp.userHandle) : undefined,
         },
       };
 
       // 5. Complete auth
-      await completeAuth.mutateAsync({ data: { credential: credentialResponse as any } });
+      await completeAuth.mutateAsync({ data: { credential: credentialResponse } });
 
       queryClient.invalidateQueries({ queryKey: getGetSessionQueryKey() });
       toast({ title: "Welcome back", description: "Successfully logged in." });
       setLocation("/dashboard");
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(err);
-      toast({ variant: "destructive", title: "Login failed", description: err.message || "Could not authenticate passkey." });
+      const message = err instanceof Error ? err.message : "Could not authenticate passkey.";
+      toast({ variant: "destructive", title: "Login failed", description: message });
     }
   };
 

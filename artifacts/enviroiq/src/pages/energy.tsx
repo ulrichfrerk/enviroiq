@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
-import { useListEnergyReadings, useUploadEnergyBill, useGetEnergyEmailAddress } from "@workspace/api-client-react";
+import { useListEnergyReadings, useUploadEnergyBill, useGetEnergyEmailAddress, UploadEnergyBillBodyUtilityType } from "@workspace/api-client-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Zap, Upload, Mail, FileText, Loader2, Copy, Check } from "lucide-react";
@@ -19,7 +19,8 @@ export default function Energy() {
   const uploadBill = useUploadEnergyBill();
 
   const [isUploadOpen, setIsUploadOpen] = useState(false);
-  const [utilityType, setUtilityType] = useState<"electricity"|"gas"|"water"|"other">("electricity");
+  type UtilityTypeKey = keyof typeof UploadEnergyBillBodyUtilityType;
+  const [utilityType, setUtilityType] = useState<UtilityTypeKey>("electricity");
   const [copied, setCopied] = useState(false);
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
@@ -33,8 +34,9 @@ export default function Energy() {
       });
       toast({ title: "Bill uploaded successfully", description: "Data is being processed." });
       setIsUploadOpen(false);
-    } catch (e: any) {
-      toast({ variant: "destructive", title: "Upload failed", description: e.message });
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Upload failed";
+      toast({ variant: "destructive", title: "Upload failed", description: message });
     }
   }, [orgId, utilityType, uploadBill, toast]);
 
@@ -79,7 +81,7 @@ export default function Energy() {
                 <select 
                   className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                   value={utilityType}
-                  onChange={(e) => setUtilityType(e.target.value as any)}
+                  onChange={(e) => setUtilityType(e.target.value as UtilityTypeKey)}
                 >
                   <option value="electricity">Electricity</option>
                   <option value="gas">Gas</option>

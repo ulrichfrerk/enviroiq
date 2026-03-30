@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
-import { useListUsers, useCreateUser, useDeleteUser } from "@workspace/api-client-react";
+import { useListUsers, useCreateUser, useDeleteUser, CreateUserRequestRole } from "@workspace/api-client-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,16 +21,17 @@ export default function Users() {
 
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
-  const [role, setRole] = useState("org_viewer");
+  const [role, setRole] = useState<keyof typeof CreateUserRequestRole>("org_viewer");
 
   const handleInvite = async () => {
     try {
-      await createUser.mutateAsync({ orgId: orgId!, data: { email, name, role: role as any } });
+      await createUser.mutateAsync({ orgId: orgId!, data: { email, name, role: CreateUserRequestRole[role] } });
       toast({ title: "User invited" });
       setIsOpen(false);
       setEmail(""); setName("");
-    } catch (e: any) {
-      toast({ variant: "destructive", title: "Error", description: e.message });
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Could not invite user";
+      toast({ variant: "destructive", title: "Error", description: message });
     }
   };
 
@@ -39,8 +40,9 @@ export default function Users() {
     try {
       await deleteUser.mutateAsync({ orgId: orgId!, userId });
       toast({ title: "User removed" });
-    } catch (e: any) {
-      toast({ variant: "destructive", title: "Error", description: e.message });
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Could not remove user";
+      toast({ variant: "destructive", title: "Error", description: message });
     }
   };
 
@@ -75,7 +77,7 @@ export default function Users() {
                 <label className="text-sm font-medium mb-1 block">Role</label>
                 <select 
                   value={role} 
-                  onChange={e => setRole(e.target.value)}
+                  onChange={e => setRole(e.target.value as keyof typeof CreateUserRequestRole)}
                   className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                 >
                   <option value="org_viewer">Viewer (Read Only)</option>

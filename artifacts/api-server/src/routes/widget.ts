@@ -195,7 +195,7 @@ widgetPublicRouter.get("/:widgetKey/widget.js", async (req, res) => {
   }
 
   function init() {
-    var targets = document.querySelectorAll('#enviroiq-widget,[data-enviroiq-key="'+key+'"]');
+    var targets = document.querySelectorAll('#enviroiq-widget,[data-enviroiq-key="${widgetKey}"]');
     if (!targets.length) return;
     targets.forEach(function(container) {
       container.innerHTML = '<div style="padding:20px;text-align:center;color:#94a3b8;font-family:system-ui">Loading ESG data\u2026</div>';

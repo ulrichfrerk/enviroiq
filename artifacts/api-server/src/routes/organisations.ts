@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { randomBytes } from "crypto";
 import { db, organisationsTable, usersTable, vehiclesTable, widgetConfigsTable } from "@workspace/db";
 import { eq, count, sql } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
@@ -15,6 +16,10 @@ function generateSlug(name: string): string {
 
 function generateWidgetKey(): string {
   return `wk_${uuidv4().replace(/-/g, "").substring(0, 24)}`;
+}
+
+function generateWebhookSecret(): string {
+  return `whsec_${randomBytes(24).toString("hex")}`;
 }
 
 function generateInboundEmail(slug: string): string {
@@ -70,6 +75,7 @@ router.post("/", requireRole("super_admin"), async (req, res) => {
     const slug = generateSlug(name);
     const orgId = uuidv4();
     const widgetKey = generateWidgetKey();
+    const webhookSecret = generateWebhookSecret();
     const inboundEmail = generateInboundEmail(slug);
 
     const [org] = await db.insert(organisationsTable).values({
@@ -79,6 +85,7 @@ router.post("/", requireRole("super_admin"), async (req, res) => {
       industry,
       country,
       widgetKey,
+      webhookSecret,
       inboundEmailAddress: inboundEmail,
     }).returning();
 
@@ -158,6 +165,49 @@ router.delete("/:orgId", requireRole("super_admin"), async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "Delete organisation failed");
     res.status(500).json({ error: "Internal Server Error", message: "Failed to delete organisation" });
+  }
+});
+
+// GET /organisations/:orgId/webhook-credentials — org_admin can view their own webhook secret
+router.get("/:orgId/webhook-credentials", requireAuth, requireOrgAdmin, async (req, res) => {
+  try {
+    const org = await db.query.organisationsTable.findFirst({
+      where: eq(organisationsTable.id, req.params.orgId as string),
+    });
+    if (!org) {
+      res.status(404).json({ error: "Not Found", message: "Organisation not found" });
+      return;
+    }
+    res.json({
+      webhookSecret: org.webhookSecret,
+      inboundEmailAddress: org.inboundEmailAddress,
+      fleetWebhookUrl: `/api/webhooks/fleet`,
+      energyWebhookUrl: `/api/webhooks/energy`,
+    });
+  } catch (err) {
+    req.log.error({ err }, "Get webhook credentials failed");
+    res.status(500).json({ error: "Internal Server Error", message: "Failed to get webhook credentials" });
+  }
+});
+
+// POST /organisations/:orgId/webhook-credentials/rotate — org_admin can rotate the webhook secret
+router.post("/:orgId/webhook-credentials/rotate", requireAuth, requireOrgAdmin, async (req, res) => {
+  try {
+    const newSecret = generateWebhookSecret();
+    const [org] = await db
+      .update(organisationsTable)
+      .set({ webhookSecret: newSecret, updatedAt: new Date() })
+      .where(eq(organisationsTable.id, req.params.orgId as string))
+      .returning();
+    if (!org) {
+      res.status(404).json({ error: "Not Found", message: "Organisation not found" });
+      return;
+    }
+    await logAudit({ req, action: "organisation.rotate_webhook_secret", resourceType: "organisation", resourceId: req.params.orgId as string });
+    res.json({ webhookSecret: org.webhookSecret });
+  } catch (err) {
+    req.log.error({ err }, "Rotate webhook secret failed");
+    res.status(500).json({ error: "Internal Server Error", message: "Failed to rotate webhook secret" });
   }
 });
 

@@ -20,17 +20,18 @@ export default function Widget() {
     try {
       await updateConfig.mutateAsync({
         orgId: orgId!,
-        data: { ...config, [field]: value } as any,
+        data: { ...config, [field]: value },
       });
       toast({ title: "Widget settings updated" });
       refetch();
-    } catch (e: any) {
-      toast({ variant: "destructive", title: "Error", description: e.message });
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Could not update widget settings";
+      toast({ variant: "destructive", title: "Error", description: message });
     }
   };
 
-  const embedSnippet = (config as any)?.embedScript || (config && (config as any).widgetKey
-    ? `<script src="${window.location.origin}/api/widget/${(config as any).widgetKey}/widget.js" async></script>\n<div id="enviroiq-widget"></div>`
+  const embedSnippet = config?.embedScript || (config?.widgetKey
+    ? `<script src="${window.location.origin}/api/widget/${config.widgetKey}/widget.js" async></script>\n<div id="enviroiq-widget"></div>`
     : "");
 
   const copyEmbed = () => {
