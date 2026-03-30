@@ -90,7 +90,7 @@ app.use(
     store: new PgStore({
       conString: process.env.DATABASE_URL,
       tableName: "session",
-      createTableIfMissing: false,
+      createTableIfMissing: true,
       pruneSessionInterval: 60 * 15, // prune expired sessions every 15 min
     }),
     secret: sessionSecret || "enviroiq-dev-only-secret-do-not-use-in-production",
