@@ -9,7 +9,7 @@ export const globalAuditRouter = Router();
 // GET /organisations/:orgId/audit-logs
 router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
   try {
-    const orgId = req.params.orgId as string as string;
+    const orgId = req.params.orgId as string;
     const { userId, action, from, to } = req.query;
     const page = parseInt(req.query.page as string) || 1;
     const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);

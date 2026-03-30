@@ -2,7 +2,7 @@ import { Router } from "express";
 import { db, reportsTable, goalsTable } from "@workspace/db";
 import { eq, and, count, sql } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
-import { requireAuth, requireOrgAccess } from "../lib/auth.js";
+import { requireAuth, requireOrgAccess, requireOrgAdmin } from "../lib/auth.js";
 import { logAudit } from "../lib/audit.js";
 import { calcSustainabilityScore } from "../lib/emissions.js";
 
@@ -11,7 +11,7 @@ const router = Router({ mergeParams: true });
 // GET /organisations/:orgId/reports
 router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
   try {
-    const orgId = req.params.orgId as string as string;
+    const orgId = req.params.orgId as string;
     const reports = await db.query.reportsTable.findMany({
       where: eq(reportsTable.organisationId, orgId),
     });
@@ -24,10 +24,10 @@ router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
 });
 
 // POST /organisations/:orgId/reports
-router.post("/", requireAuth, requireOrgAccess, async (req, res) => {
+router.post("/", requireAuth, requireOrgAdmin, async (req, res) => {
   try {
-    const orgId = req.params.orgId as string as string;
-    const session = (req as any).session;
+    const orgId = req.params.orgId as string;
+    const session = req.session;
     const { title, periodStart, periodEnd, reportType } = req.body;
 
     if (!periodStart || !periodEnd || !reportType) {
@@ -111,7 +111,7 @@ router.post("/", requireAuth, requireOrgAccess, async (req, res) => {
 // GET /organisations/:orgId/reports/:reportId
 router.get("/:reportId", requireAuth, requireOrgAccess, async (req, res) => {
   try {
-    const orgId = req.params.orgId as string as string; const reportId = req.params.reportId as string as string;
+    const orgId = req.params.orgId as string; const reportId = req.params.reportId as string;
     const report = await db.query.reportsTable.findFirst({
       where: and(eq(reportsTable.id, reportId), eq(reportsTable.organisationId, orgId)),
     });

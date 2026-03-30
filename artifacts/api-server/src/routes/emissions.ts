@@ -8,7 +8,7 @@ const router = Router({ mergeParams: true });
 // GET /organisations/:orgId/emissions
 router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
   try {
-    const orgId = req.params.orgId as string as string;
+    const orgId = req.params.orgId as string;
     const { source = "all", from, to } = req.query;
     const page = parseInt(req.query.page as string) || 1;
     const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
@@ -63,7 +63,7 @@ router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
 // GET /organisations/:orgId/emissions/totals
 router.get("/totals", requireAuth, requireOrgAccess, async (req, res) => {
   try {
-    const orgId = req.params.orgId as string as string;
+    const orgId = req.params.orgId as string;
     const period = (req.query.period as string) || "month";
     const groupBy = (req.query.groupBy as string) || "source";
 

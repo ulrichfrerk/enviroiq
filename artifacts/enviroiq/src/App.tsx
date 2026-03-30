@@ -6,6 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 
 import Login from "@/pages/login";
+import Verify from "@/pages/verify";
 import Dashboard from "@/pages/dashboard";
 import Fleet from "@/pages/fleet";
 import Energy from "@/pages/energy";
@@ -46,6 +47,7 @@ function Router() {
   return (
     <Switch>
       <Route path="/login" component={Login} />
+      <Route path="/auth/verify" component={Verify} />
       <Route path="/">
         <Redirect to="/dashboard" />
       </Route>

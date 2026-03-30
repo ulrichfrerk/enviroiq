@@ -3,7 +3,7 @@ import { db, energyReadingsTable, organisationsTable } from "@workspace/db";
 import { eq, and, gte, lte, count } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
 import multer from "multer";
-import { requireAuth, requireOrgAccess } from "../lib/auth.js";
+import { requireAuth, requireOrgAccess, requireOrgAdmin } from "../lib/auth.js";
 import { logAudit } from "../lib/audit.js";
 import { calcEnergyCo2e } from "../lib/emissions.js";
 
@@ -13,7 +13,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // GET /organisations/:orgId/energy/readings
 router.get("/readings", requireAuth, requireOrgAccess, async (req, res) => {
   try {
-    const orgId = req.params.orgId as string as string;
+    const orgId = req.params.orgId as string;
     const { from, to } = req.query;
     const page = parseInt(req.query.page as string) || 1;
     const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
@@ -38,9 +38,9 @@ router.get("/readings", requireAuth, requireOrgAccess, async (req, res) => {
 });
 
 // POST /organisations/:orgId/energy/readings
-router.post("/readings", requireAuth, requireOrgAccess, async (req, res) => {
+router.post("/readings", requireAuth, requireOrgAdmin, async (req, res) => {
   try {
-    const orgId = req.params.orgId as string as string;
+    const orgId = req.params.orgId as string;
     const { utilityType, provider, periodStart, periodEnd, usageKwh, usageMj, costAmount, costCurrency } = req.body;
     if (!utilityType || !periodStart || !periodEnd) {
       res.status(400).json({ error: "Bad Request", message: "utilityType, periodStart, periodEnd required" });
@@ -73,9 +73,9 @@ router.post("/readings", requireAuth, requireOrgAccess, async (req, res) => {
 });
 
 // POST /organisations/:orgId/energy/upload
-router.post("/upload", requireAuth, requireOrgAccess, upload.single("file"), async (req, res) => {
+router.post("/upload", requireAuth, requireOrgAdmin, upload.single("file"), async (req, res) => {
   try {
-    const orgId = req.params.orgId as string as string;
+    const orgId = req.params.orgId as string;
     const { utilityType } = req.body;
 
     if (!req.file) {
@@ -140,7 +140,7 @@ router.post("/upload", requireAuth, requireOrgAccess, upload.single("file"), asy
 // GET /organisations/:orgId/energy/email-address
 router.get("/email-address", requireAuth, requireOrgAccess, async (req, res) => {
   try {
-    const orgId = req.params.orgId as string as string;
+    const orgId = req.params.orgId as string;
     const org = await db.query.organisationsTable.findFirst({
       where: eq(organisationsTable.id, orgId),
     });

@@ -2,7 +2,7 @@ import { Router } from "express";
 import { db, vehiclesTable, fleetEventsTable, organisationsTable } from "@workspace/db";
 import { eq, and, gte, lte, count, sql } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
-import { requireAuth, requireOrgAccess } from "../lib/auth.js";
+import { requireAuth, requireOrgAccess, requireOrgAdmin } from "../lib/auth.js";
 import { logAudit } from "../lib/audit.js";
 import { calcFleetCo2e } from "../lib/emissions.js";
 
@@ -14,7 +14,7 @@ const webhookRouter = Router();
 // GET /organisations/:orgId/fleet/vehicles
 router.get("/vehicles", requireAuth, requireOrgAccess, async (req, res) => {
   try {
-    const orgId = req.params.orgId as string as string;
+    const orgId = req.params.orgId as string;
     const vehicles = await db.query.vehiclesTable.findMany({
       where: eq(vehiclesTable.organisationId, orgId),
     });
@@ -28,9 +28,9 @@ router.get("/vehicles", requireAuth, requireOrgAccess, async (req, res) => {
 });
 
 // POST /organisations/:orgId/fleet/vehicles
-router.post("/vehicles", requireAuth, requireOrgAccess, async (req, res) => {
+router.post("/vehicles", requireAuth, requireOrgAdmin, async (req, res) => {
   try {
-    const orgId = req.params.orgId as string as string;
+    const orgId = req.params.orgId as string;
     const { name, registration, make, model, year, fuelType, emissionFactorKgPerKm, gpsProvider, gpsDeviceId } = req.body;
     if (!name || !fuelType) {
       res.status(400).json({ error: "Bad Request", message: "name, fuelType required" });
@@ -78,7 +78,7 @@ router.get("/vehicles/:vehicleId", requireAuth, requireOrgAccess, async (req, re
 });
 
 // PATCH /organisations/:orgId/fleet/vehicles/:vehicleId
-router.patch("/vehicles/:vehicleId", requireAuth, requireOrgAccess, async (req, res) => {
+router.patch("/vehicles/:vehicleId", requireAuth, requireOrgAdmin, async (req, res) => {
   try {
     const { name, registration, make, model, year, fuelType, emissionFactorKgPerKm, gpsProvider, gpsDeviceId, isActive } = req.body;
     const [vehicle] = await db
@@ -99,7 +99,7 @@ router.patch("/vehicles/:vehicleId", requireAuth, requireOrgAccess, async (req, 
 });
 
 // DELETE /organisations/:orgId/fleet/vehicles/:vehicleId
-router.delete("/vehicles/:vehicleId", requireAuth, requireOrgAccess, async (req, res) => {
+router.delete("/vehicles/:vehicleId", requireAuth, requireOrgAdmin, async (req, res) => {
   try {
     await db.delete(vehiclesTable).where(
       and(eq(vehiclesTable.id, req.params.vehicleId as string), eq(vehiclesTable.organisationId, req.params.orgId as string)),
@@ -115,7 +115,7 @@ router.delete("/vehicles/:vehicleId", requireAuth, requireOrgAccess, async (req,
 // GET /organisations/:orgId/fleet/events
 router.get("/events", requireAuth, requireOrgAccess, async (req, res) => {
   try {
-    const orgId = req.params.orgId as string as string;
+    const orgId = req.params.orgId as string;
     const { vehicleId, from, to } = req.query;
     const page = parseInt(req.query.page as string) || 1;
     const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);

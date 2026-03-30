@@ -14,6 +14,7 @@ import {
   generateAuthenticationOptions,
   verifyAuthenticationResponse,
 } from "@simplewebauthn/server";
+type AuthenticatorTransportFuture = "ble" | "cable" | "hybrid" | "internal" | "nfc" | "smart-card" | "usb";
 import { logAudit } from "../lib/audit.js";
 
 const router = Router();
@@ -24,7 +25,7 @@ const ORIGIN = process.env.ORIGIN || `http://localhost`;
 
 // GET /auth/session
 router.get("/session", (req, res) => {
-  const session = (req as any).session;
+  const session = req.session;
   if (!session?.userId) {
     res.status(401).json({ error: "Unauthorized", message: "Not authenticated" });
     return;
@@ -35,7 +36,6 @@ router.get("/session", (req, res) => {
     name: session.name,
     role: session.role,
     organisationId: session.organisationId,
-    organisationName: session.organisationName,
     isAuthenticated: true,
   });
 });
@@ -72,7 +72,7 @@ router.post("/passkey/register/begin", async (req, res) => {
       attestationType: "none",
       excludeCredentials: existingPasskeys.map((pk) => ({
         id: pk.credentialId,
-        transports: (pk.transports?.split(",") as any) || [],
+        transports: ((pk.transports?.split(",") ?? []) as AuthenticatorTransportFuture[]) || [],
       })),
       authenticatorSelection: {
         residentKey: "preferred",
@@ -148,11 +148,11 @@ router.post("/passkey/register/complete", async (req, res) => {
 
     await db.update(usersTable).set({ lastLoginAt: new Date() }).where(eq(usersTable.id, user.id));
 
-    const session = (req as any).session;
+    const session = req.session;
     session.userId = user.id;
     session.email = user.email;
     session.name = user.name;
-    session.role = user.role;
+    session.role = user.role as "super_admin" | "org_admin" | "org_viewer";
     session.organisationId = user.organisationId;
 
     await logAudit({ req, action: "passkey.register", outcome: "success", userId: user.id, userEmail: email });
@@ -185,7 +185,7 @@ router.post("/passkey/authenticate/begin", async (req, res) => {
         });
         allowCredentials = passkeys.map((pk) => ({
           id: pk.credentialId,
-          transports: (pk.transports?.split(",") as any) || [],
+          transports: ((pk.transports?.split(",") ?? []) as AuthenticatorTransportFuture[]) || [],
         }));
       }
     }
@@ -248,7 +248,7 @@ router.post("/passkey/authenticate/complete", async (req, res) => {
         id: passkey.credentialId,
         publicKey: Buffer.from(passkey.credentialPublicKey, "base64"),
         counter: parseInt(passkey.counter),
-        transports: (passkey.transports?.split(",") as any) || [],
+        transports: (passkey.transports?.split(",") as AuthenticatorTransportFuture[]) || [],
       },
     });
 
@@ -273,11 +273,11 @@ router.post("/passkey/authenticate/complete", async (req, res) => {
 
     await db.update(usersTable).set({ lastLoginAt: new Date() }).where(eq(usersTable.id, user.id));
 
-    const session = (req as any).session;
+    const session = req.session;
     session.userId = user.id;
     session.email = user.email;
     session.name = user.name;
-    session.role = user.role;
+    session.role = user.role as "super_admin" | "org_admin" | "org_viewer";
     session.organisationId = user.organisationId;
 
     await logAudit({ req, action: "passkey.authenticate", outcome: "success", userId: user.id, userEmail: user.email });
@@ -320,8 +320,15 @@ router.post("/magic-link/request", async (req, res) => {
       expiresAt: new Date(Date.now() + 15 * 60 * 1000),
     });
 
-    // In production: send email with token. For now, log it
-    req.log.info({ token, email }, "Magic link generated");
+    // In dev mode, print the token to console so developers can test the flow
+    // Never log full tokens to structured logs — they are valid auth credentials
+    if (process.env.NODE_ENV !== "production") {
+      req.log.info({ email }, "Magic link generated (dev mode — token printed to console)");
+      const domain = process.env.REPLIT_DOMAINS?.split(",")[0] || "localhost:3001";
+      const verifyUrl = `https://${domain}/auth/verify?token=${token}`;
+      // eslint-disable-next-line no-console
+      console.log(`\n[MAGIC LINK DEV]\n  Email: ${email}\n  Token: ${token}\n  URL:   ${verifyUrl}\n`);
+    }
 
     await logAudit({ req, action: "magic_link.request", outcome: "success", userEmail: email });
     res.json({ message: "If this email is registered, a magic link has been sent." });
@@ -360,11 +367,11 @@ router.post("/magic-link/verify", async (req, res) => {
 
     await db.update(usersTable).set({ lastLoginAt: new Date() }).where(eq(usersTable.id, user.id));
 
-    const session = (req as any).session;
+    const session = req.session;
     session.userId = user.id;
     session.email = user.email;
     session.name = user.name;
-    session.role = user.role;
+    session.role = user.role as "super_admin" | "org_admin" | "org_viewer";
     session.organisationId = user.organisationId;
 
     await logAudit({ req, action: "magic_link.verify", outcome: "success", userId: user.id, userEmail: user.email });

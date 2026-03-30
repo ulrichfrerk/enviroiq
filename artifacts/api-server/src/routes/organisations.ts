@@ -2,7 +2,7 @@ import { Router } from "express";
 import { db, organisationsTable, usersTable, vehiclesTable, widgetConfigsTable } from "@workspace/db";
 import { eq, count, sql } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
-import { requireAuth, requireRole, requireOrgAccess } from "../lib/auth.js";
+import { requireAuth, requireRole, requireOrgAccess, requireOrgAdmin } from "../lib/auth.js";
 import { logAudit } from "../lib/audit.js";
 import { calcSustainabilityScore } from "../lib/emissions.js";
 
@@ -128,7 +128,7 @@ router.get("/:orgId", requireAuth, requireOrgAccess, async (req, res) => {
 });
 
 // PATCH /organisations/:orgId
-router.patch("/:orgId", requireAuth, requireOrgAccess, async (req, res) => {
+router.patch("/:orgId", requireAuth, requireOrgAdmin, async (req, res) => {
   try {
     const { name, industry, country, logoUrl, isActive } = req.body;
     const [org] = await db
@@ -163,7 +163,7 @@ router.delete("/:orgId", requireRole("super_admin"), async (req, res) => {
 // GET /organisations/:orgId/summary
 router.get("/:orgId/summary", requireAuth, requireOrgAccess, async (req, res) => {
   try {
-    const orgId = req.params.orgId as string as string;
+    const orgId = req.params.orgId as string;
     const period = (req.query.period as string) || "month";
 
     const now = new Date();

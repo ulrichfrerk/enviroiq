@@ -10,7 +10,7 @@ const router = Router({ mergeParams: true });
 // GET /organisations/:orgId/users
 router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
   try {
-    const orgId = req.params.orgId as string as string;
+    const orgId = req.params.orgId as string;
     const users = await db.query.usersTable.findMany({
       where: eq(usersTable.organisationId, orgId),
     });
@@ -28,7 +28,7 @@ router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
 // POST /organisations/:orgId/users
 router.post("/", requireAuth, requireRole("super_admin", "org_admin"), requireOrgAccess, async (req, res) => {
   try {
-    const orgId = req.params.orgId as string as string;
+    const orgId = req.params.orgId as string;
     const { email, name, role } = req.body;
     if (!email || !name || !role) {
       res.status(400).json({ error: "Bad Request", message: "email, name, role required" });
@@ -57,7 +57,7 @@ router.post("/", requireAuth, requireRole("super_admin", "org_admin"), requireOr
 // GET /organisations/:orgId/users/:userId
 router.get("/:userId", requireAuth, requireOrgAccess, async (req, res) => {
   try {
-    const orgId = req.params.orgId as string as string; const userId = req.params.userId as string as string;
+    const orgId = req.params.orgId as string; const userId = req.params.userId as string;
     const user = await db.query.usersTable.findFirst({
       where: and(eq(usersTable.id, userId), eq(usersTable.organisationId, orgId)),
     });
@@ -75,7 +75,7 @@ router.get("/:userId", requireAuth, requireOrgAccess, async (req, res) => {
 // PATCH /organisations/:orgId/users/:userId
 router.patch("/:userId", requireAuth, requireRole("super_admin", "org_admin"), requireOrgAccess, async (req, res) => {
   try {
-    const orgId = req.params.orgId as string as string; const userId = req.params.userId as string as string;
+    const orgId = req.params.orgId as string; const userId = req.params.userId as string;
     const { name, role, isActive } = req.body;
 
     const [user] = await db
@@ -99,7 +99,7 @@ router.patch("/:userId", requireAuth, requireRole("super_admin", "org_admin"), r
 // DELETE /organisations/:orgId/users/:userId
 router.delete("/:userId", requireAuth, requireRole("super_admin", "org_admin"), requireOrgAccess, async (req, res) => {
   try {
-    const orgId = req.params.orgId as string as string; const userId = req.params.userId as string as string;
+    const orgId = req.params.orgId as string; const userId = req.params.userId as string;
 
     const existing = await db.query.usersTable.findFirst({
       where: and(eq(usersTable.id, userId), eq(usersTable.organisationId, orgId)),

@@ -4,7 +4,7 @@ import { useRequestMagicLink } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
-import { Leaf, Fingerprint, Mail, ArrowRight, Loader2 } from "lucide-react";
+import { Leaf, Fingerprint, Mail, ArrowRight, Loader2, MailCheck } from "lucide-react";
 import { useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 
@@ -14,7 +14,7 @@ export default function Login() {
   const [location, setLocation] = useLocation();
   const { toast } = useToast();
   
-  const [mode, setMode] = useState<"login" | "register" | "magic">("login");
+  const [mode, setMode] = useState<"login" | "register" | "magic" | "magic-sent">("login");
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
 
@@ -28,8 +28,7 @@ export default function Login() {
     if (!email) return;
     try {
       await reqMagicLink.mutateAsync({ data: { email } });
-      toast({ title: "Email sent", description: "Check your inbox for the magic link." });
-      setMode("login");
+      setMode("magic-sent");
     } catch (err: any) {
       toast({ variant: "destructive", title: "Error", description: err.message || "Failed to send magic link." });
     }
@@ -136,6 +135,26 @@ export default function Login() {
             </Button>
             <Button type="button" variant="ghost" className="w-full" onClick={() => setMode("login")}>Back to login</Button>
           </form>
+        )}
+
+        {mode === "magic-sent" && (
+          <div className="flex flex-col items-center gap-4 animate-in fade-in">
+            <div className="w-14 h-14 rounded-full bg-emerald-500/10 flex items-center justify-center">
+              <MailCheck className="w-7 h-7 text-emerald-500" />
+            </div>
+            <div className="text-center space-y-2">
+              <p className="font-semibold text-foreground">Check your email</p>
+              <p className="text-sm text-muted-foreground">
+                We sent a magic link to <span className="font-medium text-foreground">{email}</span>.
+                Click the link in the email to sign in.
+              </p>
+              <p className="text-xs text-muted-foreground pt-1">The link expires in 15 minutes.</p>
+            </div>
+            <Button variant="ghost" className="w-full mt-2" onClick={() => { setMode("magic"); }}>
+              Try a different email
+            </Button>
+            <Button variant="ghost" className="w-full" onClick={() => setMode("login")}>Back to login</Button>
+          </div>
         )}
       </Card>
     </div>
