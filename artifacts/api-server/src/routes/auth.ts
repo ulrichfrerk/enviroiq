@@ -20,8 +20,30 @@ import { logAudit } from "../lib/audit.js";
 const router = Router();
 
 const RP_NAME = "EnviroIQ";
-const RP_ID = process.env.RP_ID || "localhost";
-const ORIGIN = process.env.ORIGIN || `http://localhost`;
+
+// Derive safe RP_ID and ORIGIN from explicit env vars or Replit runtime domain.
+// Fail fast in production if neither is provided.
+function resolveWebAuthnConfig() {
+  const isDev = process.env.NODE_ENV !== "production";
+  const replitDev = process.env.REPLIT_DEV_DOMAIN;
+  const replitApp = process.env.REPLIT_DOMAINS?.split(",")[0]?.trim();
+
+  const rpId: string = process.env.RP_ID
+    || (replitApp ? replitApp.replace(/^https?:\/\//, "") : null)
+    || (replitDev ? replitDev.replace(/^https?:\/\//, "") : null)
+    || (isDev ? "localhost" : null)
+    || (() => { throw new Error("RP_ID env var required in production"); })();
+
+  const origin: string = process.env.ORIGIN
+    || (replitApp ? `https://${replitApp.replace(/^https?:\/\//, "")}` : null)
+    || (replitDev ? `https://${replitDev.replace(/^https?:\/\//, "")}` : null)
+    || (isDev ? "http://localhost" : null)
+    || (() => { throw new Error("ORIGIN env var required in production"); })();
+
+  return { rpId, origin };
+}
+
+const { rpId: RP_ID, origin: ORIGIN } = resolveWebAuthnConfig();
 
 // GET /auth/session
 router.get("/session", (req, res) => {

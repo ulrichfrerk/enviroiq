@@ -49,14 +49,30 @@ app.use(
   }),
 );
 
-// CORS — allow the specific Replit domain and localhost for dev
-const allowedOrigins = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim())
-  : [/\.replit\.app$/, /\.replit\.dev$/, /localhost/];
+// CORS — explicit deny-by-default allowlist with credentials.
+// ALLOWED_ORIGINS must be set in production; dev falls back to Replit domains + localhost.
+function buildAllowedOrigins(): string[] {
+  if (process.env.ALLOWED_ORIGINS) {
+    const list = process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim()).filter(Boolean);
+    return list;
+  }
+  if (process.env.NODE_ENV === "production") {
+    // In production without ALLOWED_ORIGINS, derive from Replit domain env
+    const replitDomains = process.env.REPLIT_DOMAINS?.split(",").map((d) => `https://${d.trim()}`).filter(Boolean) || [];
+    if (replitDomains.length > 0) return replitDomains;
+    logger.warn("ALLOWED_ORIGINS not set in production — CORS will block all cross-origin requests");
+    return [];
+  }
+  // Development: allow Replit preview domains and localhost
+  const replitDev = process.env.REPLIT_DEV_DOMAIN ? [`https://${process.env.REPLIT_DEV_DOMAIN}`] : [];
+  const replitDomains = process.env.REPLIT_DOMAINS?.split(",").map((d) => `https://${d.trim()}`).filter(Boolean) || [];
+  return [...new Set([...replitDev, ...replitDomains, "http://localhost:3000", "http://localhost:5173", "http://localhost:22592"])];
+}
 
+const corsOrigins = buildAllowedOrigins();
 app.use(
   cors({
-    origin: allowedOrigins,
+    origin: corsOrigins.length > 0 ? corsOrigins : false,
     credentials: true,
   }),
 );
