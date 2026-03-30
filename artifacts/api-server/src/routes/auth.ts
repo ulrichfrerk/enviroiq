@@ -397,10 +397,16 @@ router.post("/magic-link/request", async (req, res) => {
       expiresAt: new Date(Date.now() + 15 * 60 * 1000),
     });
 
-    const domain = process.env.REPLIT_DOMAINS?.split(",")[0]?.trim()
-      || process.env.REPLIT_DEV_DOMAIN?.trim()
-      || "localhost:3001";
-    const verifyUrl = `https://${domain}/auth/verify?token=${token}`;
+    // APP_URL can be set explicitly (e.g. to the deployed .replit.app domain).
+    // Otherwise, prefer any non-dev REPLIT_DOMAINS entry, then fall back to REPLIT_DEV_DOMAIN.
+    const appUrl = (() => {
+      if (process.env.APP_URL) return process.env.APP_URL.replace(/\/$/, "");
+      const domains = (process.env.REPLIT_DOMAINS || "").split(",").map((d) => d.trim()).filter(Boolean);
+      const productionDomain = domains.find((d) => !d.includes("riker.replit.dev") && !d.includes("replit.dev"));
+      const domain = productionDomain || domains[0] || process.env.REPLIT_DEV_DOMAIN?.trim() || "localhost:3001";
+      return `https://${domain}`;
+    })();
+    const verifyUrl = `${appUrl}/auth/verify?token=${token}`;
 
     try {
       const { devMode } = await sendMagicLinkEmail(email, verifyUrl);
