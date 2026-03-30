@@ -70,12 +70,31 @@ function buildAllowedOrigins(): string[] {
 }
 
 const corsOrigins = buildAllowedOrigins();
-app.use(
+
+// Public widget endpoints need open CORS for cross-origin embedding.
+// This runs BEFORE the global CORS middleware and explicitly sets the final headers.
+// The Access-Control-Allow-Credentials header must NOT be true alongside '*' origin.
+app.use("/api/widget", (req: Request, res: Response, next: NextFunction) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.removeHeader("Access-Control-Allow-Credentials");
+  if (req.method === "OPTIONS") {
+    res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    res.sendStatus(204);
+    return;
+  }
+  next();
+});
+
+// All other API routes use the explicit allowlist with credentials.
+// Widget routes are excluded — they have their own open CORS policy above.
+app.use((req: Request, res: Response, next: NextFunction) => {
+  if (req.path.startsWith("/api/widget/")) { next(); return; }
   cors({
     origin: corsOrigins.length > 0 ? corsOrigins : false,
     credentials: true,
-  }),
-);
+  })(req, res, next);
+});
 
 // Rate limiting
 const limiter = rateLimit({

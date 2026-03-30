@@ -218,8 +218,14 @@ widgetPublicRouter.get("/:widgetKey/widget.js", async (req, res) => {
   }
 });
 
-// GET /widget/:widgetKey/data — public, no auth
+// GET /widget/:widgetKey/data — public, no auth, open CORS for cross-origin embedding
 widgetPublicRouter.get("/:widgetKey/data", async (req, res) => {
+  // Public widget data must be accessible from any origin (embeddable widget)
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === "OPTIONS") { res.sendStatus(204); return; }
+
   try {
     const widgetKey = req.params.widgetKey as string;
     const org = await db.query.organisationsTable.findFirst({
@@ -249,10 +255,16 @@ widgetPublicRouter.get("/:widgetKey/data", async (req, res) => {
       case "year": fromDate.setFullYear(now.getFullYear() - 1); break;
     }
 
+    const showTotalCo2e = config.showTotalCo2e !== false;
+    const showFleetStats = config.showFleetStats !== false;
+    const showEnergyUsage = config.showEnergyUsage !== false;
+    const showGoals = config.showGoals !== false;
+    const showSustainabilityScore = config.showSustainabilityScore !== false;
+
     const [fleetResult, energyResult, goals] = await Promise.all([
       db.execute(sql`SELECT COALESCE(SUM(co2e_kg),0) as co2e, COALESCE(SUM(distance_km),0) as dist, COUNT(DISTINCT vehicle_id) as vehicles FROM fleet_events WHERE organisation_id = ${org.id} AND recorded_at >= ${fromDate}`),
       db.execute(sql`SELECT COALESCE(SUM(co2e_kg),0) as co2e, COALESCE(SUM(usage_kwh),0) as kwh FROM energy_readings WHERE organisation_id = ${org.id} AND period_start >= ${fromDate}`),
-      db.query.goalsTable.findMany({ where: eq(goalsTable.organisationId, org.id) }),
+      showGoals ? db.query.goalsTable.findMany({ where: eq(goalsTable.organisationId, org.id) }) : Promise.resolve([]),
     ]);
 
     const fr = sqlRow(fleetResult);
@@ -270,22 +282,36 @@ widgetPublicRouter.get("/:widgetKey/data", async (req, res) => {
       totalGoals: goals.length,
     });
 
-    res.json({
+    // Build response respecting server-side visibility toggles
+    // Only include fields that are enabled in the widget config
+    const payload: Record<string, unknown> = {
       organisationName: org.name,
       period,
-      config,
-      totalCo2eKg: fleetCo2e + energyCo2e,
-      fleetCo2eKg: fleetCo2e,
-      energyCo2eKg: energyCo2e,
-      totalEnergyKwh: numCol(er, "kwh"),
-      fleetDistanceKm: fleetDist,
-      sustainabilityScore: score,
-      activeVehicles: intCol(fr, "vehicles"),
-      goals: goals
-        .filter((g) => g.isPublic)
-        .map((g) => ({ title: g.title, progressPercent: 0, status: g.status })),
       lastUpdated: now.toISOString(),
-    });
+    };
+
+    if (showTotalCo2e) {
+      payload.totalCo2eKg = fleetCo2e + energyCo2e;
+    }
+    if (showFleetStats) {
+      payload.fleetCo2eKg = fleetCo2e;
+      payload.fleetDistanceKm = fleetDist;
+      payload.activeVehicles = intCol(fr, "vehicles");
+    }
+    if (showEnergyUsage) {
+      payload.energyCo2eKg = energyCo2e;
+      payload.totalEnergyKwh = numCol(er, "kwh");
+    }
+    if (showSustainabilityScore) {
+      payload.sustainabilityScore = score;
+    }
+    if (showGoals) {
+      payload.goals = goals
+        .filter((g) => g.isPublic)
+        .map((g) => ({ title: g.title, progressPercent: 0, status: g.status }));
+    }
+
+    res.json(payload);
   } catch (err) {
     res.status(500).json({ error: "Internal Server Error", message: "Failed to get widget data" });
   }
