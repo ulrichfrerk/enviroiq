@@ -9,6 +9,17 @@ import { calcSustainabilityScore } from "../lib/emissions.js";
 
 const router = Router({ mergeParams: true });
 
+// Escape user-controlled strings to prevent stored XSS in rendered HTML
+function esc(str: string | null | undefined): string {
+  if (str == null) return "";
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 // GET /organisations/:orgId/reports
 router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
   try {
@@ -163,16 +174,21 @@ router.get("/:reportId/pdf", requireAuth, requireOrgAccess, async (req, res) => 
       typeof n === "number" ? n.toLocaleString("en-NZ", { maximumFractionDigits: dp }) : "—";
 
     const goalsHtml = goals.length
-      ? goals.map((g) => `<tr>
-          <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">${g.title}</td>
-          <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">${g.targetValue != null ? g.targetValue : "—"} ${g.targetUnit || ""}</td>
+      ? goals.map((g) => {
+          const statusBg = g.status === "on_track" ? "#d1fae5" : g.status === "behind" ? "#fee2e2" : "#fef3c7";
+          const statusColor = g.status === "on_track" ? "#065f46" : g.status === "behind" ? "#991b1b" : "#92400e";
+          const statusLabel = esc(g.status.replace("_", " "));
+          return `<tr>
+          <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">${esc(g.title)}</td>
+          <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">${g.targetValue != null ? esc(String(g.targetValue)) : "—"} ${esc(g.targetUnit || "")}</td>
           <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">
-            <span style="background:${g.status === "on_track" ? "#d1fae5" : g.status === "behind" ? "#fee2e2" : "#fef3c7"};color:${g.status === "on_track" ? "#065f46" : g.status === "behind" ? "#991b1b" : "#92400e"};padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;">${g.status.replace("_", " ")}</span>
+            <span style="background:${statusBg};color:${statusColor};padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;">${statusLabel}</span>
           </td>
-        </tr>`).join("")
+        </tr>`;
+        }).join("")
       : `<tr><td colspan="3" style="padding:12px;text-align:center;color:#9ca3af;">No goals defined</td></tr>`;
 
-    const highlightsHtml = highlights.map((h) => `<li style="margin-bottom:6px;">${h}</li>`).join("");
+    const highlightsHtml = highlights.map((h) => `<li style="margin-bottom:6px;">${esc(h)}</li>`).join("");
 
     const periodFrom = report.periodStart ? new Date(report.periodStart).toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" }) : "";
     const periodTo = report.periodEnd ? new Date(report.periodEnd).toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" }) : "";
@@ -182,7 +198,7 @@ router.get("/:reportId/pdf", requireAuth, requireOrgAccess, async (req, res) => 
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${report.title} — EnviroIQ ESG Report</title>
+<title>${esc(report.title)} — EnviroIQ ESG Report</title>
 <style>
   @media print { body { margin: 0; } .no-print { display: none; } }
   body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 40px; color: #111827; background: #fff; }
@@ -209,8 +225,8 @@ router.get("/:reportId/pdf", requireAuth, requireOrgAccess, async (req, res) => 
 <div class="header">
   <div>
     <div class="brand">EnviroIQ</div>
-    <h1>${report.title}</h1>
-    <div style="font-size:13px;color:#6b7280;margin-top:6px;">Period: ${periodFrom} — ${periodTo} · Type: ${report.reportType.replace(/_/g, " ")}</div>
+    <h1>${esc(report.title)}</h1>
+    <div style="font-size:13px;color:#6b7280;margin-top:6px;">Period: ${esc(periodFrom)} — ${esc(periodTo)} · Type: ${esc(report.reportType.replace(/_/g, " "))}</div>
   </div>
   <div style="text-align:right;font-size:12px;color:#6b7280;">Generated: ${new Date().toLocaleDateString("en-NZ")}<br>Report ID: ${report.id.substring(0, 8).toUpperCase()}</div>
 </div>

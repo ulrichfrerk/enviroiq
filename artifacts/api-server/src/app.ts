@@ -3,6 +3,7 @@ import cors from "cors";
 import helmet from "helmet";
 import pinoHttp from "pino-http";
 import session from "express-session";
+import ConnectPgSimple from "connect-pg-simple";
 import rateLimit from "express-rate-limit";
 import router from "./routes/index.js";
 import { logger } from "./lib/logger.js";
@@ -82,9 +83,16 @@ app.use("/api/auth", authLimiter);
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-// Session
+// Session — PostgreSQL-backed store (durable, multi-instance safe)
+const PgStore = ConnectPgSimple(session);
 app.use(
   session({
+    store: new PgStore({
+      conString: process.env.DATABASE_URL,
+      tableName: "session",
+      createTableIfMissing: false,
+      pruneSessionInterval: 60 * 15, // prune expired sessions every 15 min
+    }),
     secret: sessionSecret || "enviroiq-dev-only-secret-do-not-use-in-production",
     resave: false,
     saveUninitialized: false,

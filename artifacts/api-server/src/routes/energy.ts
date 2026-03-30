@@ -165,6 +165,12 @@ export const energyEmailWebhookRouter = Router();
 energyEmailWebhookRouter.post("/inbound-email", async (req, res) => {
   try {
     const expectedSecret = process.env.INBOUND_EMAIL_WEBHOOK_SECRET;
+    const isDev = process.env.NODE_ENV !== "production";
+    if (!expectedSecret && !isDev) {
+      await logAudit({ req, action: "webhook.energy.inbound_email", outcome: "failure", details: { reason: "secret_not_configured" } });
+      res.status(503).json({ error: "Service Unavailable", message: "Webhook secret not configured" });
+      return;
+    }
     if (expectedSecret) {
       const authHeader = req.headers["authorization"] || req.headers["x-webhook-secret"];
       const providedSecret = typeof authHeader === "string"
