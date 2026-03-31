@@ -116,6 +116,23 @@ router.post("/", requireRole("super_admin"), async (req, res) => {
   }
 });
 
+// GET /organisations/public/:slug — no auth, returns basic org info for branded login pages
+router.get("/public/:slug", async (req, res) => {
+  try {
+    const org = await db.query.organisationsTable.findFirst({
+      where: eq(organisationsTable.slug, req.params.slug as string),
+    });
+    if (!org || !org.isActive) {
+      res.status(404).json({ error: "Not Found", message: "Organisation not found" });
+      return;
+    }
+    res.json({ id: org.id, name: org.name, slug: org.slug, logoUrl: org.logoUrl });
+  } catch (err) {
+    req.log.error({ err }, "Public org lookup failed");
+    res.status(500).json({ error: "Internal Server Error", message: "Failed to look up organisation" });
+  }
+});
+
 // GET /organisations/:orgId
 router.get("/:orgId", requireAuth, requireOrgAccess, async (req, res) => {
   try {

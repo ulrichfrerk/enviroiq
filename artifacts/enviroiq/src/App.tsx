@@ -5,6 +5,7 @@ import { queryClient } from "@/lib/queryClient";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
+import OrgLogin from "@/pages/org-login";
 
 import Login from "@/pages/login";
 import Verify from "@/pages/verify";
@@ -64,6 +65,7 @@ function Router() {
       <Route path="/audit"><ProtectedRoute component={Audit} /></Route>
       <Route path="/admin"><ProtectedRoute component={Admin} /></Route>
       <Route path="/account"><ProtectedRoute component={Account} /></Route>
+      <Route path="/:slug" component={OrgLogin} />
       <Route component={NotFound} />
     </Switch>
   );
