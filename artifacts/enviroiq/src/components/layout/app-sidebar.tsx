@@ -30,7 +30,7 @@ export function AppSidebar() {
     { title: "Energy", url: "/energy", icon: Zap },
     { title: "Goals", url: "/goals", icon: Target },
     { title: "Reports", url: "/reports", icon: FileText },
-    { title: "Widget Settings", url: "/widget", icon: Settings },
+    { title: "Settings", url: "/settings", icon: Settings },
     { title: "Users", url: "/users", icon: Users },
     { title: "Audit Log", url: "/audit", icon: ShieldAlert },
   ];
@@ -79,14 +79,21 @@ export function AppSidebar() {
                 <SidebarMenuItem key={item.title}>
                   <SidebarMenuButton 
                     asChild 
-                    isActive={location === item.url}
+                    isActive={location === item.url || (item.url === "/settings" && location === "/widget")}
                     className="hover-elevate active-elevate-2 transition-all group"
                   >
                     <Link href={item.url} className="flex items-center gap-3">
-                      <item.icon className={`w-4 h-4 ${location === item.url ? "text-primary" : "text-muted-foreground group-hover:text-foreground"}`} />
-                      <span className={location === item.url ? "font-medium text-foreground" : "text-muted-foreground group-hover:text-foreground"}>
-                        {item.title}
-                      </span>
+                      {(() => {
+                        const isActive = location === item.url || (item.url === "/settings" && location === "/widget");
+                        return (
+                          <>
+                            <item.icon className={`w-4 h-4 ${isActive ? "text-primary" : "text-muted-foreground group-hover:text-foreground"}`} />
+                            <span className={isActive ? "font-medium text-foreground" : "text-muted-foreground group-hover:text-foreground"}>
+                              {item.title}
+                            </span>
+                          </>
+                        );
+                      })()}
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
