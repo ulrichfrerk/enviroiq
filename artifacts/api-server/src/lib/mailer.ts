@@ -29,7 +29,7 @@ async function getResendClient(): Promise<{ client: Resend; from: string } | nul
     const settings = data?.items?.[0]?.settings;
     if (!settings?.api_key) return null;
 
-    const from = settings.from_email || "EnviroIQ <noreply@enviroiq.app>";
+    const from = process.env.FROM_EMAIL || settings.from_email || "EnviroIQ <noreply@enviroiq.net>";
     return { client: new Resend(settings.api_key), from };
   } catch (err) {
     logger.warn({ err }, "Failed to fetch Resend credentials");
