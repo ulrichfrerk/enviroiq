@@ -132,13 +132,16 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
 // Session — PostgreSQL-backed store (durable, multi-instance safe)
+// createTableIfMissing is intentionally false: that option reads a 'table.sql' file
+// from the package directory which doesn't exist in the bundled production build.
+// Instead, ensureSessionTable() in index.ts creates it from inline SQL at startup.
 const PgStore = ConnectPgSimple(session);
 app.use(
   session({
     store: new PgStore({
       conString: process.env.DATABASE_URL,
       tableName: "session",
-      createTableIfMissing: true,
+      createTableIfMissing: false,
       pruneSessionInterval: 60 * 15, // prune expired sessions every 15 min
     }),
     secret: sessionSecret || "enviroiq-dev-only-secret-do-not-use-in-production",
