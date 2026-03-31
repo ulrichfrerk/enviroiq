@@ -37,3 +37,6 @@ RP_ID = "enviroiq.net"
 ORIGIN = "https://enviroiq.net"
 FROM_EMAIL = "EnviroIQ <noreply@enviroiq.net>"
 INBOUND_EMAIL_DOMAIN = "enviroiq.net"
+
+[userenv.shared]
+SUPER_ADMIN_EMAIL = "ulrich@edgeops.nz"

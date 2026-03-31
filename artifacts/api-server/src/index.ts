@@ -2,7 +2,8 @@ import app from "./app";
 import { logger } from "./lib/logger";
 import { startScheduler, stopScheduler } from "./lib/scheduler";
 import { db } from "@workspace/db";
-import { sql } from "drizzle-orm";
+import { sql, eq } from "drizzle-orm";
+import { usersTable } from "@workspace/db/schema";
 
 /**
  * Ensure the connect-pg-simple session table exists.
@@ -25,6 +26,27 @@ async function ensureSessionTable(): Promise<void> {
   logger.info("Session table ready");
 }
 
+/**
+ * Ensure the user identified by SUPER_ADMIN_EMAIL always has the super_admin role.
+ * This is idempotent — safe to run on every startup. It prevents a situation where
+ * the super admin was created with the wrong role (e.g. org_viewer) due to a race
+ * condition or manual seed discrepancy.
+ */
+async function ensureSuperAdmin(): Promise<void> {
+  const email = process.env.SUPER_ADMIN_EMAIL;
+  if (!email) return;
+  const result = await db
+    .update(usersTable)
+    .set({ role: "super_admin", updatedAt: new Date() })
+    .where(eq(usersTable.email, email))
+    .returning({ id: usersTable.id, email: usersTable.email });
+  if (result.length > 0) {
+    logger.info({ email }, "Super admin role confirmed");
+  } else {
+    logger.warn({ email }, "SUPER_ADMIN_EMAIL set but no matching user found — user must log in first to be created");
+  }
+}
+
 const rawPort = process.env["PORT"];
 
 if (!rawPort) {
@@ -41,6 +63,7 @@ if (Number.isNaN(port) || port <= 0) {
 
 // Ensure all DB prerequisites exist, then start listening
 ensureSessionTable()
+  .then(() => ensureSuperAdmin())
   .then(() => {
     const server = app.listen(port, () => {
       logger.info({ port }, "Server listening");
