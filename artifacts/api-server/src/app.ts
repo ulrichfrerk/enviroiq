@@ -1,6 +1,7 @@
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import cors from "cors";
 import helmet from "helmet";
+import compression from "compression";
 import pinoHttp from "pino-http";
 import session from "express-session";
 import ConnectPgSimple from "connect-pg-simple";
@@ -20,13 +21,37 @@ const app: Express = express();
 // Trust proxy (needed for X-Forwarded-For in Replit/reverse proxy environments)
 app.set("trust proxy", 1);
 
-// Security headers
+// Response compression (gzip / Brotli)
+app.use(compression());
+
+// Security headers — all applied to /api/* responses
 app.use(
   helmet({
+    // CSP is handled by the frontend server (server.mjs); API responses don't serve HTML
     contentSecurityPolicy: false,
     crossOriginEmbedderPolicy: false,
+    // Explicit overrides to ensure all scanners see these on API responses:
+    referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+    frameguard: { action: "deny" },
+    noSniff: true,
+    xssFilter: true,
+    permittedCrossDomainPolicies: false,
+    hsts: {
+      maxAge: 63072000,
+      includeSubDomains: true,
+      preload: true,
+    },
   }),
 );
+
+// Permissions-Policy (not yet in helmet's built-in set)
+app.use((_req: Request, res: Response, next: NextFunction) => {
+  res.setHeader(
+    "Permissions-Policy",
+    "camera=(), microphone=(), geolocation=(), payment=()",
+  );
+  next();
+});
 
 // Logging
 app.use(
