@@ -17,6 +17,7 @@ import Users from "@/pages/users";
 import Admin from "@/pages/admin";
 import Audit from "@/pages/audit";
 import Widget from "@/pages/widget";
+import Account from "@/pages/account";
 
 import { AppLayout } from "@/components/layout/app-layout";
 import { useAuth } from "@/hooks/use-auth";
@@ -61,6 +62,7 @@ function Router() {
       <Route path="/widget"><ProtectedRoute component={Widget} /></Route>
       <Route path="/audit"><ProtectedRoute component={Audit} /></Route>
       <Route path="/admin"><ProtectedRoute component={Admin} /></Route>
+      <Route path="/account"><ProtectedRoute component={Account} /></Route>
       <Route component={NotFound} />
     </Switch>
   );

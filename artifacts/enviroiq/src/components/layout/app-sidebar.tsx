@@ -1,7 +1,7 @@
 import { Link, useLocation } from "wouter";
 import { 
   BarChart3, Car, Zap, Target, FileText, Settings, Users, 
-  ShieldAlert, Shield, LogOut, Leaf
+  ShieldAlert, Shield, LogOut, Leaf, UserCircle
 } from "lucide-react";
 import {
   Sidebar,
@@ -97,12 +97,15 @@ export function AppSidebar() {
       </SidebarContent>
 
       <SidebarFooter className="p-4 border-t border-border/50">
-        <div className="flex items-center justify-between">
-          <div className="flex flex-col overflow-hidden">
-            <span className="text-sm font-medium text-foreground truncate">{session?.name || session?.email}</span>
-            <span className="text-xs text-muted-foreground capitalize truncate">{session?.role.replace('_', ' ')}</span>
-          </div>
-          <Button variant="ghost" size="icon" onClick={logout} className="hover-elevate text-muted-foreground hover:text-destructive">
+        <div className="flex items-center justify-between gap-2">
+          <Link href="/account" className="flex items-center gap-2 flex-1 min-w-0 rounded-md hover:bg-muted/50 transition-colors px-1 py-1 -mx-1 group">
+            <UserCircle className="w-5 h-5 text-muted-foreground group-hover:text-primary flex-shrink-0 transition-colors" />
+            <div className="flex flex-col overflow-hidden">
+              <span className="text-sm font-medium text-foreground truncate">{session?.name || session?.email}</span>
+              <span className="text-xs text-muted-foreground capitalize truncate">{session?.role.replace('_', ' ')}</span>
+            </div>
+          </Link>
+          <Button variant="ghost" size="icon" onClick={logout} className="hover-elevate text-muted-foreground hover:text-destructive flex-shrink-0">
             <LogOut className="w-4 h-4" />
           </Button>
         </div>
