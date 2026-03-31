@@ -1929,6 +1929,24 @@ components:
           type: string
         co2eKg:
           type: number
+        gridIntensityKgCo2PerKwh:
+          type: number
+          description: Electricity emission factor used for this reading (kg CO₂e/kWh)
+        emissionMethod:
+          type: string
+          description: GHG Protocol method used to determine the emission factor
+          enum:
+            - location_based_annual_avg
+            - location_based_live_em6
+            - location_based_default
+            - market_based_100pct_renewable
+            - market_based_partial_renewable
+        emissionNote:
+          type: string
+          description: Human-readable description of the emission factor calculation
+        supplierRenewablePct:
+          type: number
+          description: Percentage of supplier electricity from renewable sources (0-100)
         source:
           type: string
           enum: [manual, pdf_upload, email_inbound]

@@ -1,11 +1,12 @@
 import { useCallback, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
-import { useListEnergyReadings, useUploadEnergyBill, useGetEnergyEmailAddress, UploadEnergyBillBodyUtilityType } from "@workspace/api-client-react";
+import { useListEnergyReadings, useGetEnergyEmailAddress } from "@workspace/api-client-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Zap, Upload, Mail, FileText, Loader2, Copy, Check, Leaf, Wind } from "lucide-react";
+import { Zap, Upload, Mail, FileText, Loader2, Copy, Check, Leaf, Wind, Info } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useDropzone } from "react-dropzone";
 import { useToast } from "@/hooks/use-toast";
 import { format, formatDistanceToNow } from "date-fns";
@@ -91,32 +92,59 @@ export default function Energy() {
   const { session } = useAuth();
   const orgId = session?.organisationId;
   const { toast } = useToast();
+  const qc = useQueryClient();
   
   const { data: readings, isLoading } = useListEnergyReadings(orgId!, undefined, { query: { enabled: !!orgId } });
   const { data: emailInfo } = useGetEnergyEmailAddress(orgId!, { query: { enabled: !!orgId } });
-  const uploadBill = useUploadEnergyBill();
 
   const [isUploadOpen, setIsUploadOpen] = useState(false);
-  type UtilityTypeKey = keyof typeof UploadEnergyBillBodyUtilityType;
-  const [utilityType, setUtilityType] = useState<UtilityTypeKey>("electricity");
+  const [isUploading, setIsUploading] = useState(false);
+  const [utilityType, setUtilityType] = useState("electricity");
+  const [provider, setProvider] = useState("");
+  const [supplierRenewablePct, setSupplierRenewablePct] = useState<number | "">("");
+  const [periodStartOverride, setPeriodStartOverride] = useState("");
+  const [periodEndOverride, setPeriodEndOverride] = useState("");
   const [copied, setCopied] = useState(false);
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     const file = acceptedFiles[0];
-    if (!file) return;
+    if (!file || !orgId) return;
 
+    setIsUploading(true);
     try {
-      await uploadBill.mutateAsync({
-        orgId: orgId!,
-        data: { file, utilityType }
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("utilityType", utilityType);
+      if (provider) fd.append("provider", provider);
+      if (supplierRenewablePct !== "") fd.append("supplierRenewablePct", String(supplierRenewablePct));
+      if (periodStartOverride) fd.append("periodStartOverride", periodStartOverride);
+      if (periodEndOverride) fd.append("periodEndOverride", periodEndOverride);
+
+      const res = await fetch(`/api/organisations/${orgId}/energy/upload`, {
+        method: "POST",
+        body: fd,
+        credentials: "include",
       });
-      toast({ title: "Bill uploaded successfully", description: "Data is being processed." });
+      if (!res.ok) throw new Error((await res.json() as {message?: string}).message ?? "Upload failed");
+      const result = await res.json() as { emissionFactorUsed?: { method: string; note: string } };
+
+      await qc.invalidateQueries({ queryKey: ["listEnergyReadings", orgId] });
+      toast({
+        title: "Bill uploaded",
+        description: result.emissionFactorUsed?.note ?? "Data processed successfully.",
+      });
       setIsUploadOpen(false);
+      setProvider("");
+      setSupplierRenewablePct("");
+      setPeriodStartOverride("");
+      setPeriodEndOverride("");
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : "Upload failed";
       toast({ variant: "destructive", title: "Upload failed", description: message });
+    } finally {
+      setIsUploading(false);
     }
-  }, [orgId, utilityType, uploadBill, toast]);
+  }, [orgId, utilityType, provider, supplierRenewablePct, periodStartOverride, periodEndOverride, qc, toast]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({ 
     onDrop, 
@@ -149,22 +177,109 @@ export default function Energy() {
               <Upload className="w-4 h-4 mr-2" /> Upload Bill PDF
             </Button>
           </DialogTrigger>
-          <DialogContent className="bg-card border-border sm:max-w-[500px]">
+          <DialogContent className="bg-card border-border sm:max-w-[540px]">
             <DialogHeader>
               <DialogTitle>Upload Energy Bill</DialogTitle>
             </DialogHeader>
-            <div className="py-4 space-y-4">
+            <div className="py-4 space-y-4 max-h-[70vh] overflow-y-auto pr-1">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-sm font-medium mb-2 block">Utility Type</label>
+                  <select 
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                    value={utilityType}
+                    onChange={(e) => setUtilityType(e.target.value)}
+                  >
+                    <option value="electricity">Electricity</option>
+                    <option value="gas">Gas</option>
+                    <option value="water">Water</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-sm font-medium mb-2 block">Supplier / Provider</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Contact Energy"
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                    value={provider}
+                    onChange={(e) => setProvider(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              {utilityType === "electricity" && (
+                <div className="rounded-xl border border-emerald-800/30 bg-emerald-950/20 p-4 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Leaf className="w-4 h-4 text-emerald-400" />
+                    <span className="text-sm font-medium text-emerald-300">Renewable Source</span>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Info className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
+                      </TooltipTrigger>
+                      <TooltipContent className="max-w-xs text-xs">
+                        If your supplier sources from solar, wind, or hydro under a renewable tariff or PPA, set the renewable % here. 
+                        EnviroIQ applies the GHG Protocol market-based method — a 100% renewable supplier results in 0 kg CO₂e.
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      step={5}
+                      value={supplierRenewablePct === "" ? 0 : supplierRenewablePct}
+                      onChange={(e) => setSupplierRenewablePct(Number(e.target.value))}
+                      className="flex-1 accent-emerald-500"
+                    />
+                    <span className="text-sm font-semibold text-emerald-400 w-12 text-right">
+                      {supplierRenewablePct === "" ? "0" : supplierRenewablePct}%
+                    </span>
+                    {supplierRenewablePct !== "" && Number(supplierRenewablePct) > 0 && (
+                      <button onClick={() => setSupplierRenewablePct("")} className="text-xs text-muted-foreground hover:text-foreground">reset</button>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {supplierRenewablePct === "" || Number(supplierRenewablePct) === 0
+                      ? "Using NZ grid average for this billing period."
+                      : Number(supplierRenewablePct) === 100
+                      ? "100% renewable → 0 kg CO₂e (market-based method)."
+                      : `${supplierRenewablePct}% renewable → ${(100 - Number(supplierRenewablePct))}% at grid average rate.`
+                    }
+                  </p>
+                </div>
+              )}
+
               <div>
-                <label className="text-sm font-medium mb-2 block">Utility Type</label>
-                <select 
-                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                  value={utilityType}
-                  onChange={(e) => setUtilityType(e.target.value as UtilityTypeKey)}
-                >
-                  <option value="electricity">Electricity</option>
-                  <option value="gas">Gas</option>
-                  <option value="water">Water</option>
-                </select>
+                <div className="flex items-center gap-2 mb-2">
+                  <label className="text-sm font-medium">Billing Period</label>
+                  <span className="text-xs text-muted-foreground">(optional — defaults to last month)</span>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs text-muted-foreground mb-1 block">From</label>
+                    <input
+                      type="date"
+                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                      value={periodStartOverride}
+                      onChange={(e) => setPeriodStartOverride(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted-foreground mb-1 block">To</label>
+                    <input
+                      type="date"
+                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                      value={periodEndOverride}
+                      onChange={(e) => setPeriodEndOverride(e.target.value)}
+                    />
+                  </div>
+                </div>
+                {periodStartOverride && (
+                  <p className="text-xs text-muted-foreground mt-1.5">
+                    EnviroIQ will use the official NZ grid emission factor for {new Date(periodStartOverride).getFullYear()} when calculating emissions.
+                  </p>
+                )}
               </div>
               
               <div 
@@ -184,9 +299,9 @@ export default function Energy() {
                 </p>
                 <p className="text-xs text-muted-foreground">or click to browse files</p>
                 
-                {uploadBill.isPending && (
+                {isUploading && (
                   <div className="mt-4 flex items-center justify-center text-sm text-primary">
-                    <Loader2 className="w-4 h-4 animate-spin mr-2" /> Uploading & parsing...
+                    <Loader2 className="w-4 h-4 animate-spin mr-2" /> Uploading & calculating emissions...
                   </div>
                 )}
               </div>
@@ -230,38 +345,59 @@ export default function Energy() {
                 <th className="px-6 py-4">Period</th>
                 <th className="px-6 py-4">Utility / Provider</th>
                 <th className="px-6 py-4">Usage</th>
-                <th className="px-6 py-4">Cost</th>
-                <th className="px-6 py-4">Source</th>
-                <th className="px-6 py-4 text-right">CO₂e Impact</th>
+                <th className="px-6 py-4">Emission Factor</th>
+                <th className="px-6 py-4 text-right">CO₂e</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border/50">
-              {readings?.items.map((reading) => (
+              {readings?.items.map((reading) => {
+                const isRenewable = reading.emissionMethod?.includes("renewable");
+                const isLive = reading.emissionMethod?.includes("live_em6");
+                const isHistorical = reading.emissionMethod?.includes("annual_avg");
+                const factorG = reading.gridIntensityKgCo2PerKwh != null
+                  ? (reading.gridIntensityKgCo2PerKwh * 1000).toFixed(1) + " g/kWh"
+                  : null;
+
+                return (
                 <tr key={reading.id} className="hover:bg-secondary/20 transition-colors">
                   <td className="px-6 py-4 whitespace-nowrap text-foreground font-medium">
-                    {format(new Date(reading.periodStart), "MMM d")} - {format(new Date(reading.periodEnd), "MMM d, yyyy")}
+                    {format(new Date(reading.periodStart), "MMM d")} – {format(new Date(reading.periodEnd), "MMM d, yyyy")}
                   </td>
                   <td className="px-6 py-4">
-                    <div className="flex items-center gap-2">
-                      <Zap className={`w-4 h-4 ${reading.utilityType === 'electricity' ? 'text-yellow-500' : 'text-blue-400'}`} />
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Zap className={`w-4 h-4 shrink-0 ${reading.utilityType === 'electricity' ? 'text-yellow-500' : 'text-blue-400'}`} />
                       <span className="capitalize">{reading.utilityType}</span>
-                      {reading.provider && <span className="text-muted-foreground text-xs block">• {reading.provider}</span>}
+                      {reading.provider && <span className="text-muted-foreground text-xs">· {reading.provider}</span>}
                     </div>
                   </td>
                   <td className="px-6 py-4 font-medium">{reading.usageKwh ? `${reading.usageKwh.toLocaleString()} kWh` : '-'}</td>
-                  <td className="px-6 py-4 text-muted-foreground">
-                    {reading.costAmount ? `${reading.costAmount} ${reading.costCurrency || 'USD'}` : '-'}
-                  </td>
                   <td className="px-6 py-4">
-                    <span className="px-2.5 py-1 bg-secondary rounded-full text-xs capitalize">
-                      {reading.source.replace('_', ' ')}
+                    {reading.utilityType === "electricity" && reading.emissionNote ? (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium cursor-help ${
+                            isRenewable ? "bg-emerald-900/40 text-emerald-300" :
+                            isLive ? "bg-blue-900/40 text-blue-300" :
+                            isHistorical ? "bg-violet-900/40 text-violet-300" :
+                            "bg-secondary text-muted-foreground"
+                          }`}>
+                            {isRenewable && <Leaf className="w-3 h-3" />}
+                            {factorG ?? (isRenewable ? "0 g/kWh" : "—")}
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent className="max-w-xs text-xs">{reading.emissionNote}</TooltipContent>
+                      </Tooltip>
+                    ) : (
+                      <span className="text-muted-foreground text-xs">—</span>
+                    )}
+                  </td>
+                  <td className="px-6 py-4 text-right">
+                    <span className={`font-medium ${reading.co2eKg === 0 ? "text-emerald-400" : reading.co2eKg ? "text-foreground" : "text-muted-foreground"}`}>
+                      {reading.co2eKg != null ? `${reading.co2eKg.toLocaleString(undefined, {maximumFractionDigits: 2})} kg` : '—'}
                     </span>
                   </td>
-                  <td className="px-6 py-4 text-right text-emerald-400 font-medium">
-                    {reading.co2eKg ? `${reading.co2eKg.toLocaleString()} kg` : '-'}
-                  </td>
                 </tr>
-              ))}
+              );})}
               {(!readings?.items || readings.items.length === 0) && (
                 <tr><td colSpan={6} className="px-6 py-12 text-center text-muted-foreground">No energy readings yet. Upload your first bill.</td></tr>
               )}

@@ -426,6 +426,17 @@ export const EnergyReadingSource = {
   email_inbound: "email_inbound",
 } as const;
 
+export type EnergyReadingEmissionMethod =
+  (typeof EnergyReadingEmissionMethod)[keyof typeof EnergyReadingEmissionMethod];
+
+export const EnergyReadingEmissionMethod = {
+  location_based_annual_avg: "location_based_annual_avg",
+  location_based_live_em6: "location_based_live_em6",
+  location_based_default: "location_based_default",
+  market_based_100pct_renewable: "market_based_100pct_renewable",
+  market_based_partial_renewable: "market_based_partial_renewable",
+} as const;
+
 export interface EnergyReading {
   id: string;
   organisationId: string;
@@ -438,6 +449,10 @@ export interface EnergyReading {
   costAmount?: number;
   costCurrency?: string;
   co2eKg?: number;
+  gridIntensityKgCo2PerKwh?: number;
+  emissionMethod?: EnergyReadingEmissionMethod;
+  emissionNote?: string;
+  supplierRenewablePct?: number;
   source: EnergyReadingSource;
   originalFileName?: string;
   createdAt: string;

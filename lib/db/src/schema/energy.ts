@@ -14,6 +14,11 @@ export const energyReadingsTable = pgTable("energy_readings", {
   costAmount: real("cost_amount"),
   costCurrency: text("cost_currency").default("NZD"),
   co2eKg: real("co2e_kg"),
+  // Emission factor provenance — which kg CO2e/kWh was used and why
+  gridIntensityKgCo2PerKwh: real("grid_intensity_kg_co2_per_kwh"),
+  emissionMethod: text("emission_method"),   // e.g. "location_based_annual_avg", "market_based_100pct_renewable"
+  emissionNote: text("emission_note"),        // human-readable explanation of the factor chosen
+  supplierRenewablePct: real("supplier_renewable_pct"), // 0-100, from supplier contract
   source: text("source").notNull().default("manual"),
   originalFileName: text("original_file_name"),
   rawText: text("raw_text"),

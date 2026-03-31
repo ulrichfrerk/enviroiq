@@ -5,7 +5,8 @@ import { v4 as uuidv4 } from "uuid";
 import multer from "multer";
 import { requireAuth, requireOrgAccess, requireOrgAdmin } from "../lib/auth.js";
 import { logAudit } from "../lib/audit.js";
-import { calcEnergyCo2e } from "../lib/emissions.js";
+import { calcEnergyCo2e, resolveElectricityFactor } from "../lib/emissions.js";
+import { getCurrentGridIntensity } from "../lib/em6.js";
 
 const router = Router({ mergeParams: true });
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -41,26 +42,40 @@ router.get("/readings", requireAuth, requireOrgAccess, async (req, res) => {
 router.post("/readings", requireAuth, requireOrgAdmin, async (req, res) => {
   try {
     const orgId = req.params.orgId as string;
-    const { utilityType, provider, periodStart, periodEnd, usageKwh, usageMj, costAmount, costCurrency } = req.body;
+    const { utilityType, provider, periodStart, periodEnd, usageKwh, usageMj, costAmount, costCurrency, supplierRenewablePct } = req.body;
     if (!utilityType || !periodStart || !periodEnd) {
       res.status(400).json({ error: "Bad Request", message: "utilityType, periodStart, periodEnd required" });
       return;
     }
 
-    const co2eKg = calcEnergyCo2e({ utilityType, usageKwh, usageMj });
+    const periodStartDate = new Date(periodStart);
+    const isCurrentPeriod = periodStartDate.getFullYear() >= new Date().getFullYear();
+    const liveGrid = isCurrentPeriod ? await getCurrentGridIntensity() : null;
+
+    const { factorKgCo2PerKwh, method, note } = resolveElectricityFactor({
+      periodStart: periodStartDate,
+      supplierRenewablePct: supplierRenewablePct !== undefined ? Number(supplierRenewablePct) : undefined,
+      liveGridKgCo2PerKwh: liveGrid?.kgco2PerKwh,
+    });
+
+    const co2eKg = calcEnergyCo2e({ utilityType, usageKwh, usageMj, electricityFactorKgCo2PerKwh: factorKgCo2PerKwh });
 
     const [reading] = await db.insert(energyReadingsTable).values({
       id: uuidv4(),
       organisationId: orgId,
       utilityType,
       provider,
-      periodStart: new Date(periodStart),
+      periodStart: periodStartDate,
       periodEnd: new Date(periodEnd),
       usageKwh,
       usageMj,
       costAmount,
       costCurrency: costCurrency || "NZD",
       co2eKg,
+      gridIntensityKgCo2PerKwh: utilityType === "electricity" ? factorKgCo2PerKwh : undefined,
+      emissionMethod: utilityType === "electricity" ? method : undefined,
+      emissionNote: utilityType === "electricity" ? note : undefined,
+      supplierRenewablePct: supplierRenewablePct !== undefined ? Number(supplierRenewablePct) : undefined,
       source: "manual",
     }).returning();
 
@@ -76,7 +91,7 @@ router.post("/readings", requireAuth, requireOrgAdmin, async (req, res) => {
 router.post("/upload", requireAuth, requireOrgAdmin, upload.single("file"), async (req, res) => {
   try {
     const orgId = req.params.orgId as string;
-    const { utilityType } = req.body;
+    const { utilityType, supplierRenewablePct, periodStartOverride, periodEndOverride, provider } = req.body;
 
     if (!req.file) {
       res.status(400).json({ error: "Bad Request", message: "File required" });
@@ -96,22 +111,42 @@ router.post("/upload", requireAuth, requireOrgAdmin, upload.single("file"), asyn
     const usageKwh = kwhMatch ? parseFloat(kwhMatch[1]) : undefined;
     const costAmount = costMatch ? parseFloat(costMatch[1]) : undefined;
 
-    // Default period: last month
+    // Use user-supplied dates if provided, otherwise default to last month
     const now = new Date();
-    const periodEnd = new Date(now.getFullYear(), now.getMonth(), 0); // last day of prev month
-    const periodStart = new Date(now.getFullYear(), now.getMonth() - 1, 1); // first day of prev month
+    const periodStart = periodStartOverride
+      ? new Date(periodStartOverride)
+      : new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const periodEnd = periodEndOverride
+      ? new Date(periodEndOverride)
+      : new Date(now.getFullYear(), now.getMonth(), 0);
 
-    const co2eKg = calcEnergyCo2e({ utilityType, usageKwh });
+    // Determine the correct emission factor for the billing period
+    const isCurrentYear = periodStart.getFullYear() >= now.getFullYear();
+    const liveGrid = isCurrentYear ? await getCurrentGridIntensity() : null;
+    const renewablePct = supplierRenewablePct !== undefined ? Number(supplierRenewablePct) : undefined;
+
+    const { factorKgCo2PerKwh, method, note } = resolveElectricityFactor({
+      periodStart,
+      supplierRenewablePct: renewablePct,
+      liveGridKgCo2PerKwh: liveGrid?.kgco2PerKwh,
+    });
+
+    const co2eKg = calcEnergyCo2e({ utilityType, usageKwh, electricityFactorKgCo2PerKwh: factorKgCo2PerKwh });
 
     const [reading] = await db.insert(energyReadingsTable).values({
       id: uuidv4(),
       organisationId: orgId,
       utilityType,
+      provider: provider || undefined,
       periodStart,
       periodEnd,
       usageKwh,
       costAmount,
       co2eKg,
+      gridIntensityKgCo2PerKwh: utilityType === "electricity" ? factorKgCo2PerKwh : undefined,
+      emissionMethod: utilityType === "electricity" ? method : undefined,
+      emissionNote: utilityType === "electricity" ? note : undefined,
+      supplierRenewablePct: renewablePct,
       source: "pdf_upload",
       originalFileName: req.file.originalname,
       rawText: fileText.substring(0, 1000),
@@ -122,12 +157,13 @@ router.post("/upload", requireAuth, requireOrgAdmin, upload.single("file"), asyn
       action: "energy_bill.upload",
       resourceType: "energy_reading",
       resourceId: reading.id,
-      details: { filename: req.file.originalname },
+      details: { filename: req.file.originalname, period: `${periodStart.toISOString().slice(0, 7)}`, emissionMethod: method },
     });
 
     res.status(201).json({
       reading,
       parsedFields: { usageKwh, cost: costAmount, periodStart, periodEnd },
+      emissionFactorUsed: { factorKgCo2PerKwh, method, note },
       confidence: usageKwh ? 0.7 : 0.2,
       requiresReview: !usageKwh,
     });
@@ -214,6 +250,8 @@ energyEmailWebhookRouter.post("/inbound-email", async (req, res) => {
     );
 
     const insertedIds: string[] = [];
+    const liveGrid = await getCurrentGridIntensity();
+
     for (const attachment of pdfAttachments) {
       const content = attachment.content || "";
       const kwhMatch = content.match(/(\d+(?:\.\d+)?)\s*(?:kWh|KWH)/i);
@@ -223,6 +261,11 @@ energyEmailWebhookRouter.post("/inbound-email", async (req, res) => {
       const periodEnd = new Date(now.getFullYear(), now.getMonth(), 0);
       const periodStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
 
+      const { factorKgCo2PerKwh, method, note } = resolveElectricityFactor({
+        periodStart,
+        liveGridKgCo2PerKwh: liveGrid?.kgco2PerKwh,
+      });
+
       const readingId = uuidv4();
       await db.insert(energyReadingsTable).values({
         id: readingId,
@@ -231,7 +274,10 @@ energyEmailWebhookRouter.post("/inbound-email", async (req, res) => {
         periodStart,
         periodEnd,
         usageKwh,
-        co2eKg: calcEnergyCo2e({ utilityType: "electricity", usageKwh }),
+        co2eKg: calcEnergyCo2e({ utilityType: "electricity", usageKwh, electricityFactorKgCo2PerKwh: factorKgCo2PerKwh }),
+        gridIntensityKgCo2PerKwh: factorKgCo2PerKwh,
+        emissionMethod: method,
+        emissionNote: note,
         source: "email_inbound",
         originalFileName: attachment.filename,
         rawText: `From: ${from}\nSubject: ${subject}\n${text || ""}`.substring(0, 1000),
