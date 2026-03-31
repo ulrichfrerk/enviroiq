@@ -22,29 +22,42 @@ const router = Router();
 
 const RP_NAME = "EnviroIQ";
 
-// Derive safe RP_ID and ORIGIN from explicit env vars or Replit runtime domain.
-// Fail fast in production if neither is provided.
-function resolveWebAuthnConfig() {
-  const isDev = process.env.NODE_ENV !== "production";
+// Derive WebAuthn RP_ID and ORIGIN dynamically per-request so the same server
+// binary works on enviroiq.net (production) and the Replit dev domain simultaneously.
+// Explicit env vars always win (production deployment sets RP_ID + ORIGIN).
+// Fallback: extract from the browser's Origin request header — the browser always
+// sends the exact origin it is running on, so this is safe and correct.
+function getWebAuthnConfig(req: import("express").Request): { rpId: string; origin: string } {
+  if (process.env.RP_ID && process.env.ORIGIN) {
+    return { rpId: process.env.RP_ID, origin: process.env.ORIGIN };
+  }
+
+  const rawOrigin = req.headers.origin as string | undefined;
+  if (rawOrigin) {
+    try {
+      const url = new URL(rawOrigin);
+      return { rpId: url.hostname, origin: rawOrigin };
+    } catch {
+      // fall through to env-based defaults below
+    }
+  }
+
+  // Last-resort fallback using server-known domains (dev only)
   const replitDev = process.env.REPLIT_DEV_DOMAIN;
   const replitApp = process.env.REPLIT_DOMAINS?.split(",")[0]?.trim();
+  const fallbackHost =
+    process.env.RP_ID ||
+    (replitApp ? replitApp.replace(/^https?:\/\//, "") : null) ||
+    (replitDev ? replitDev.replace(/^https?:\/\//, "") : null) ||
+    "localhost";
+  const fallbackOrigin =
+    process.env.ORIGIN ||
+    (replitApp ? `https://${fallbackHost}` : null) ||
+    (replitDev ? `https://${fallbackHost}` : null) ||
+    "http://localhost";
 
-  const rpId: string = process.env.RP_ID
-    || (replitApp ? replitApp.replace(/^https?:\/\//, "") : null)
-    || (replitDev ? replitDev.replace(/^https?:\/\//, "") : null)
-    || (isDev ? "localhost" : null)
-    || (() => { throw new Error("RP_ID env var required in production"); })();
-
-  const origin: string = process.env.ORIGIN
-    || (replitApp ? `https://${replitApp.replace(/^https?:\/\//, "")}` : null)
-    || (replitDev ? `https://${replitDev.replace(/^https?:\/\//, "")}` : null)
-    || (isDev ? "http://localhost" : null)
-    || (() => { throw new Error("ORIGIN env var required in production"); })();
-
-  return { rpId, origin };
+  return { rpId: fallbackHost, origin: fallbackOrigin };
 }
-
-const { rpId: RP_ID, origin: ORIGIN } = resolveWebAuthnConfig();
 
 // GET /auth/session
 router.get("/session", (req, res) => {
@@ -104,9 +117,10 @@ router.post("/passkey/register/begin", async (req, res) => {
       where: eq(passkeysTable.userId, user.id),
     });
 
+    const { rpId, origin: _originReg } = getWebAuthnConfig(req);
     const options = await generateRegistrationOptions({
       rpName: RP_NAME,
-      rpID: RP_ID,
+      rpID: rpId,
       userName: user.email,
       userDisplayName: user.name,
       userID: Buffer.from(user.id),
@@ -173,11 +187,12 @@ router.post("/passkey/register/complete", async (req, res) => {
       return;
     }
 
+    const { rpId: rpIdReg, origin: originReg } = getWebAuthnConfig(req);
     const verification = await verifyRegistrationResponse({
       response: credential,
       expectedChallenge: challengeRecord.challenge,
-      expectedOrigin: ORIGIN,
-      expectedRPID: RP_ID,
+      expectedOrigin: originReg,
+      expectedRPID: rpIdReg,
     });
 
     if (!verification.verified || !verification.registrationInfo) {
@@ -253,8 +268,9 @@ router.post("/passkey/authenticate/begin", async (req, res) => {
       }
     }
 
+    const { rpId: rpIdAuth } = getWebAuthnConfig(req);
     const options = await generateAuthenticationOptions({
-      rpID: RP_ID,
+      rpID: rpIdAuth,
       allowCredentials,
       userVerification: "preferred",
     });
@@ -313,11 +329,12 @@ router.post("/passkey/authenticate/complete", async (req, res) => {
       return;
     }
 
+    const { rpId: rpIdVerify, origin: originVerify } = getWebAuthnConfig(req);
     const verification = await verifyAuthenticationResponse({
       response: credential,
       expectedChallenge: challengeRecord.challenge,
-      expectedOrigin: ORIGIN,
-      expectedRPID: RP_ID,
+      expectedOrigin: originVerify,
+      expectedRPID: rpIdVerify,
       credential: {
         id: passkey.credentialId,
         publicKey: Buffer.from(passkey.credentialPublicKey, "base64"),

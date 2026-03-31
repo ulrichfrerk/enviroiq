@@ -33,3 +33,5 @@ channel = "stable-25_05"
 
 [userenv.production]
 APP_URL = "https://enviroiq.net"
+RP_ID = "enviroiq.net"
+ORIGIN = "https://enviroiq.net"
