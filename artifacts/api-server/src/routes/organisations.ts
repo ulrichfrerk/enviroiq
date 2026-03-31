@@ -23,8 +23,8 @@ function generateWebhookSecret(): string {
 }
 
 function generateInboundEmail(slug: string): string {
-  const domain = process.env.INBOUND_EMAIL_DOMAIN || "bills.enviroiq.app";
-  return `${slug}-${uuidv4().substring(0, 8)}@${domain}`;
+  const domain = process.env.INBOUND_EMAIL_DOMAIN || "enviroiq.net";
+  return `${slug}@${domain}`;
 }
 
 // GET /organisations

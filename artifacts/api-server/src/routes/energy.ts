@@ -190,8 +190,16 @@ energyEmailWebhookRouter.post("/inbound-email", async (req, res) => {
       return;
     }
 
+    // Extract bare email address — email services sometimes send "Display Name <addr>" or ["addr1","addr2"]
+    function extractEmail(raw: string | string[]): string {
+      const str = Array.isArray(raw) ? raw[0] : raw;
+      const match = str.match(/<([^>]+)>/);
+      return (match ? match[1] : str).trim().toLowerCase();
+    }
+    const toEmail = extractEmail(to);
+
     const org = await db.query.organisationsTable.findFirst({
-      where: eq(organisationsTable.inboundEmailAddress, to),
+      where: eq(organisationsTable.inboundEmailAddress, toEmail),
     });
 
     if (!org) {
