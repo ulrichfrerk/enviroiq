@@ -71,6 +71,19 @@ function buildAllowedOrigins(): string[] {
 
 const corsOrigins = buildAllowedOrigins();
 
+// Public grid intensity endpoint — open CORS, no credentials needed.
+app.use("/api/grid", (req: Request, res: Response, next: NextFunction) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.removeHeader("Access-Control-Allow-Credentials");
+  if (req.method === "OPTIONS") {
+    res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    res.sendStatus(204);
+    return;
+  }
+  next();
+});
+
 // Public widget endpoints need open CORS for cross-origin embedding.
 // This runs BEFORE the global CORS middleware and explicitly sets the final headers.
 // The Access-Control-Allow-Credentials header must NOT be true alongside '*' origin.
@@ -89,7 +102,7 @@ app.use("/api/widget", (req: Request, res: Response, next: NextFunction) => {
 // All other API routes use the explicit allowlist with credentials.
 // Widget routes are excluded — they have their own open CORS policy above.
 app.use((req: Request, res: Response, next: NextFunction) => {
-  if (req.path.startsWith("/api/widget/")) { next(); return; }
+  if (req.path.startsWith("/api/widget/") || req.path.startsWith("/api/grid/")) { next(); return; }
   cors({
     origin: corsOrigins.length > 0 ? corsOrigins : false,
     credentials: true,

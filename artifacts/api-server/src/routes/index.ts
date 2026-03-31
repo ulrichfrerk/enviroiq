@@ -11,6 +11,7 @@ import reportsRouter from "./reports.js";
 import widgetRouter, { widgetPublicRouter } from "./widget.js";
 import auditRouter, { globalAuditRouter } from "./audit.js";
 import adminRouter from "./admin.js";
+import gridRouter from "./grid.js";
 
 const router = Router();
 
@@ -41,5 +42,8 @@ router.use("/widget", widgetPublicRouter);
 // Admin
 router.use("/admin", adminRouter);
 router.use("/admin/audit-logs", globalAuditRouter);
+
+// Public grid intensity (no auth, open CORS handled in app.ts)
+router.use("/grid", gridRouter);
 
 export default router;

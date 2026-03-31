@@ -3,6 +3,7 @@ import { eq, sql } from "drizzle-orm";
 import { logger } from "./logger.js";
 import { calcSustainabilityScore } from "./emissions.js";
 import { sqlRow, numCol } from "./sql-result.js";
+import { fetchAndStoreEm6Intensity, clearIntensityCache } from "./em6.js";
 
 interface OrgMetrics {
   fleetCo2eKg: number;
@@ -89,7 +90,9 @@ async function refreshAllOrgMetrics(): Promise<void> {
 }
 
 let schedulerHandle: ReturnType<typeof setInterval> | null = null;
+let em6Handle: ReturnType<typeof setInterval> | null = null;
 const REFRESH_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
+const EM6_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes — matches em6 trading period
 
 export function startScheduler(): void {
   if (schedulerHandle) return;
@@ -98,14 +101,27 @@ export function startScheduler(): void {
     void refreshAllOrgMetrics();
   }, REFRESH_INTERVAL_MS);
   logger.info({ intervalMs: REFRESH_INTERVAL_MS }, "ESG metrics scheduler started");
+
+  // em6 NZ grid intensity — poll immediately and every 30 min
+  clearIntensityCache();
+  void fetchAndStoreEm6Intensity();
+  em6Handle = setInterval(() => {
+    clearIntensityCache();
+    void fetchAndStoreEm6Intensity();
+  }, EM6_INTERVAL_MS);
+  logger.info({ intervalMs: EM6_INTERVAL_MS }, "em6 NZ grid intensity poller started");
 }
 
 export function stopScheduler(): void {
   if (schedulerHandle) {
     clearInterval(schedulerHandle);
     schedulerHandle = null;
-    logger.info("ESG metrics scheduler stopped");
   }
+  if (em6Handle) {
+    clearInterval(em6Handle);
+    em6Handle = null;
+  }
+  logger.info("Schedulers stopped");
 }
 
 export { computeOrgMetrics };

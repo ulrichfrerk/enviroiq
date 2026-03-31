@@ -1,13 +1,91 @@
 import { useCallback, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
 import { useListEnergyReadings, useUploadEnergyBill, useGetEnergyEmailAddress, UploadEnergyBillBodyUtilityType } from "@workspace/api-client-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Zap, Upload, Mail, FileText, Loader2, Copy, Check } from "lucide-react";
+import { Zap, Upload, Mail, FileText, Loader2, Copy, Check, Leaf, Wind } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { useDropzone } from "react-dropzone";
 import { useToast } from "@/hooks/use-toast";
-import { format } from "date-fns";
+import { format, formatDistanceToNow } from "date-fns";
+
+interface GridIntensityData {
+  region: string;
+  tradingPeriodStart: string;
+  gco2PerKwh: number;
+  kgco2PerKwh: number;
+  renewablePct: number;
+  carbonTonnes: number;
+  fetchedAt: string;
+  source: string;
+}
+
+function GridIntensityBanner() {
+  const { data, isLoading, error } = useQuery<GridIntensityData>({
+    queryKey: ["nz-grid-intensity"],
+    queryFn: async () => {
+      const res = await fetch("/api/grid/nz");
+      if (!res.ok) throw new Error("Failed to fetch grid data");
+      return res.json() as Promise<GridIntensityData>;
+    },
+    refetchInterval: 30 * 60 * 1000,
+    staleTime: 25 * 60 * 1000,
+  });
+
+  if (isLoading) return null;
+  if (error || !data) return null;
+
+  const nzAvg = 97.7;
+  const pctOfAvg = Math.round((data.gco2PerKwh / nzAvg) * 100);
+  const isLow = data.gco2PerKwh < 60;
+  const isMed = data.gco2PerKwh >= 60 && data.gco2PerKwh < 100;
+
+  const intensityColor = isLow
+    ? "text-emerald-400"
+    : isMed
+    ? "text-amber-400"
+    : "text-red-400";
+  const intensityBg = isLow
+    ? "from-emerald-950/40 to-background border-emerald-800/30"
+    : isMed
+    ? "from-amber-950/40 to-background border-amber-800/30"
+    : "from-red-950/40 to-background border-red-800/30";
+
+  const label = isLow ? "Low — great time to use power" : isMed ? "Moderate" : "High — more fossil fuel on grid";
+
+  return (
+    <Card className={`p-5 bg-gradient-to-r ${intensityBg} border`}>
+      <div className="flex flex-col md:flex-row items-start md:items-center gap-4">
+        <div className={`p-3 rounded-xl shrink-0 ${isLow ? "bg-emerald-900/40" : isMed ? "bg-amber-900/40" : "bg-red-900/40"}`}>
+          <Leaf className={`w-6 h-6 ${intensityColor}`} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <span className="text-sm font-medium text-muted-foreground">NZ Live Grid Intensity</span>
+            <span className={`text-2xl font-bold tabular-nums ${intensityColor}`}>{data.gco2PerKwh.toFixed(1)}</span>
+            <span className="text-sm text-muted-foreground">gCO₂e/kWh</span>
+            <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${isLow ? "bg-emerald-900/50 text-emerald-300" : isMed ? "bg-amber-900/50 text-amber-300" : "bg-red-900/50 text-red-300"}`}>
+              {label}
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-x-5 gap-y-1 mt-1.5 text-xs text-muted-foreground">
+            <span className="flex items-center gap-1">
+              <Wind className="w-3 h-3" />
+              {data.renewablePct.toFixed(1)}% renewable
+            </span>
+            <span>{pctOfAvg}% of NZ yearly avg ({nzAvg} g)</span>
+            <span>Updated {formatDistanceToNow(new Date(data.fetchedAt), { addSuffix: true })}</span>
+          </div>
+        </div>
+        <div className="text-right shrink-0 hidden md:block">
+          <div className="text-xs text-muted-foreground/60">Source</div>
+          <div className="text-xs text-muted-foreground">em6 / EMS · Transpower NZ</div>
+        </div>
+      </div>
+    </Card>
+  );
+}
 
 export default function Energy() {
   const { session } = useAuth();
@@ -116,6 +194,8 @@ export default function Energy() {
           </DialogContent>
         </Dialog>
       </div>
+
+      <GridIntensityBanner />
 
       <Card className="p-6 bg-gradient-to-r from-secondary/40 to-background border-border">
         <div className="flex flex-col md:flex-row items-center gap-6">

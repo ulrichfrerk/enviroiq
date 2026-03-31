@@ -7,3 +7,4 @@ export * from "./reports";
 export * from "./widget";
 export * from "./audit";
 export * from "./emission-readings";
+export * from "./grid-intensity";
