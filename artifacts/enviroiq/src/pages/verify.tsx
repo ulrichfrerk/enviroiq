@@ -30,7 +30,8 @@ export default function Verify() {
         onSuccess: () => {
           queryClient.invalidateQueries({ queryKey: ["/api/auth/session"] });
           setStatus("success");
-          setTimeout(() => setLocation("/dashboard"), 1500);
+          // Redirect to account page so user can enroll a passkey for future logins
+          setTimeout(() => setLocation("/account?setup=passkey"), 1500);
         },
         onError: (err: unknown) => {
           setStatus("error");
