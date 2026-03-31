@@ -8,6 +8,25 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Layer 4.0 SiteSentinel -->
+    <script>
+    (function(){
+      var t="21b7b56d1c699666c5ca0a2d97db1580296698e22e0ec981",u="https://4layers.net/api/sentinel/beacon";
+      var d={url:location.href,referrer:document.referrer,title:document.title};
+      try{
+        var p=performance.getEntriesByType("navigation")[0];
+        if(p){d.loadTime=Math.round(p.loadEventEnd-p.startTime);d.domReady=Math.round(p.domContentLoadedEventEnd-p.startTime);d.ttfb=Math.round(p.responseStart-p.requestStart);}
+      }catch(e){}
+      d.https=location.protocol==="https:";
+      d.viewport=document.querySelector('meta[name="viewport"]')?"yes":"no";
+      d.doctype=document.doctype?"yes":"no";
+      var r=document.querySelectorAll('script[src*="http://"]');d.mixedScripts=r.length;
+      var x=new XMLHttpRequest();
+      x.open("POST",u,true);
+      x.setRequestHeader("Content-Type","application/json");
+      x.send(JSON.stringify({token:t,url:location.href,clientMetrics:d}));
+    })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
