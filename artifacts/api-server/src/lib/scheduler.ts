@@ -3,7 +3,7 @@ import { eq, sql } from "drizzle-orm";
 import { logger } from "./logger.js";
 import { calcSustainabilityScore } from "./emissions.js";
 import { sqlRow, numCol } from "./sql-result.js";
-import { fetchAndStoreEm6Intensity, clearIntensityCache } from "./em6.js";
+import { fetchAndStoreEm6Intensity, clearIntensityCache, pruneOldGridSnapshots } from "./em6.js";
 
 interface OrgMetrics {
   fleetCo2eKg: number;
@@ -91,8 +91,10 @@ async function refreshAllOrgMetrics(): Promise<void> {
 
 let schedulerHandle: ReturnType<typeof setInterval> | null = null;
 let em6Handle: ReturnType<typeof setInterval> | null = null;
-const REFRESH_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
-const EM6_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes — matches em6 trading period
+let pruneHandle: ReturnType<typeof setInterval> | null = null;
+const REFRESH_INTERVAL_MS = 15 * 60 * 1000;     // 15 minutes
+const EM6_INTERVAL_MS = 30 * 60 * 1000;          // 30 minutes — matches em6 trading period
+const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;   // 24 hours
 
 export function startScheduler(): void {
   if (schedulerHandle) return;
@@ -110,6 +112,14 @@ export function startScheduler(): void {
     void fetchAndStoreEm6Intensity();
   }, EM6_INTERVAL_MS);
   logger.info({ intervalMs: EM6_INTERVAL_MS }, "em6 NZ grid intensity poller started");
+
+  // Daily retention cleanup — delete grid snapshots older than 13 months
+  // Run once at startup (in case the server was down for a while) then every 24h
+  void pruneOldGridSnapshots();
+  pruneHandle = setInterval(() => {
+    void pruneOldGridSnapshots();
+  }, PRUNE_INTERVAL_MS);
+  logger.info({ intervalMs: PRUNE_INTERVAL_MS, retentionMonths: 13 }, "Grid intensity prune job scheduled");
 }
 
 export function stopScheduler(): void {
@@ -120,6 +130,10 @@ export function stopScheduler(): void {
   if (em6Handle) {
     clearInterval(em6Handle);
     em6Handle = null;
+  }
+  if (pruneHandle) {
+    clearInterval(pruneHandle);
+    pruneHandle = null;
   }
   logger.info("Schedulers stopped");
 }

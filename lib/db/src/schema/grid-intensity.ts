@@ -1,4 +1,4 @@
-import { pgTable, serial, text, timestamp, real, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, timestamp, real, jsonb, uniqueIndex } from "drizzle-orm/pg-core";
 
 export const gridIntensitySnapshotsTable = pgTable("grid_intensity_snapshots", {
   id: serial("id").primaryKey(),
@@ -10,6 +10,12 @@ export const gridIntensitySnapshotsTable = pgTable("grid_intensity_snapshots", {
   carbonTonnes: real("carbon_tonnes"),
   rawJson: jsonb("raw_json"),
   fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => [
+  uniqueIndex("grid_intensity_snapshots_period_uniq").on(
+    table.source,
+    table.region,
+    table.tradingPeriodStart,
+  ),
+]);
 
 export type GridIntensitySnapshot = typeof gridIntensitySnapshotsTable.$inferSelect;

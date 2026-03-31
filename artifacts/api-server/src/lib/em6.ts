@@ -1,5 +1,5 @@
 import { db, gridIntensitySnapshotsTable } from "@workspace/db";
-import { desc } from "drizzle-orm";
+import { desc, lt, sql } from "drizzle-orm";
 import { logger } from "./logger.js";
 
 const EM6_ENDPOINT = "https://api.em6.co.nz/ords/em6/data_api/current_carbon_intensity/";
@@ -56,7 +56,25 @@ export async function fetchAndStoreEm6Intensity(): Promise<GridIntensity | null>
       rawJson: latest as unknown as Record<string, unknown>,
     };
 
-    await db.insert(gridIntensitySnapshotsTable).values(snap);
+    // Upsert: if the same trading period arrives again (e.g. API returns same 30-min window),
+    // update with the latest values rather than duplicating.
+    await db.insert(gridIntensitySnapshotsTable)
+      .values(snap)
+      .onConflictDoUpdate({
+        target: [
+          gridIntensitySnapshotsTable.source,
+          gridIntensitySnapshotsTable.region,
+          gridIntensitySnapshotsTable.tradingPeriodStart,
+        ],
+        set: {
+          gco2PerKwh: snap.gco2PerKwh,
+          renewablePct: snap.renewablePct,
+          carbonTonnes: snap.carbonTonnes,
+          rawJson: snap.rawJson,
+          fetchedAt: sql`now()`,
+        },
+      });
+
     logger.info(
       { gco2PerKwh: latest.nz_carbon_gkwh, renewablePct: latest.nz_renewable },
       "em6 grid intensity stored",
@@ -107,4 +125,28 @@ export async function getCurrentGridIntensity(): Promise<GridIntensity | null> {
 
 export function clearIntensityCache(): void {
   _cached = null;
+}
+
+/**
+ * Delete grid intensity snapshots older than 13 months.
+ * Keeps at least a full 12 months of 30-min data (≈17,520 rows/year)
+ * with one month of buffer, then prunes anything beyond that.
+ */
+export async function pruneOldGridSnapshots(): Promise<number> {
+  const cutoff = new Date();
+  cutoff.setMonth(cutoff.getMonth() - 13);
+
+  try {
+    const result = await db
+      .delete(gridIntensitySnapshotsTable)
+      .where(lt(gridIntensitySnapshotsTable.tradingPeriodStart, cutoff));
+    const deleted = result.rowCount ?? 0;
+    if (deleted > 0) {
+      logger.info({ deleted, cutoff }, "Pruned old grid intensity snapshots");
+    }
+    return deleted;
+  } catch (err) {
+    logger.warn({ err }, "Failed to prune grid intensity snapshots");
+    return 0;
+  }
 }
