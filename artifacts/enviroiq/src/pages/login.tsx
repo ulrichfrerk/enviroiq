@@ -18,14 +18,17 @@ export default function Login() {
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
 
+  const fromParam = new URLSearchParams(window.location.search).get("from") || "";
+
   if (session?.isAuthenticated) {
-    setLocation("/dashboard");
+    setLocation(fromParam || "/dashboard");
     return null;
   }
 
   const handleMagicLink = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email) return;
+    if (fromParam) localStorage.setItem("enviroiq_return_to", fromParam);
     try {
       await reqMagicLink.mutateAsync({ data: { email } });
       setMode("magic-sent");

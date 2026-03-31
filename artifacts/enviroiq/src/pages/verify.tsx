@@ -30,8 +30,14 @@ export default function Verify() {
         onSuccess: () => {
           queryClient.invalidateQueries({ queryKey: ["/api/auth/session"] });
           setStatus("success");
-          // Redirect to account page so user can enroll a passkey for future logins
-          setTimeout(() => setLocation("/account?setup=passkey"), 1500);
+          const returnTo = localStorage.getItem("enviroiq_return_to");
+          if (returnTo) {
+            localStorage.removeItem("enviroiq_return_to");
+            setTimeout(() => setLocation(returnTo), 1500);
+          } else {
+            // No intended destination — prompt passkey setup on first login
+            setTimeout(() => setLocation("/account?setup=passkey"), 1500);
+          }
         },
         onError: (err: unknown) => {
           setStatus("error");
