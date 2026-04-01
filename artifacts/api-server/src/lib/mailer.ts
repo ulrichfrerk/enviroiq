@@ -37,6 +37,57 @@ async function getResendClient(): Promise<{ client: Resend; from: string } | nul
   }
 }
 
+const inviteEmailHtml = (name: string, orgName: string, magicUrl: string) => `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>You've been invited to EnviroIQ</title></head>
+<body style="font-family:system-ui,sans-serif;background:#f9fafb;margin:0;padding:40px 20px;">
+  <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:12px;padding:40px;border:1px solid #e5e7eb;">
+    <div style="margin-bottom:24px;">
+      <span style="color:#16a34a;font-weight:700;font-size:20px;">EnviroIQ</span>
+    </div>
+    <h1 style="font-size:22px;font-weight:700;color:#111827;margin:0 0 12px;">Welcome to EnviroIQ, ${name}!</h1>
+    <p style="color:#6b7280;margin:0 0 12px;font-size:15px;">You've been set up as the <strong>Organisation Administrator</strong> for <strong>${orgName}</strong> on EnviroIQ — the real-time ESG intelligence platform.</p>
+    <p style="color:#6b7280;margin:0 0 24px;font-size:15px;">Click the button below to get started. This link expires in 24 hours and can only be used once.</p>
+    <a href="${magicUrl}" style="display:inline-block;background:#16a34a;color:#fff;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:600;font-size:15px;">Get Started →</a>
+    <p style="color:#9ca3af;margin-top:24px;font-size:12px;">If you weren't expecting this invitation, you can safely ignore this email.</p>
+  </div>
+</body>
+</html>`;
+
+export async function sendInviteEmail(
+  to: string,
+  name: string,
+  orgName: string,
+  magicUrl: string,
+): Promise<{ sent: boolean; devMode: boolean }> {
+  const resend = await getResendClient();
+
+  if (resend) {
+    const { data, error } = await resend.client.emails.send({
+      from: resend.from,
+      to,
+      subject: `You've been invited to EnviroIQ — ${orgName}`,
+      html: inviteEmailHtml(name, orgName, magicUrl),
+      text: `Welcome to EnviroIQ, ${name}!\n\nYou've been set up as the Organisation Administrator for ${orgName}.\n\nClick this link to get started (expires in 24 hours):\n${magicUrl}\n\nIf you weren't expecting this invitation, you can safely ignore this email.`,
+    });
+
+    if (error) {
+      logger.error({ error, to }, "Resend failed to send invite email");
+      throw new Error(`Invite email send failed: ${error.message}`);
+    }
+
+    logger.info({ to, messageId: data?.id }, "Invite email sent via Resend");
+    return { sent: true, devMode: false };
+  }
+
+  if (process.env.NODE_ENV !== "production") {
+    console.log(`\n[INVITE EMAIL — RESEND NOT CONFIGURED]\n  To: ${to}\n  URL: ${magicUrl}\n`);
+    return { sent: false, devMode: true };
+  }
+
+  throw new Error("Resend not configured — cannot send invite email in production");
+}
+
 const emailHtml = (magicUrl: string) => `<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8"><title>Sign in to EnviroIQ</title></head>

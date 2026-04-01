@@ -1,11 +1,12 @@
 import { Router } from "express";
 import { randomBytes } from "crypto";
-import { db, organisationsTable, usersTable, vehiclesTable, widgetConfigsTable } from "@workspace/db";
+import { db, organisationsTable, usersTable, vehiclesTable, widgetConfigsTable, magicLinksTable } from "@workspace/db";
 import { eq, count, sql } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
 import { requireAuth, requireRole, requireOrgAccess, requireOrgAdmin } from "../lib/auth.js";
 import { sqlRow, sqlRows, numCol, intCol, strCol } from "../lib/sql-result.js";
 import { logAudit } from "../lib/audit.js";
+import { sendInviteEmail } from "../lib/mailer.js";
 import { calcSustainabilityScore } from "../lib/emissions.js";
 
 const router = Router();
@@ -106,6 +107,21 @@ router.post("/", requireRole("super_admin"), async (req, res) => {
 
     // Create default widget config
     await db.insert(widgetConfigsTable).values({ organisationId: orgId }).onConflictDoNothing();
+
+    // Generate a 24-hour magic link so the admin can log in straight away
+    const token = randomBytes(32).toString("hex");
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    await db.insert(magicLinksTable).values({ id: uuidv4(), userId: adminUser.id, token, expiresAt });
+
+    const appBase = process.env.APP_BASE_URL || `https://${process.env.REPLIT_DOMAINS?.split(",")[0]?.trim()}/app`;
+    const magicUrl = `${appBase}/auth/verify?token=${token}`;
+
+    try {
+      await sendInviteEmail(adminEmail, adminName, name, magicUrl);
+      req.log.info({ to: adminEmail, orgName: name }, "Invite email sent");
+    } catch (emailErr) {
+      req.log.error({ emailErr, to: adminEmail }, "Failed to send invite email — org created but no email sent");
+    }
 
     await logAudit({ req, action: "organisation.create", resourceType: "organisation", resourceId: orgId, details: { name } });
 
