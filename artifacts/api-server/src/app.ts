@@ -44,6 +44,14 @@ app.use(
   }),
 );
 
+// Remove the Server header — suppress any value set by Node.js/Express before
+// the CDN proxy adds its own. This prevents server fingerprinting via our layer.
+app.use((_req: Request, res: Response, next: NextFunction) => {
+  res.removeHeader("Server");
+  res.removeHeader("X-Powered-By");
+  next();
+});
+
 // Permissions-Policy (not yet in helmet's built-in set)
 app.use((_req: Request, res: Response, next: NextFunction) => {
   res.setHeader(
@@ -156,6 +164,14 @@ app.use("/api/auth", authLimiter);
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
+// Detect HTTPS context: Replit always terminates TLS at the proxy layer, so any
+// request served via REPLIT_DEV_DOMAIN or REPLIT_DOMAINS is HTTPS even in dev mode.
+// We must set Secure=true in those environments so cookies are never sent over HTTP.
+const isHttpsContext =
+  process.env.NODE_ENV === "production" ||
+  !!process.env.REPLIT_DOMAINS ||
+  !!process.env.REPLIT_DEV_DOMAIN;
+
 // Session — PostgreSQL-backed store (durable, multi-instance safe)
 // createTableIfMissing is intentionally false: that option reads a 'table.sql' file
 // from the package directory which doesn't exist in the bundled production build.
@@ -172,9 +188,10 @@ app.use(
     secret: sessionSecret || "enviroiq-dev-only-secret-do-not-use-in-production",
     resave: false,
     saveUninitialized: false,
+    name: "eiq.sid", // non-default name prevents fingerprinting
     cookie: {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
+      secure: isHttpsContext,
       sameSite: "lax",
       maxAge: 7 * 24 * 60 * 60 * 1000,
     },
