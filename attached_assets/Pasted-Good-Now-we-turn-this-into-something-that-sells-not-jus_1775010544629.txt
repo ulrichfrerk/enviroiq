@@ -1,0 +1,185 @@
+Good. Now we turn this into something that sells, not just explains.
+
+⸻
+
+EnviroIQ Marketing Stack
+
+1. Hero Positioning (above the fold)
+
+EnviroIQ: Real Time ESG Intelligence
+
+From retrospective reporting to live operational control.
+
+Turn your energy, fleet, water, and infrastructure data into real time sustainability performance, not month-end reports.
+
+⸻
+
+2. The Problem (hit them hard)
+
+ESG today is broken.
+	•	Reports are 30 to 90 days behind reality
+	•	Data is fragmented across systems
+	•	Decisions are made on averages, not truth
+	•	Compliance is manual, expensive, and reactive
+
+You can’t optimise what you can’t see in real time.
+
+⸻
+
+3. The Shift (your differentiation)
+
+EnviroIQ introduces a new layer:
+
+The Operational ESG Layer
+
+Instead of asking:
+	•	“What happened last quarter?”
+
+You can now ask:
+	•	“What’s happening right now?”
+	•	“Where are we wasting energy?”
+	•	“Which assets are underperforming?”
+	•	“What do we fix today?”
+
+⸻
+
+4. What It Does (clear + powerful)
+
+EnviroIQ connects directly into your live systems:
+	•	Energy meters and EM6 data
+	•	Vehicle GPS and fleet systems
+	•	Fuel usage and telematics
+	•	Solar and generation systems
+	•	Building and HVAC systems
+	•	Water and waste tracking
+	•	Procurement and supplier data
+
+Then converts it into:
+	•	Live emissions (Scope 1, 2, relevant 3)
+	•	Real time sustainability KPIs
+	•	Operational alerts and insights
+	•	Audit-ready ESG reporting
+	•	Public-facing dashboards
+
+⸻
+
+5. Core Value Pillars
+
+1. See Everything
+
+Single view across energy, fleet, water, waste, and infrastructure
+No more fragmented data
+
+2. Act in Real Time
+
+Identify inefficiencies instantly
+Reduce cost, emissions, and waste as it happens
+
+3. Prove It
+
+Automatically generate compliant, audit-ready ESG reports
+No more chasing spreadsheets
+
+4. Show It
+
+Embed real time sustainability dashboards directly on your website
+Turn ESG into a competitive advantage
+
+⸻
+
+6. Key Differentiator (this is your weapon)
+
+Traditional ESG platforms measure performance.
+EnviroIQ improves it.
+
+⸻
+
+7. Website Sections
+
+Section: Live Dashboard (visual hook)
+
+Your ESG performance. Live.
+	•	Energy usage by site
+	•	Real time emissions
+	•	Fleet efficiency and idling
+	•	Solar generation vs consumption
+	•	Water and waste tracking
+
+All updating continuously.
+
+⸻
+
+Section: How It Works
+	1.	Connect
+Integrate your existing systems and data sources
+	2.	Convert
+Transform raw data into emissions, KPIs, and ESG metrics
+	3.	Control
+Use real time insights to drive operational decisions
+	4.	Communicate
+Automate reporting and publish live dashboards
+
+⸻
+
+Section: Use Cases
+
+Infrastructure & Data Centres
+	•	Optimise cooling and power usage
+	•	Track PUE and active efficiency
+	•	Reduce operational cost
+
+Fleet & Transport
+	•	Reduce fuel consumption
+	•	Eliminate idle time
+	•	Improve route efficiency
+
+Commercial Buildings
+	•	Monitor HVAC performance
+	•	Reduce energy waste
+	•	Track water usage
+
+Construction & Civil
+	•	Live site emissions tracking
+	•	Equipment utilisation
+	•	Compliance reporting
+
+⸻
+
+8. Taglines (pick your flavour)
+	•	“Real time ESG. Real world impact.”
+	•	“Measure less. Control more.”
+	•	“From compliance to control.”
+	•	“Know now. Act now.”
+	•	“ESG, without the lag.”
+
+⸻
+
+9. Sales Hook (this closes deals)
+
+“If your ESG data is a month old, your decisions are already wrong.”
+
+⸻
+
+10. The Big Narrative (for decks / investors)
+
+ESG has evolved in three phases:
+	1.	Manual Reporting
+Spreadsheets, consultants, lagging data
+	2.	Digital Reporting Platforms
+Better structure, same lag
+	3.	Operational ESG (EnviroIQ)
+Live data
+Real time decisions
+Continuous optimisation
+
+EnviroIQ is phase three.
+
+⸻
+
+If you want next level:
+I can turn this into:
+	•	A full Spark-level pitch deck
+	•	A homepage wireframe (v0.dev ready)
+	•	Or a one-page Clarity Strike board paper
+
+This is already positioned to land hard.

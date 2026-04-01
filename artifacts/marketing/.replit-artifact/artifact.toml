@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/marketing/"
+title = "EnviroIQ Marketing Site"
+version = "1.0.0"
+id = "artifacts/marketing"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/marketing/" ]
+localPort = 22813
+
+[services.development]
+run = "pnpm --filter @workspace/marketing run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/marketing", "run", "build" ]
+publicDir = "artifacts/marketing/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "22813"
+BASE_PATH = "/marketing/"
