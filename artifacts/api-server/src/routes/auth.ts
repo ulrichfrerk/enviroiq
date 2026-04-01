@@ -60,20 +60,47 @@ function getWebAuthnConfig(req: import("express").Request): { rpId: string; orig
 }
 
 // GET /auth/session
-router.get("/session", (req, res) => {
+// Always reads role, org, and active status from the DB so that role changes
+// (e.g. elevation to super_admin) take effect immediately without requiring
+// the user to log out and back in.
+router.get("/session", async (req, res) => {
   const session = req.session;
   if (!session?.userId) {
     res.status(401).json({ error: "Unauthorized", message: "Not authenticated" });
     return;
   }
-  res.json({
-    userId: session.userId,
-    email: session.email,
-    name: session.name,
-    role: session.role,
-    organisationId: session.organisationId,
-    isAuthenticated: true,
-  });
+  try {
+    const user = await db.query.usersTable.findFirst({ where: eq(usersTable.id, session.userId) });
+    if (!user || !user.isActive) {
+      req.session.destroy(() => {});
+      res.status(401).json({ error: "Unauthorized", message: "Not authenticated" });
+      return;
+    }
+    // Keep session in sync so middleware (requireOrgAdmin etc.) also sees the fresh role
+    session.role = user.role as "super_admin" | "org_admin" | "org_viewer";
+    session.organisationId = user.organisationId ?? undefined;
+    session.name = user.name;
+    res.json({
+      userId: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      organisationId: user.organisationId,
+      organisationName: session.organisationName,
+      isAuthenticated: true,
+    });
+  } catch (err) {
+    req.log.error({ err }, "Session DB lookup failed");
+    // Fall back to session data rather than breaking the user's session
+    res.json({
+      userId: session.userId,
+      email: session.email,
+      name: session.name,
+      role: session.role,
+      organisationId: session.organisationId,
+      isAuthenticated: true,
+    });
+  }
 });
 
 // POST /auth/passkey/register/begin
