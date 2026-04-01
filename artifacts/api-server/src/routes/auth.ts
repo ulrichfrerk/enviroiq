@@ -533,6 +533,11 @@ router.post("/magic-link/verify", async (req, res) => {
 router.post("/logout", async (req, res) => {
   await logAudit({ req, action: "auth.logout", outcome: "success" });
   req.session.destroy(() => {
+    // Clear the session cookie from the browser. Without this, the browser
+    // keeps the cookie and the server creates a new empty session on every
+    // subsequent request, which can confuse clients and security scanners.
+    res.clearCookie("eiq.sid", { path: "/" });
+    res.clearCookie("connect.sid", { path: "/" }); // clear old name too (pre-rename sessions)
     res.json({ message: "Logged out successfully" });
   });
 });

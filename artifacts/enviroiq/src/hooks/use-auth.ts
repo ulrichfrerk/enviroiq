@@ -144,7 +144,10 @@ export function useAuth() {
 
   const logout = async () => {
     await logoutMut.mutateAsync();
-    queryClient.invalidateQueries({ queryKey: getGetSessionQueryKey() });
+    // Immediately wipe session from cache so the login page doesn't see stale
+    // authenticated state and bounce the user straight back to /dashboard.
+    queryClient.setQueryData(getGetSessionQueryKey(), null);
+    queryClient.removeQueries({ queryKey: getGetSessionQueryKey() });
     setLocation("/login");
   };
 
