@@ -21,6 +21,9 @@ export function Navbar() {
         </div>
 
         <div className="flex items-center gap-4">
+          <Button asChild variant="ghost" className="hidden sm:inline-flex text-muted-foreground hover:text-foreground">
+            <a href="/app/login">Log In</a>
+          </Button>
           <Button asChild variant="ghost" className="hidden sm:inline-flex">
             <a href="mailto:hello@enviroiq.net">Contact Sales</a>
           </Button>

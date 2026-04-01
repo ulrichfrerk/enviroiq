@@ -1,35 +1,34 @@
 kind = "web"
-  previewPath = "/"
-  title = "EnviroIQ"
-  version = "1.0.0"
-  id = "artifacts/enviroiq"
-  router = "path"
+previewPath = "/app/"
+title = "EnviroIQ"
+version = "1.0.0"
+id = "artifacts/enviroiq"
+router = "path"
 
-  [[integratedSkills]]
-  name = "react-vite"
-  version = "1.0.0"
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
 
-  [[services]]
-  name = "web"
-  paths = [ "/" ]
-  localPort = 22592
+[[services]]
+name = "web"
+paths = [ "/app/" ]
+localPort = 22592
 
-  [services.development]
-  run = "pnpm --filter @workspace/enviroiq run dev"
+[services.development]
+run = "pnpm --filter @workspace/enviroiq run dev"
 
-  [services.production.build]
-  args = ["pnpm", "--filter", "@workspace/enviroiq", "run", "build"]
+[services.production.build]
+args = ["pnpm", "--filter", "@workspace/enviroiq", "run", "build"]
 
-  [services.production.run]
-  args = ["node", "artifacts/enviroiq/server.mjs"]
+[services.production.run]
+args = ["node", "artifacts/enviroiq/server.mjs"]
 
-  [services.production.run.env]
-  PORT = "22592"
+[services.production.run.env]
+PORT = "22592"
 
-  [services.production.health.startup]
-  path = "/"
+[services.production.health.startup]
+path = "/app/"
 
-  [services.env]
-  PORT = "22592"
-  BASE_PATH = "/"
-  
+[services.env]
+PORT = "22592"
+BASE_PATH = "/app/"

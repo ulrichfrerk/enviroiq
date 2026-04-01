@@ -4,6 +4,10 @@
  * Replaces Replit's static file serving so we can inject security headers,
  * gzip compression, and SPA fallback routing — all with zero dependencies
  * (pure Node.js stdlib only).
+ *
+ * BASE_PATH support: strips the configured base path prefix from incoming
+ * request URLs before resolving against the dist directory. This lets the
+ * app live at /app/ while built assets remain relative (no /app/ in filenames).
  */
 import http from "http";
 import fs from "fs";
@@ -14,6 +18,11 @@ import { fileURLToPath } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.join(__dirname, "dist/public");
 const PORT = parseInt(process.env.PORT || "22592", 10);
+
+// Strip trailing slash so we can do prefix matching cleanly.
+// e.g. BASE_PATH="/app/" → BASE_PREFIX="/app"
+const BASE_PATH   = (process.env.BASE_PATH || "/").replace(/\/$/, "") || "/";
+const BASE_PREFIX = BASE_PATH === "/" ? "" : BASE_PATH;
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -98,6 +107,13 @@ function sendFile(req, res, filePath, mime, cacheControl) {
 
 http.createServer((req, res) => {
   let urlPath = new URL(req.url, "http://localhost").pathname;
+
+  // Strip the base path prefix so we resolve against the flat dist directory.
+  // /app/login → /login, /app/assets/main.js → /assets/main.js
+  if (BASE_PREFIX && urlPath.startsWith(BASE_PREFIX)) {
+    urlPath = urlPath.slice(BASE_PREFIX.length) || "/";
+  }
+
   if (urlPath === "/") urlPath = "/index.html";
 
   // Prevent path traversal
@@ -123,5 +139,5 @@ http.createServer((req, res) => {
     }
   });
 }).listen(PORT, "0.0.0.0", () => {
-  console.log(`EnviroIQ frontend listening on port ${PORT}`);
+  console.log(`EnviroIQ frontend listening on port ${PORT} (base: ${BASE_PATH})`);
 });

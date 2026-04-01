@@ -1,5 +1,5 @@
 kind = "web"
-previewPath = "/marketing/"
+previewPath = "/"
 title = "EnviroIQ Marketing Site"
 version = "1.0.0"
 id = "artifacts/marketing"
@@ -11,7 +11,7 @@ version = "1.0.0"
 
 [[services]]
 name = "web"
-paths = [ "/marketing/" ]
+paths = [ "/" ]
 localPort = 22813
 
 [services.development]
@@ -28,4 +28,4 @@ to = "/index.html"
 
 [services.env]
 PORT = "22813"
-BASE_PATH = "/marketing/"
+BASE_PATH = "/"
