@@ -9,12 +9,9 @@ import { calcEnergyCo2e, resolveElectricityFactor } from "../lib/emissions.js";
 import { getCurrentGridIntensity } from "../lib/em6.js";
 import { parseBillText } from "../lib/billParser.js";
 import { createRequire } from "module";
-// pdf-parse is CJS-only; load via createRequire so it works in our ESM bundle
-const _require = createRequire(import.meta.url);
-const pdfParse = _require("pdf-parse") as (
-  buffer: Buffer,
-  options?: { max?: number }
-) => Promise<{ text: string; numpages: number }>;
+// pdf-parse is CJS-only — load it via require so it works from our ESM bundle
+type PdfParseResult = { text: string; numpages: number };
+const pdfParse = createRequire(import.meta.url)("pdf-parse") as (buffer: Buffer, options?: { max?: number }) => Promise<PdfParseResult>;
 
 const router = Router({ mergeParams: true });
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
