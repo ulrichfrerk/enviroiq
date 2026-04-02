@@ -1,7 +1,7 @@
 import { Link, useLocation } from "wouter";
 import { 
   BarChart3, Car, Zap, Target, FileText, Settings, Users, 
-  ShieldAlert, Shield, LogOut, Leaf, UserCircle, Beaker, TrendingDown,
+  ShieldAlert, Shield, LogOut, Leaf, UserCircle, Beaker, TrendingDown, Sparkles,
 } from "lucide-react";
 import {
   Sidebar,
@@ -30,6 +30,7 @@ export function AppSidebar() {
     { title: "Energy", url: "/energy", icon: Zap },
     { title: "Targets", url: "/targets", icon: TrendingDown },
     { title: "Scenarios", url: "/scenarios", icon: Beaker },
+    { title: "Mission Statement", url: "/mission", icon: Sparkles },
     { title: "Goals", url: "/goals", icon: Target },
     { title: "Reports", url: "/reports", icon: FileText },
     { title: "Settings", url: "/settings", icon: Settings },

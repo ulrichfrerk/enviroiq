@@ -15,6 +15,7 @@ import gridRouter from "./grid.js";
 import targetsRouter from "./targets.js";
 import maturityRouter from "./maturity.js";
 import scenariosRouter from "./scenarios.js";
+import missionRouter from "./mission.js";
 
 const router = Router();
 
@@ -37,6 +38,7 @@ router.use("/organisations/:orgId/audit-logs", auditRouter);
 router.use("/organisations/:orgId/targets", targetsRouter);
 router.use("/organisations/:orgId/maturity", maturityRouter);
 router.use("/organisations/:orgId/scenarios", scenariosRouter);
+router.use("/organisations/:orgId/mission", missionRouter);
 
 // Webhooks (no auth - use API keys/tokens)
 router.use("/webhooks/fleet", fleetWebhookRouter);
