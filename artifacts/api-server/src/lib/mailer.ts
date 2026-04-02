@@ -1,9 +1,18 @@
-// Email sending via Replit Resend integration
+// Email sending via Resend
 import { Resend } from "resend";
 import { logger } from "./logger.js";
 
-// Resend integration — credentials fetched fresh per-send (tokens expire)
+// Resend client — prefers RESEND_API_KEY secret (works in dev + production),
+// falls back to the Replit Connectors proxy for legacy compatibility.
 async function getResendClient(): Promise<{ client: Resend; from: string } | null> {
+  const from = process.env.FROM_EMAIL || "EnviroIQ <noreply@enviroiq.net>";
+
+  // Primary: direct API key secret (most reliable across all environments)
+  if (process.env.RESEND_API_KEY) {
+    return { client: new Resend(process.env.RESEND_API_KEY), from };
+  }
+
+  // Fallback: Replit Connectors proxy
   const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
   const xReplitToken = process.env.REPL_IDENTITY
     ? "repl " + process.env.REPL_IDENTITY
@@ -29,10 +38,10 @@ async function getResendClient(): Promise<{ client: Resend; from: string } | nul
     const settings = data?.items?.[0]?.settings;
     if (!settings?.api_key) return null;
 
-    const from = process.env.FROM_EMAIL || settings.from_email || "EnviroIQ <noreply@enviroiq.net>";
-    return { client: new Resend(settings.api_key), from };
+    const connectorFrom = process.env.FROM_EMAIL || settings.from_email || from;
+    return { client: new Resend(settings.api_key), from: connectorFrom };
   } catch (err) {
-    logger.warn({ err }, "Failed to fetch Resend credentials");
+    logger.warn({ err }, "Failed to fetch Resend credentials from connector proxy");
     return null;
   }
 }
