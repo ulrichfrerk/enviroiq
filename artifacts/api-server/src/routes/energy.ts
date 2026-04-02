@@ -195,9 +195,17 @@ router.post("/upload-batch", requireAuth, requireOrgAdmin, uploadBatch.array("fi
   try {
     const orgId = req.params.orgId as string;
     const files = req.files as Express.Multer.File[] | undefined;
-    const batchRenewablePct = req.body.supplierRenewablePct !== undefined
-      ? Number(req.body.supplierRenewablePct)
-      : undefined;
+
+    // Validate optional renewable % override
+    let batchRenewablePct: number | undefined;
+    if (req.body.supplierRenewablePct !== undefined && req.body.supplierRenewablePct !== "") {
+      const parsed = Number(req.body.supplierRenewablePct);
+      if (isNaN(parsed) || parsed < 0 || parsed > 100) {
+        res.status(400).json({ error: "Bad Request", message: "supplierRenewablePct must be a number between 0 and 100" });
+        return;
+      }
+      batchRenewablePct = parsed;
+    }
 
     if (!files || files.length === 0) {
       res.status(400).json({ error: "Bad Request", message: "At least one file required" });
