@@ -605,4 +605,27 @@ energyEmailWebhookRouter.post("/inbound-email", async (req, res) => {
   }
 });
 
+// POST /organisations/:orgId/energy/debug-parse
+// Accepts a PDF and returns the extracted text + parsed fields WITHOUT saving.
+// Super-admin diagnostic tool — safe to expose only to org admins.
+router.post("/debug-parse", requireAuth, requireOrgAdmin, upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) {
+      res.status(400).json({ error: "File required" });
+      return;
+    }
+    const fileText = await extractPdfText(req.file.buffer);
+    const parsed   = parseBillText(fileText);
+    res.json({
+      filename: req.file.originalname,
+      extractedTextLength: fileText.length,
+      extractedTextPreview: fileText.slice(0, 2000),
+      parsed,
+    });
+  } catch (err) {
+    req.log.error({ err }, "debug-parse failed");
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
 export default router;
