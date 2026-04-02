@@ -12,6 +12,21 @@ import { parseBillText } from "../lib/billParser.js";
 const router = Router({ mergeParams: true });
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
+/**
+ * Extract readable text from a raw PDF buffer for bill parsing.
+ * Uses latin1 (1:1 byte mapping, never throws) then strips null bytes
+ * and non-printable control characters so the result is safe for a
+ * PostgreSQL UTF-8 text column.
+ */
+function extractPdfText(buffer: Buffer, maxBytes = 8000): string {
+  return buffer
+    .toString("latin1", 0, Math.min(buffer.length, maxBytes))
+    .replace(/\0/g, "")                       // remove null bytes (0x00) — PostgreSQL rejects these
+    .replace(/[\x01-\x08\x0E-\x1F\x7F]/g, " ") // replace other non-printable control chars with space
+    .replace(/\s+/g, " ")                      // collapse whitespace
+    .trim();
+}
+
 // GET /organisations/:orgId/energy/readings
 router.get("/readings", requireAuth, requireOrgAccess, async (req, res) => {
   try {
@@ -101,8 +116,8 @@ router.post("/upload", requireAuth, requireOrgAdmin, upload.single("file"), asyn
       return;
     }
 
-    // Extract text from PDF (best-effort from first 8KB)
-    const fileText = req.file.buffer.toString("utf8", 0, Math.min(req.file.buffer.length, 8000));
+    // Extract text from PDF (best-effort from first 8KB, null bytes stripped)
+    const fileText = extractPdfText(req.file.buffer);
 
     // Auto-detect from bill text; caller may override any field
     const parsed = parseBillText(fileText);
@@ -240,8 +255,8 @@ router.post("/upload-batch", requireAuth, requireOrgAdmin, uploadBatch.array("fi
 
     for (const file of files) {
       try {
-        // Extract readable text from PDF buffer (best-effort from first 8KB)
-        const fileText = file.buffer.toString("utf8", 0, Math.min(file.buffer.length, 8000));
+        // Extract readable text from PDF buffer (best-effort, null bytes stripped)
+        const fileText = extractPdfText(file.buffer);
 
         const parsed = parseBillText(fileText);
 
