@@ -116,19 +116,39 @@ export default function Dashboard() {
         <Card className="p-6 col-span-1 lg:col-span-2 border-border/50">
           <h3 className="font-semibold text-lg mb-6">Emissions Trend (12 Months)</h3>
           <div className="h-[280px]">
-            {emissions?.timeSeries && (
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={emissions.timeSeries} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
-                  <XAxis dataKey="date" stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} />
-                  <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(val) => `${val/1000}k`} />
-                  <RechartsTooltip 
-                    contentStyle={{ backgroundColor: 'hsl(var(--card))', borderColor: 'hsl(var(--border))', borderRadius: '8px' }}
-                  />
-                  <Line type="monotone" dataKey="co2eKg" stroke="hsl(var(--primary))" strokeWidth={3} dot={{ r: 4, fill: 'hsl(var(--background))', strokeWidth: 2 }} activeDot={{ r: 6 }} />
-                </LineChart>
-              </ResponsiveContainer>
-            )}
+            {emissions?.timeSeries && (() => {
+              // Exclude the current (incomplete) month so the chart doesn't drop artificially
+              const now = new Date();
+              const currentMonthPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+              const completedMonths = emissions.timeSeries.filter(
+                (d: { date: string }) => !d.date.startsWith(currentMonthPrefix)
+              );
+              if (completedMonths.length === 0) return <p className="text-muted-foreground text-sm">No data yet</p>;
+              return (
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={completedMonths} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+                    <XAxis
+                      dataKey="date"
+                      stroke="hsl(var(--muted-foreground))"
+                      fontSize={12}
+                      tickLine={false}
+                      axisLine={false}
+                      tickFormatter={(val: string) => {
+                        try { return format(new Date(val.replace(' ', 'T')), "MMM yyyy"); } catch { return val; }
+                      }}
+                    />
+                    <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(val) => `${(val/1000).toFixed(1)}k`} />
+                    <RechartsTooltip
+                      contentStyle={{ backgroundColor: 'hsl(var(--card))', borderColor: 'hsl(var(--border))', borderRadius: '8px' }}
+                      labelFormatter={(val: string) => { try { return format(new Date(val.replace(' ', 'T')), "MMMM yyyy"); } catch { return val; } }}
+                      formatter={(val: number) => [`${val.toLocaleString()} kg CO₂e`, "Emissions"]}
+                    />
+                    <Line type="monotone" dataKey="co2eKg" stroke="hsl(var(--primary))" strokeWidth={3} dot={{ r: 4, fill: 'hsl(var(--background))', strokeWidth: 2 }} activeDot={{ r: 6 }} />
+                  </LineChart>
+                </ResponsiveContainer>
+              );
+            })()}
           </div>
         </Card>
       </div>
