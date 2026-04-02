@@ -353,8 +353,8 @@ router.post("/import-km", requireAuth, requireOrgAdmin, async (req, res) => {
       res.status(400).json({ error: "Bad Request", message: "rows array is required and must not be empty" });
       return;
     }
-    if (rows.length > 5000) {
-      res.status(400).json({ error: "Bad Request", message: "Maximum 5000 rows per import" });
+    if (rows.length > 20000) {
+      res.status(400).json({ error: "Bad Request", message: "Maximum 20,000 rows per import" });
       return;
     }
 

@@ -187,6 +187,96 @@ function parseVehicleFile(file: File): Promise<{ rows: VehicleImportRow[]; error
   });
 }
 
+// ─── KM import: TN360 Distance Trip Report (XLSX) ────────────────────────────
+
+const TN360_MONTHS: Record<string, string> = {
+  Jan:"01",Feb:"02",Mar:"03",Apr:"04",May:"05",Jun:"06",
+  Jul:"07",Aug:"08",Sep:"09",Oct:"10",Nov:"11",Dec:"12",
+};
+
+function parseTN360TripDate(raw: string): string | null {
+  // "04 Jan 2026 12:52:28 PM" → "2026-01-04"
+  const m = String(raw).match(/^(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})/);
+  if (!m) return null;
+  const mon = TN360_MONTHS[m[2]];
+  return mon ? `${m[3]}-${mon}-${m[1].padStart(2, "0")}` : null;
+}
+
+export type KmImportMeta = {
+  source: "tn360-trip" | "csv";
+  vehicles?: number;
+  records?: number;
+  period?: string;
+  skippedTrips?: number;
+};
+
+function parseTN360TripReport(data: unknown[][]): { rows: KmRow[]; errors: string[]; meta: KmImportMeta } {
+  // Row 0: "Distance Trip Report (N results)"
+  // Row 2: ["Time Period:", "…"]
+  // Row 4: header row
+  const period = data[2]?.[1] ? String(data[2][1]).trim() : undefined;
+  const header = (data[4] ?? []) as (string | null)[];
+
+  const vCol    = header.indexOf("Vehicle");
+  const dateCol = header.indexOf("Start Time");
+  const distCol = header.indexOf("Distance Travelled (km)");
+  const plausCol = header.indexOf("Plausible");
+  const fuelCol  = header.indexOf("Fuel Used (L)");
+
+  if (vCol === -1 || dateCol === -1 || distCol === -1) {
+    return { rows: [], errors: ["Could not find required columns in the TN360 Distance Trip Report."], meta: { source: "tn360-trip" } };
+  }
+
+  // Aggregate by vehicle + date
+  const daily = new Map<string, { vehicle: string; date: string; distanceKm: number; fuelLitres: number }>();
+  let skippedTrips = 0;
+
+  for (let i = 5; i < data.length; i++) {
+    const row = data[i] as (string | number | null)[];
+    if (!row?.[0]) continue;
+
+    // Skip implausible trips
+    const plaus = plausCol >= 0 ? row[plausCol] : 1;
+    if (plaus !== null && Number(plaus) === 0) { skippedTrips++; continue; }
+
+    const dist = Number(row[distCol]);
+    if (!dist || dist <= 0) continue;
+
+    const vehicle = String(row[vCol] ?? "").trim();
+    if (!vehicle) continue;
+
+    const date = parseTN360TripDate(String(row[dateCol] ?? ""));
+    if (!date) { skippedTrips++; continue; }
+
+    const fuel = fuelCol >= 0 ? Number(row[fuelCol]) || 0 : 0;
+    const key = `${vehicle}|${date}`;
+    const existing = daily.get(key);
+    if (existing) {
+      existing.distanceKm += dist;
+      existing.fuelLitres  += fuel;
+    } else {
+      daily.set(key, { vehicle, date, distanceKm: dist, fuelLitres: fuel });
+    }
+  }
+
+  const rows: KmRow[] = [...daily.values()].map(r => ({
+    vehicle: r.vehicle,
+    date: r.date,
+    distanceKm: r.distanceKm.toFixed(2),
+    fuelLitres: r.fuelLitres > 0 ? r.fuelLitres.toFixed(2) : undefined,
+  }));
+
+  const vehicles = new Set(rows.map(r => r.vehicle)).size;
+  const errors: string[] = [];
+  if (skippedTrips > 0) errors.push(`${skippedTrips.toLocaleString()} trips skipped (implausible GPS or missing date) — daily totals are unaffected.`);
+
+  return {
+    rows,
+    errors,
+    meta: { source: "tn360-trip", vehicles, records: rows.length, period, skippedTrips },
+  };
+}
+
 // ─── KM CSV templates & parser ─────────────────────────────────────────────
 
 const KM_TEMPLATE = [
@@ -270,6 +360,7 @@ export default function Fleet() {
   const [kmRows, setKmRows] = useState<KmRow[]>([]);
   const [kmErrors, setKmErrors] = useState<string[]>([]);
   const [kmProgress, setKmProgress] = useState(0);
+  const [kmMeta, setKmMeta] = useState<KmImportMeta | null>(null);
   const [kmResults, setKmResults] = useState<{ imported: number; skipped: string[]; errors: string[] }>({ imported: 0, skipped: [], errors: [] });
   const kmFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -349,15 +440,47 @@ export default function Fleet() {
   const handleKmFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const text = ev.target?.result as string;
-      const { rows, errors } = parseKmCSV(text);
-      setKmRows(rows);
-      setKmErrors(errors);
-      setKmImportState("preview");
-    };
-    reader.readAsText(file);
+
+    if (/\.xlsx?$/i.test(file.name)) {
+      // XLSX path — TN360 Distance Trip Report
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        try {
+          const ab = ev.target?.result as ArrayBuffer;
+          const wb = xlsxRead(ab, { type: "array" });
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          const raw = xlsxUtils.sheet_to_json<unknown[]>(ws, { header: 1, defval: null });
+          const firstCell = String(raw[0]?.[0] ?? "");
+          if (firstCell.includes("Distance Trip Report")) {
+            const { rows, errors, meta } = parseTN360TripReport(raw);
+            setKmRows(rows);
+            setKmErrors(errors);
+            setKmMeta(meta);
+          } else {
+            setKmRows([]);
+            setKmErrors(["Unrecognised XLSX format. Upload a TN360 Distance Trip Report, or use a CSV file."]);
+            setKmMeta(null);
+          }
+        } catch (err) {
+          setKmRows([]);
+          setKmErrors([`Could not read file: ${err instanceof Error ? err.message : String(err)}`]);
+          setKmMeta(null);
+        }
+        setKmImportState("preview");
+      };
+      reader.readAsArrayBuffer(file);
+    } else {
+      // CSV path
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const { rows, errors } = parseKmCSV(ev.target?.result as string);
+        setKmRows(rows);
+        setKmErrors(errors);
+        setKmMeta({ source: "csv" });
+        setKmImportState("preview");
+      };
+      reader.readAsText(file);
+    }
   };
 
   const handleKmImport = async () => {
@@ -392,6 +515,7 @@ export default function Fleet() {
     setKmRows([]);
     setKmErrors([]);
     setKmProgress(0);
+    setKmMeta(null);
     setKmResults({ imported: 0, skipped: [], errors: [] });
     if (kmFileInputRef.current) kmFileInputRef.current.value = "";
   };
@@ -464,32 +588,45 @@ export default function Fleet() {
               {kmImportState === "idle" && (
                 <div className="space-y-4 pt-2">
                   <p className="text-sm text-muted-foreground">
-                    Upload a CSV distance report from TN360 or any fleet system. Vehicles are matched by name or registration plate.
+                    Upload a TN360 Distance Trip Report (.xlsx) or a standard CSV file. Trip rows are automatically aggregated into daily vehicle totals before import.
                   </p>
-                  <div className="rounded-lg border border-border bg-secondary/20 p-4 space-y-2 text-xs font-mono">
-                    <p className="text-foreground font-semibold text-sm mb-2">Required columns</p>
-                    <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-muted-foreground">
-                      <span><span className="text-foreground">vehicle</span> — name or rego</span>
-                      <span><span className="text-foreground">date</span> — DD/MM/YYYY or YYYY-MM-DD</span>
-                      <span><span className="text-foreground">distance_km</span> — kilometres driven</span>
-                      <span><span className="text-foreground">fuel_litres</span> — optional, improves CO₂ accuracy</span>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 space-y-1">
+                      <p className="text-xs font-semibold text-primary uppercase">TN360 Distance Report (.xlsx)</p>
+                      <p className="text-xs text-muted-foreground">From TN360 → Reports → Distance Trip Report. Trips are aggregated to daily totals automatically.</p>
                     </div>
-                    <p className="text-muted-foreground pt-1">TN360 distance report column names are recognised automatically.</p>
+                    <div className="rounded-lg border border-border bg-secondary/10 p-4 space-y-1">
+                      <p className="text-xs font-semibold text-muted-foreground uppercase">Standard CSV</p>
+                      <p className="text-xs text-muted-foreground">Columns: vehicle, date, distance_km, fuel_litres (optional).</p>
+                    </div>
                   </div>
                   <div className="flex gap-3">
-                    <Button variant="outline" className="flex-1 gap-2" onClick={downloadKmTemplate}><Download className="w-4 h-4" /> Download Template</Button>
-                    <Button className="flex-1 gap-2" onClick={() => kmFileInputRef.current?.click()}><Upload className="w-4 h-4" /> Choose CSV File</Button>
+                    <Button variant="outline" className="flex-1 gap-2" onClick={downloadKmTemplate}><Download className="w-4 h-4" /> CSV Template</Button>
+                    <Button className="flex-1 gap-2" onClick={() => kmFileInputRef.current?.click()}><Upload className="w-4 h-4" /> Choose File</Button>
                   </div>
-                  <input ref={kmFileInputRef} type="file" accept=".csv,text/csv" className="hidden" onChange={handleKmFileSelect} />
+                  <input ref={kmFileInputRef} type="file" accept=".csv,.xlsx,.xls,text/csv" className="hidden" onChange={handleKmFileSelect} />
                 </div>
               )}
 
               {kmImportState === "preview" && (
                 <div className="space-y-4 pt-2">
+                  {/* TN360 detected banner */}
+                  {kmMeta?.source === "tn360-trip" && kmRows.length > 0 && (
+                    <div className="flex items-start gap-3 rounded-lg border border-primary/20 bg-primary/5 p-3">
+                      <CheckCircle2 className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
+                      <div className="text-sm space-y-0.5">
+                        <p className="font-semibold text-foreground">TN360 Distance Trip Report detected</p>
+                        <p className="text-muted-foreground text-xs">
+                          Trips aggregated to <span className="text-foreground font-medium">{kmMeta.records?.toLocaleString()} daily totals</span> across <span className="text-foreground font-medium">{kmMeta.vehicles} vehicles</span>.
+                          {kmMeta.period && <> · Period: {kmMeta.period}</>}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
                   {kmErrors.length > 0 && (
-                    <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 space-y-1">
-                      <p className="text-sm font-semibold text-destructive mb-1">Errors — fix these in your CSV:</p>
-                      {kmErrors.map((e, i) => <p key={i} className="text-xs text-destructive">{e}</p>)}
+                    <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 space-y-1">
+                      {kmErrors.map((e, i) => <p key={i} className="text-xs text-amber-600">{e}</p>)}
                     </div>
                   )}
                   {kmRows.length > 0 && (
