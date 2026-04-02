@@ -1,9 +1,10 @@
 import React, { useState } from "react";
+import { Link } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { useGetOrganisationSummary, useListFleetEvents } from "@workspace/api-client-react";
 import { useQuery } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
-import { CloudRain, Car, Zap, Target, ArrowUpRight, ArrowDownRight, Loader2 } from "lucide-react";
+import { CloudRain, Car, Zap, Target, ArrowUpRight, ArrowDownRight, Loader2, TrendingDown, Beaker, ChevronRight, CheckCircle2, AlertTriangle } from "lucide-react";
 import {
   ResponsiveContainer, PieChart, Pie, Cell, Tooltip as RechartsTooltip,
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
@@ -44,6 +45,22 @@ function useEmissionTotals(orgId: string | undefined, period: PeriodValue) {
   });
 }
 
+interface MaturityResult {
+  total: number;
+  grade: string;
+  dimensions: { id: string; label: string; score: number; max: number; tips: string[] }[];
+}
+
+interface EmissionTarget {
+  id: string;
+  baselineYear: number;
+  baselineCo2eKg: number;
+  targetYear: number;
+  targetPctReduction: number;
+  label?: string;
+  framework?: string;
+}
+
 export default function Dashboard() {
   const { session } = useAuth();
   const orgId = session?.organisationId;
@@ -54,6 +71,28 @@ export default function Dashboard() {
   const { data: summary, isLoading: loadingSummary } = useGetOrganisationSummary(orgId!, undefined, { query: { enabled: !!orgId } });
   const { data: emissions, isLoading: loadingEmissions } = useEmissionTotals(orgId, trendPeriod);
   const { data: fleetEvents } = useListFleetEvents(orgId!, { limit: 5 }, { query: { enabled: !!orgId } });
+
+  const { data: maturity } = useQuery<MaturityResult>({
+    queryKey: ["maturity", orgId],
+    enabled: !!orgId,
+    staleTime: 10 * 60 * 1000,
+    queryFn: async () => {
+      const res = await fetch(`/api/organisations/${orgId}/maturity`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch maturity");
+      return res.json();
+    },
+  });
+
+  const { data: targetsData } = useQuery<{ items: EmissionTarget[] }>({
+    queryKey: ["targets-dash", orgId],
+    enabled: !!orgId,
+    staleTime: 5 * 60 * 1000,
+    queryFn: async () => {
+      const res = await fetch(`/api/organisations/${orgId}/targets`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch targets");
+      return res.json();
+    },
+  });
 
   if (loadingSummary) {
     return <div className="flex items-center justify-center h-64"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
@@ -262,6 +301,131 @@ export default function Dashboard() {
                   <span className="ml-1">({b.percentage.toFixed(0)}%)</span>
                 </span>
               ))}
+            </div>
+          )}
+        </Card>
+      </div>
+
+      {/* ── Maturity + Targets row ────────────────────────────────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+        {/* Maturity score card */}
+        <Card className="p-6 border-border/50">
+          <div className="flex items-center justify-between mb-5">
+            <h3 className="font-semibold text-lg">Maturity Score</h3>
+            {maturity && (
+              <span className={`text-xs font-semibold px-3 py-1 rounded-full ${
+                maturity.grade === "Leader"    ? "bg-emerald-900/40 text-emerald-300" :
+                maturity.grade === "Advanced"  ? "bg-blue-900/40 text-blue-300" :
+                maturity.grade === "Developing"? "bg-amber-900/40 text-amber-300" :
+                                                  "bg-secondary text-muted-foreground"
+              }`}>{maturity.grade}</span>
+            )}
+          </div>
+          {maturity ? (
+            <div className="space-y-4">
+              {/* Total score ring + number */}
+              <div className="flex items-center gap-5 mb-2">
+                <div className="relative shrink-0">
+                  <svg width={72} height={72} className="-rotate-90">
+                    <circle cx={36} cy={36} r={28} fill="none" stroke="hsl(var(--border))" strokeWidth={6} />
+                    <circle
+                      cx={36} cy={36} r={28} fill="none"
+                      stroke={maturity.total >= 80 ? "#34d399" : maturity.total >= 55 ? "#60a5fa" : maturity.total >= 30 ? "#f59e0b" : "#f87171"}
+                      strokeWidth={6}
+                      strokeDasharray={`${2 * Math.PI * 28}`}
+                      strokeDashoffset={`${2 * Math.PI * 28 * (1 - maturity.total / 100)}`}
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                  <div className="absolute inset-0 flex flex-col items-center justify-center">
+                    <span className="text-xl font-bold tabular-nums">{maturity.total}</span>
+                  </div>
+                </div>
+                <div className="space-y-1.5 flex-1">
+                  {maturity.dimensions.map(d => (
+                    <div key={d.id} className="flex items-center gap-2 text-xs">
+                      <span className="text-muted-foreground w-28 shrink-0">{d.label}</span>
+                      <div className="flex-1 h-1.5 bg-secondary/40 rounded-full overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-primary/70 transition-all"
+                          style={{ width: `${(d.score / d.max) * 100}%` }}
+                        />
+                      </div>
+                      <span className="tabular-nums text-muted-foreground w-8 text-right">{d.score}/{d.max}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {/* Top tip */}
+              {maturity.dimensions.flatMap(d => d.tips).slice(0, 1).map((tip, i) => (
+                <p key={i} className="text-xs text-muted-foreground/80 bg-secondary/20 rounded-lg px-3 py-2 italic">
+                  💡 {tip}
+                </p>
+              ))}
+            </div>
+          ) : (
+            <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>
+          )}
+        </Card>
+
+        {/* Targets card */}
+        <Card className="p-6 border-border/50">
+          <div className="flex items-center justify-between mb-5">
+            <h3 className="font-semibold text-lg">Emission Targets</h3>
+            <Link href="/targets" className="flex items-center gap-1 text-xs text-primary hover:underline">
+              Manage <ChevronRight className="w-3 h-3" />
+            </Link>
+          </div>
+          {!targetsData ? (
+            <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>
+          ) : targetsData.items.length === 0 ? (
+            <div className="text-center py-6">
+              <TrendingDown className="w-8 h-8 mx-auto text-muted-foreground/30 mb-3" />
+              <p className="text-sm text-muted-foreground mb-3">No targets set yet.</p>
+              <Link href="/targets">
+                <button className="text-xs text-primary hover:underline">Set your first target →</button>
+              </Link>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {targetsData.items.slice(0, 3).map(t => {
+                const targetKg = t.baselineCo2eKg * (1 - t.targetPctReduction / 100);
+                const currentKg = summary?.totalCo2eKg;
+                const reductionNeeded = t.baselineCo2eKg - targetKg;
+                const reductionAchieved = currentKg != null ? Math.max(0, t.baselineCo2eKg - currentKg) : null;
+                const progressPct = reductionAchieved != null && reductionNeeded > 0
+                  ? Math.min((reductionAchieved / reductionNeeded) * 100, 100)
+                  : 0;
+                const yearsLeft = t.targetYear - new Date().getFullYear();
+                const onTrack = progressPct >= ((new Date().getFullYear() - t.baselineYear) / (t.targetYear - t.baselineYear)) * 100 * 0.8;
+
+                return (
+                  <div key={t.id} className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-foreground flex-1 truncate">
+                        {t.label || `↓${t.targetPctReduction}% by ${t.targetYear}`}
+                      </span>
+                      {reductionAchieved != null && (
+                        <span className={`flex items-center gap-1 text-xs ${onTrack ? "text-emerald-400" : "text-amber-400"}`}>
+                          {onTrack ? <CheckCircle2 className="w-3 h-3" /> : <AlertTriangle className="w-3 h-3" />}
+                          {onTrack ? "On track" : "Needs attention"}
+                        </span>
+                      )}
+                    </div>
+                    <div className="h-2.5 bg-secondary/40 rounded-full overflow-hidden">
+                      <div
+                        className="h-full rounded-full bg-gradient-to-r from-primary to-emerald-400 transition-all"
+                        style={{ width: `${progressPct}%` }}
+                      />
+                    </div>
+                    <div className="flex justify-between text-xs text-muted-foreground">
+                      <span>{Math.round(progressPct)}% reduction achieved</span>
+                      <span>{yearsLeft > 0 ? `${yearsLeft}yr${yearsLeft !== 1 ? "s" : ""} to go` : "Due now"}</span>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </Card>

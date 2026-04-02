@@ -12,6 +12,9 @@ import widgetRouter, { widgetPublicRouter } from "./widget.js";
 import auditRouter, { globalAuditRouter } from "./audit.js";
 import adminRouter from "./admin.js";
 import gridRouter from "./grid.js";
+import targetsRouter from "./targets.js";
+import maturityRouter from "./maturity.js";
+import scenariosRouter from "./scenarios.js";
 
 const router = Router();
 
@@ -31,6 +34,9 @@ router.use("/organisations/:orgId/goals", goalsRouter);
 router.use("/organisations/:orgId/reports", reportsRouter);
 router.use("/organisations/:orgId/widget", widgetRouter);
 router.use("/organisations/:orgId/audit-logs", auditRouter);
+router.use("/organisations/:orgId/targets", targetsRouter);
+router.use("/organisations/:orgId/maturity", maturityRouter);
+router.use("/organisations/:orgId/scenarios", scenariosRouter);
 
 // Webhooks (no auth - use API keys/tokens)
 router.use("/webhooks/fleet", fleetWebhookRouter);

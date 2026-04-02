@@ -4,6 +4,12 @@
 
 Real-time multi-tenant ESG sustainability measurement platform. Companies track CO2 emissions from fleet vehicles (Navman, Blackhawk GPS integration) and energy consumption (PDF upload + inbound email bill parsing). Features passkey/WebAuthn authentication, super-admin portal, board-ready PDF reports, an embeddable public widget, full audit logging (SOC 2 mindset), and role-based access.
 
+### ESG Intelligence Features
+- **Maturity Scoring**: 4-dimension scoring (Foundation 40pt, Coverage 30pt, Quality 20pt, Governance 10pt) — grades: Foundation / Developing / Advanced / Leader
+- **Emission Targets**: CRUD for reduction targets with baseline/target year, % reduction, framework (SBTi, Paris, etc.)
+- **Scenario Modelling**: Lever-based emission reduction engine (EV transition, km reduction, modal shift, renewables, efficiency, offsets) with live preview
+- **Dashboard widgets**: Maturity ring chart + Targets progress bars on the main dashboard
+
 ## Stack
 
 - **Monorepo tool**: pnpm workspaces
