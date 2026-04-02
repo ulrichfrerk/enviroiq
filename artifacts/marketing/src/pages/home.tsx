@@ -83,7 +83,7 @@ export default function Home() {
               className="mt-20 relative rounded-2xl border border-border bg-card overflow-hidden shadow-xl"
             >
               <img
-                src={`${import.meta.env.BASE_URL}/images/hero-data.png`}
+                src={`${import.meta.env.BASE_URL}images/hero-data.png`}
                 alt="EnviroIQ Dashboard Visualization"
                 className="w-full h-auto object-cover"
               />
@@ -208,7 +208,7 @@ export default function Home() {
                 className="relative rounded-2xl border border-border overflow-hidden shadow-xl"
               >
                 <img
-                  src={`${import.meta.env.BASE_URL}/images/dashboard-mockup.png`}
+                  src={`${import.meta.env.BASE_URL}images/dashboard-mockup.png`}
                   alt="EnviroIQ Dashboard UI Mockup"
                   className="w-full h-auto object-cover"
                 />

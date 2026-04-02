@@ -5,10 +5,10 @@ outputs = []
 id = "F1_i4hZ1AmQ3ZoJZ1-Yug"
 uri = "file://artifacts/marketing/public/images/hero-data.png"
 type = "image"
-title = "Hero data visualization"
+title = "generated_image"
 
 [[generated]]
 id = "T9ea_mIXccibNumtNtez6"
 uri = "file://artifacts/marketing/public/images/dashboard-mockup.png"
 type = "image"
-title = "Dashboard UI mockup"
+title = "generated_image"
