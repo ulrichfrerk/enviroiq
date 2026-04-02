@@ -339,5 +339,101 @@ webhookRouter.post("/generic", async (req, res) => {
   }
 });
 
+// POST /organisations/:orgId/fleet/import-km
+// Accepts an array of {vehicle, date, distanceKm, fuelLitres?} rows,
+// matches vehicles by name or registration, and inserts fleet events.
+router.post("/import-km", requireAuth, requireOrgAdmin, async (req, res) => {
+  try {
+    const orgId = req.params.orgId as string;
+    const { rows } = req.body as {
+      rows: Array<{ vehicle: string; date: string; distanceKm: number | string; fuelLitres?: number | string }>;
+    };
+
+    if (!Array.isArray(rows) || rows.length === 0) {
+      res.status(400).json({ error: "Bad Request", message: "rows array is required and must not be empty" });
+      return;
+    }
+    if (rows.length > 5000) {
+      res.status(400).json({ error: "Bad Request", message: "Maximum 5000 rows per import" });
+      return;
+    }
+
+    // Load all vehicles for this org and build lookup maps
+    const orgVehicles = await db.query.vehiclesTable.findMany({
+      where: eq(vehiclesTable.organisationId, orgId),
+    });
+    const byName = new Map(orgVehicles.map(v => [v.name.toLowerCase().trim(), v]));
+    const byRego = new Map(
+      orgVehicles.filter(v => v.registration).map(v => [v.registration!.toLowerCase().trim(), v])
+    );
+
+    let imported = 0;
+    const skipped: string[] = [];
+    const errors: string[] = [];
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const label = row.vehicle?.trim() || `Row ${i + 1}`;
+      const vehicleKey = label.toLowerCase();
+
+      const vehicle = byName.get(vehicleKey) ?? byRego.get(vehicleKey);
+      if (!vehicle) {
+        skipped.push(label);
+        continue;
+      }
+
+      const distanceKm = Number(row.distanceKm);
+      if (!distanceKm || distanceKm <= 0) {
+        errors.push(`${label}: invalid distance "${row.distanceKm}"`);
+        continue;
+      }
+
+      // Parse date — supports YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY
+      let recordedAt: Date;
+      try {
+        const dateStr = (row.date || "").trim();
+        const ddmm = dateStr.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+        recordedAt = ddmm
+          ? new Date(`${ddmm[3]}-${ddmm[2].padStart(2, "0")}-${ddmm[1].padStart(2, "0")}`)
+          : new Date(dateStr);
+        if (isNaN(recordedAt.getTime())) throw new Error("invalid");
+      } catch {
+        errors.push(`${label}: invalid date "${row.date}"`);
+        continue;
+      }
+
+      const fuelLitres = row.fuelLitres ? Number(row.fuelLitres) : undefined;
+
+      await insertFleetEvent({
+        vehicleId: vehicle.id,
+        organisationId: orgId,
+        eventType: "manual-import",
+        distanceKm,
+        fuelLitres: fuelLitres && fuelLitres > 0 ? fuelLitres : undefined,
+        source: "tn360-import",
+        recordedAt,
+        rawPayload: JSON.stringify(row),
+        fuelType: vehicle.fuelType,
+        emissionFactor: vehicle.emissionFactorKgPerKm ?? undefined,
+      });
+
+      imported++;
+    }
+
+    await logAudit({
+      req,
+      action: "fleet.import_km",
+      outcome: "success",
+      details: { imported, skipped: skipped.length, errors: errors.length },
+      organisationId: orgId,
+    });
+
+    res.json({ imported, skipped, errors });
+  } catch (err) {
+    req.log.error({ err }, "Fleet KM import failed");
+    res.status(500).json({ error: "Internal Server Error", message: "Failed to import KM data" });
+  }
+});
+
 export { webhookRouter };
 export default router;
