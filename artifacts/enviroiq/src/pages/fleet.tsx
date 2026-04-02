@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { read as xlsxRead, utils as xlsxUtils } from "xlsx";
 import { useAuth } from "@/hooks/use-auth";
 import {
@@ -14,7 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import {
   Car, Plus, Trash2, Loader2, Navigation, Server, Upload, Download,
-  CheckCircle2, XCircle, Gauge, FileSpreadsheet,
+  CheckCircle2, XCircle, Gauge, FileSpreadsheet, AlertTriangle,
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
@@ -335,6 +335,38 @@ const vehicleSchema = z.object({
   gpsDeviceId: z.string().optional(),
 });
 
+// ─── Vehicle stats (top emitters) ────────────────────────────────────────────
+
+type VehicleStat = {
+  vehicleId: string;
+  name: string;
+  make: string | null;
+  model: string | null;
+  fuelType: string;
+  emissionFactorKgPerKm: number | null;
+  classEmissionFactorKgPerKm: number | null;
+  effectiveEmissionFactor: number | null;
+  totalKm: number;
+  totalCo2eKg: number;
+  eventCount: number;
+  avgDailyKm: number;
+  co2ePerKm: number;
+};
+
+function useVehicleStats(orgId: string | undefined) {
+  const [data, setData] = useState<VehicleStat[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  useEffect(() => {
+    if (!orgId) return;
+    setLoading(true);
+    fetch(`/api/organisations/${orgId}/fleet/vehicles/stats`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(d => { setData(d.items ?? []); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [orgId]);
+  return { stats: data, loadingStats: loading };
+}
+
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function Fleet() {
@@ -367,6 +399,7 @@ export default function Fleet() {
   const { data: vehicles, isLoading, refetch } = useListVehicles(orgId!, { query: { enabled: !!orgId } });
   const createVehicle = useCreateVehicle();
   const deleteVehicle = useDeleteVehicle();
+  const { stats: vehicleStats, loadingStats } = useVehicleStats(orgId);
 
   const knownVehicles = new Set([
     ...(vehicles?.items.map(v => v.name.toLowerCase().trim()) ?? []),
@@ -911,6 +944,98 @@ export default function Fleet() {
           </Dialog>
         </div>
       </div>
+
+      {/* ── Top Emitters Leaderboard ────────────────────────────────────────── */}
+      {(vehicleStats && vehicleStats.length > 0) && (() => {
+        const top = vehicleStats.slice(0, 10);
+        const maxCo2 = Math.max(...top.map(v => v.totalCo2eKg), 1);
+        const getFactorLabel = (v: VehicleStat) => {
+          const factor = v.effectiveEmissionFactor ?? v.co2ePerKm;
+          if (factor === 0) return { label: "Equipment", color: "text-muted-foreground" };
+          if (factor >= 0.5)  return { label: "Heavy truck", color: "text-red-400" };
+          if (factor >= 0.3)  return { label: "Med. truck", color: "text-orange-400" };
+          return { label: "Light", color: "text-emerald-400" };
+        };
+        return (
+          <Card className="border-border/50 overflow-hidden">
+            <div className="p-6 border-b border-border/50 bg-secondary/20 flex items-center justify-between">
+              <div>
+                <h3 className="font-semibold text-lg flex items-center gap-2">
+                  <AlertTriangle className="w-5 h-5 text-orange-400" />
+                  Top Emitters — Fleet CO₂ Leaderboard
+                </h3>
+                <p className="text-muted-foreground text-sm mt-0.5">
+                  Ranked by total CO₂e. Emission factors applied per vehicle class (NZ MfE guidance).
+                </p>
+              </div>
+              {loadingStats && <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />}
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm text-left">
+                <thead className="bg-secondary/30 text-muted-foreground uppercase text-xs font-semibold">
+                  <tr>
+                    <th className="px-4 py-3 w-8">#</th>
+                    <th className="px-4 py-3">Vehicle</th>
+                    <th className="px-4 py-3 hidden md:table-cell">Make / Model</th>
+                    <th className="px-4 py-3">Class</th>
+                    <th className="px-4 py-3 text-right">kg CO₂e/km</th>
+                    <th className="px-4 py-3 text-right">Total km</th>
+                    <th className="px-4 py-3 text-right">Total CO₂e</th>
+                    <th className="px-4 py-3 w-32">Share</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border/50">
+                  {top.map((v, i) => {
+                    const pct = Math.round((v.totalCo2eKg / maxCo2) * 100);
+                    const { label, color } = getFactorLabel(v);
+                    const rankColor = i === 0 ? "text-red-400 font-bold" : i === 1 ? "text-orange-400 font-semibold" : i === 2 ? "text-yellow-400" : "text-muted-foreground";
+                    return (
+                      <tr key={v.vehicleId} className="hover:bg-secondary/20 transition-colors">
+                        <td className={`px-4 py-3 font-mono text-xs ${rankColor}`}>{i + 1}</td>
+                        <td className="px-4 py-3">
+                          <span className="font-semibold text-foreground font-mono">{v.name}</span>
+                        </td>
+                        <td className="px-4 py-3 text-muted-foreground text-xs hidden md:table-cell max-w-[200px] truncate">
+                          {v.make} {v.model ? v.model.split(" ").slice(0, 3).join(" ") : ""}
+                        </td>
+                        <td className={`px-4 py-3 text-xs font-medium ${color}`}>{label}</td>
+                        <td className="px-4 py-3 text-right font-mono text-xs">
+                          {(v.effectiveEmissionFactor ?? v.co2ePerKm) > 0
+                            ? (v.effectiveEmissionFactor ?? v.co2ePerKm).toFixed(3)
+                            : "—"}
+                        </td>
+                        <td className="px-4 py-3 text-right text-muted-foreground font-mono text-xs">
+                          {v.totalKm.toLocaleString()}
+                        </td>
+                        <td className="px-4 py-3 text-right font-semibold text-foreground">
+                          {v.totalCo2eKg.toLocaleString(undefined, { maximumFractionDigits: 0 })} kg
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1 bg-secondary rounded-full h-1.5 overflow-hidden">
+                              <div
+                                className={`h-full rounded-full ${i === 0 ? "bg-red-500" : i <= 2 ? "bg-orange-400" : "bg-primary"}`}
+                                style={{ width: `${pct}%` }}
+                              />
+                            </div>
+                            <span className="text-xs text-muted-foreground w-8 text-right">{pct}%</span>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div className="p-4 border-t border-border/50 bg-secondary/10 flex flex-wrap gap-4 text-xs text-muted-foreground">
+              <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" /> Light commercial: 0.214 kg/km (Hilux, Hiace)</span>
+              <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-orange-400 inline-block" /> Medium truck: 0.340 kg/km (Hino Dutro, Isuzu NPR)</span>
+              <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-red-400 inline-block" /> Heavy truck: 0.52–0.90 kg/km</span>
+              <span className="ml-auto">Source: NZ MfE vehicle emission factors</span>
+            </div>
+          </Card>
+        );
+      })()}
 
       {/* Webhook Info */}
       <Card className="p-6 bg-secondary/10 border-primary/20">

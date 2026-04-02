@@ -4,7 +4,7 @@ import { eq, and, gte, lte, count, sql } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
 import { requireAuth, requireOrgAccess, requireOrgAdmin } from "../lib/auth.js";
 import { logAudit } from "../lib/audit.js";
-import { calcFleetCo2e } from "../lib/emissions.js";
+import { calcFleetCo2e, vehicleClassEmissionFactor } from "../lib/emissions.js";
 
 const router = Router({ mergeParams: true });
 const webhookRouter = Router();
@@ -95,6 +95,68 @@ router.patch("/vehicles/:vehicleId", requireAuth, requireOrgAdmin, async (req, r
   } catch (err) {
     req.log.error({ err }, "Update vehicle failed");
     res.status(500).json({ error: "Internal Server Error", message: "Failed to update vehicle" });
+  }
+});
+
+// GET /organisations/:orgId/fleet/vehicles/stats — per-vehicle CO₂ leaderboard
+router.get("/vehicles/stats", requireAuth, requireOrgAccess, async (req, res) => {
+  try {
+    const orgId = req.params.orgId as string;
+    const { from, to } = req.query;
+
+    const conditions = [eq(fleetEventsTable.organisationId, orgId)];
+    if (from) conditions.push(gte(fleetEventsTable.recordedAt, new Date(from as string)));
+    if (to)   conditions.push(lte(fleetEventsTable.recordedAt, new Date(to as string)));
+
+    const rows = await db
+      .select({
+        vehicleId: fleetEventsTable.vehicleId,
+        totalKm:     sql<number>`COALESCE(SUM(${fleetEventsTable.distanceKm}), 0)`,
+        totalCo2eKg: sql<number>`COALESCE(SUM(${fleetEventsTable.co2eKg}), 0)`,
+        eventCount:  sql<number>`COUNT(*)`,
+        firstEvent:  sql<string>`MIN(${fleetEventsTable.recordedAt})`,
+        lastEvent:   sql<string>`MAX(${fleetEventsTable.recordedAt})`,
+      })
+      .from(fleetEventsTable)
+      .where(and(...conditions))
+      .groupBy(fleetEventsTable.vehicleId);
+
+    // Join vehicle metadata
+    const vehicles = await db.query.vehiclesTable.findMany({
+      where: eq(vehiclesTable.organisationId, orgId),
+    });
+    const vehicleMap = new Map(vehicles.map(v => [v.id, v]));
+
+    const stats = rows.map(row => {
+      const v = vehicleMap.get(row.vehicleId);
+      const days = row.firstEvent && row.lastEvent
+        ? Math.max(1, Math.round((new Date(row.lastEvent).getTime() - new Date(row.firstEvent).getTime()) / 86400000))
+        : 1;
+      const storedFactor = v?.emissionFactorKgPerKm ?? null;
+      const classFactor  = vehicleClassEmissionFactor(v?.make ?? "", v?.model ?? "");
+      const effectiveFactor = storedFactor ?? classFactor;
+      return {
+        vehicleId:                  row.vehicleId,
+        name:                       v?.name ?? row.vehicleId,
+        make:                       v?.make ?? null,
+        model:                      v?.model ?? null,
+        fuelType:                   v?.fuelType ?? "diesel",
+        emissionFactorKgPerKm:      storedFactor,
+        classEmissionFactorKgPerKm: classFactor,
+        effectiveEmissionFactor:    effectiveFactor,
+        gpsProvider:                v?.gpsProvider ?? "none",
+        totalKm:                    Number(row.totalKm),
+        totalCo2eKg:                Number(row.totalCo2eKg),
+        eventCount:                 Number(row.eventCount),
+        avgDailyKm:                 Number(row.totalKm) / days,
+        co2ePerKm:                  Number(row.totalKm) > 0 ? Number(row.totalCo2eKg) / Number(row.totalKm) : 0,
+      };
+    }).sort((a, b) => b.totalCo2eKg - a.totalCo2eKg);
+
+    res.json({ items: stats, total: stats.length });
+  } catch (err) {
+    req.log.error({ err }, "Vehicle stats failed");
+    res.status(500).json({ error: "Internal Server Error", message: "Failed to load vehicle stats" });
   }
 });
 
@@ -194,12 +256,20 @@ async function insertFleetEvent(data: {
   rawPayload: string;
   fuelType?: string;
   emissionFactor?: number;
+  make?: string;
+  model?: string;
 }) {
+  // Resolve emission factor: explicit override → vehicle class detection → fuel-type default
+  const resolvedFactor = data.emissionFactor
+    ?? vehicleClassEmissionFactor(data.make ?? "", data.model ?? "")
+    ?? undefined;
   const co2eKg = calcFleetCo2e({
     fuelType: data.fuelType || "petrol",
     distanceKm: data.distanceKm,
     fuelLitres: data.fuelLitres,
-    emissionFactorKgPerKm: data.emissionFactor,
+    emissionFactorKgPerKm: resolvedFactor,
+    make: data.make,
+    model: data.model,
   });
 
   await db.insert(fleetEventsTable).values({
@@ -415,6 +485,8 @@ router.post("/import-km", requireAuth, requireOrgAdmin, async (req, res) => {
         rawPayload: JSON.stringify(row),
         fuelType: vehicle.fuelType,
         emissionFactor: vehicle.emissionFactorKgPerKm ?? undefined,
+        make: vehicle.make ?? undefined,
+        model: vehicle.model ?? undefined,
       });
 
       imported++;

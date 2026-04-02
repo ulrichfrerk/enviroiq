@@ -101,18 +101,25 @@ export function calcFleetCo2e({
   distanceKm,
   fuelLitres,
   emissionFactorKgPerKm,
+  make,
+  model,
 }: {
   fuelType: string;
   distanceKm?: number;
   fuelLitres?: number;
   emissionFactorKgPerKm?: number;
+  make?: string;
+  model?: string;
 }): number {
   if (fuelType === "electric") return 0;
   if (fuelLitres && fuelType in EMISSION_FACTORS) {
     return fuelLitres * EMISSION_FACTORS[fuelType as keyof typeof EMISSION_FACTORS];
   }
   if (distanceKm) {
-    const factor = emissionFactorKgPerKm ?? defaultEmissionFactor(fuelType);
+    const classFactor = emissionFactorKgPerKm == null
+      ? vehicleClassEmissionFactor(make ?? "", model ?? "")
+      : null;
+    const factor = emissionFactorKgPerKm ?? classFactor ?? defaultEmissionFactor(fuelType);
     return distanceKm * factor;
   }
   return 0;
@@ -128,6 +135,39 @@ function defaultEmissionFactor(fuelType: string): number {
     other: 0.2,
   };
   return defaults[fuelType] ?? 0.2;
+}
+
+/**
+ * NZ-specific emission factor based on vehicle class detected from make/model.
+ * Factors derived from MfE and EECA guidance for NZ diesel fleet.
+ *
+ *  Light commercial (<3.5t GVM)  — 0.214 kg CO₂e/km  (Hilux, Hiace, Ranger, D-Max)
+ *  Medium truck (3.5–8t GVM)     — 0.340 kg CO₂e/km  (Hino Dutro 300, Fuso Canter)
+ *  Medium-heavy truck (8–16t)    — 0.520 kg CO₂e/km  (Hino 500, Isuzu FRR/FVR)
+ *  Heavy truck (>16t GVM)        — 0.900 kg CO₂e/km  (Scania, Volvo FH, Kenworth)
+ *  Construction equipment        — 0.000 kg CO₂e/km  (not distance-based; use fuel)
+ *
+ * Returns null when no vehicle-class match is found (caller falls back to defaultEmissionFactor).
+ */
+export function vehicleClassEmissionFactor(make = "", model = ""): number | null {
+  const t = `${make} ${model}`.toLowerCase();
+
+  // Electric
+  if (/\bev\b|electric|bev|ioniq|leaf|model\s[s3xy]|e-tron/.test(t)) return 0;
+
+  // Construction / off-road equipment — CO₂e from fuel consumption, not km
+  if (/hitachi|kobelco|komatsu|caterpillar|\bcatb\b|excavator|loader|forklift|jcb/.test(t)) return 0;
+
+  // Heavy on-road trucks (>16t GVM)
+  if (/scania|kenworth|mack\b|freightliner|volvo\s*(fh|fm|fl|fmx)|western\s*star/.test(t)) return 0.9;
+
+  // Medium-heavy trucks (8–16t): Hino 500/700, Isuzu FRR/FVR/FSR, UD Quon/Condor
+  if (/hino\s*(500|700|fc|fd|fe|fg|gh|gk)|isuzu\s*(frr|fsr|fvr|frr|gsr|gvr)|ud\s*(quon|condor)/.test(t)) return 0.52;
+
+  // Medium trucks (3.5–8t): Hino Dutro/300, Isuzu NPR/NLS/NQR, Mitsubishi Fuso Canter, Ford Transit HD
+  if (/hino\s*(300|dutro|816|921|fc|fd)|isuzu\s*(npr|nls|nqr|nps)|mitsubishi\s*fuso|fuso\s*canter|canter\s*fuso/.test(t)) return 0.34;
+
+  return null; // no class match — use fuelType default
 }
 
 export function calcEnergyCo2e({
