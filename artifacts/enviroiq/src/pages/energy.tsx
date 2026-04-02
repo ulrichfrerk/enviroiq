@@ -182,96 +182,66 @@ export default function Energy() {
     disabled: isProcessing,
   });
 
-  // Process all pending files in one batch request, then map results back by index.
-  // Results from /upload-batch are returned in the same order files were sent.
+  // Process files sequentially one-at-a-time so each row transitions live:
+  //   Pending → Processing → Success / Review / Error
+  // After each file resolves, the reading history refreshes incrementally.
   const processQueue = useCallback(async () => {
     if (!orgId || isProcessing) return;
 
-    // Snapshot pending items — order is preserved in the FormData and in the response
+    // Snapshot pending items at this moment — stable IDs used for row association
     const pendingSnapshot = queue.filter(f => f.status === "pending");
     if (pendingSnapshot.length === 0) return;
 
     setIsProcessing(true);
 
-    // Mark all pending rows as processing simultaneously
-    setQueue(prev => prev.map(f =>
-      pendingSnapshot.some(p => p.id === f.id) ? { ...f, status: "processing" as FileStatus } : f
-    ));
+    for (const item of pendingSnapshot) {
+      // Mark only this row as processing — prior rows keep their final state
+      setQueue(prev => prev.map(f => f.id === item.id ? { ...f, status: "processing" as FileStatus } : f));
 
-    try {
-      const fd = new FormData();
-      for (const item of pendingSnapshot) fd.append("files", item.file);
-      if (batchRenewablePct > 0) fd.append("supplierRenewablePct", String(batchRenewablePct));
+      try {
+        const fd = new FormData();
+        fd.append("file", item.file);
+        if (batchRenewablePct > 0) fd.append("supplierRenewablePct", String(batchRenewablePct));
 
-      const res = await fetch(`/api/organisations/${orgId}/energy/upload-batch`, {
-        method: "POST",
-        body: fd,
-        credentials: "include",
-      });
-
-      if (!res.ok) {
-        const errBody = await res.json() as { message?: string };
-        throw new Error(errBody.message ?? `HTTP ${res.status}`);
-      }
-
-      const data = await res.json() as {
-        results: Array<{
-          filename: string;
-          status: "success" | "review" | "error";
-          utilityType?: string;
-          provider?: string;
-          periodStart?: string;
-          periodEnd?: string;
-          usageKwh?: number;
-          co2eKg?: number;
-          confidence?: number;
-          reviewFlags?: string[];
-          error?: string;
-        }>;
-      };
-
-      // Map results by index — order in response matches order files were appended
-      setQueue(prev => {
-        const updated = [...prev];
-        pendingSnapshot.forEach((item, idx) => {
-          const result = data.results[idx];
-          const pos = updated.findIndex(f => f.id === item.id);
-          if (pos === -1) return;
-          if (!result) {
-            updated[pos] = { ...updated[pos], status: "error", error: "No result returned for this file" };
-            return;
-          }
-          updated[pos] = {
-            ...updated[pos],
-            status: result.status,
-            utilityType: result.utilityType,
-            provider: result.provider,
-            periodStart: result.periodStart,
-            periodEnd: result.periodEnd,
-            usageKwh: result.usageKwh,
-            co2eKg: result.co2eKg,
-            confidence: result.confidence,
-            reviewFlags: result.reviewFlags,
-            error: result.error,
-          };
+        const res = await fetch(`/api/organisations/${orgId}/energy/upload`, {
+          method: "POST",
+          body: fd,
+          credentials: "include",
         });
-        return updated;
-      });
 
-      // Single invalidation after all results are in
-      await qc.invalidateQueries({ queryKey: ["listEnergyReadings", orgId] });
+        if (!res.ok) {
+          const errBody = await res.json() as { message?: string };
+          throw new Error(errBody.message ?? `HTTP ${res.status}`);
+        }
 
-    } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : "Upload failed";
-      setQueue(prev => prev.map(f =>
-        f.status === "processing" ? { ...f, status: "error" as FileStatus, error: message } : f
-      ));
-      toast({ variant: "destructive", title: "Upload failed", description: message });
-    } finally {
-      setIsProcessing(false);
-      setIsDone(true);
+        const data = await res.json() as UploadResult;
+        const pf = data.parsedFields;
+
+        setQueue(prev => prev.map(f => f.id === item.id ? {
+          ...f,
+          status: ((data.reviewFlags?.length ?? 0) > 0 ? "review" : "success") as FileStatus,
+          utilityType: pf.utilityType,
+          provider: pf.provider,
+          periodStart: pf.periodStart ? new Date(pf.periodStart).toISOString() : undefined,
+          periodEnd:   pf.periodEnd   ? new Date(pf.periodEnd).toISOString()   : undefined,
+          usageKwh:    pf.usageKwh,
+          co2eKg:      data.reading.co2eKg,
+          confidence:  data.confidence,
+          reviewFlags: data.reviewFlags,
+        } : f));
+
+        // Refresh history immediately so the new row appears as soon as each file is done
+        await qc.invalidateQueries({ queryKey: ["listEnergyReadings", orgId] });
+
+      } catch (e: unknown) {
+        const message = e instanceof Error ? e.message : "Upload failed";
+        setQueue(prev => prev.map(f => f.id === item.id ? { ...f, status: "error" as FileStatus, error: message } : f));
+      }
     }
-  }, [orgId, queue, batchRenewablePct, isProcessing, qc, toast]);
+
+    setIsProcessing(false);
+    setIsDone(true);
+  }, [orgId, queue, batchRenewablePct, isProcessing, qc]);
 
   const resetUpload = () => {
     setQueue([]);
