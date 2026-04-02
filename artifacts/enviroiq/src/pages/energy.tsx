@@ -231,7 +231,8 @@ export default function Energy() {
         } : f));
 
         // Refresh history immediately so the new row appears as soon as each file is done
-        await qc.invalidateQueries({ queryKey: ["listEnergyReadings", orgId] });
+        // Key must match the Orval-generated hook: `/api/organisations/${orgId}/energy/readings`
+        await qc.invalidateQueries({ queryKey: [`/api/organisations/${orgId}/energy/readings`] });
 
       } catch (e: unknown) {
         const message = e instanceof Error ? e.message : "Upload failed";

@@ -8,23 +8,40 @@ import { logAudit } from "../lib/audit.js";
 import { calcEnergyCo2e, resolveElectricityFactor } from "../lib/emissions.js";
 import { getCurrentGridIntensity } from "../lib/em6.js";
 import { parseBillText } from "../lib/billParser.js";
+import { createRequire } from "module";
+// pdf-parse is CJS-only; load via createRequire so it works in our ESM bundle
+const _require = createRequire(import.meta.url);
+const pdfParse = _require("pdf-parse") as (
+  buffer: Buffer,
+  options?: { max?: number }
+) => Promise<{ text: string; numpages: number }>;
 
 const router = Router({ mergeParams: true });
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 /**
- * Extract readable text from a raw PDF buffer for bill parsing.
- * Uses latin1 (1:1 byte mapping, never throws) then strips null bytes
- * and non-printable control characters so the result is safe for a
- * PostgreSQL UTF-8 text column.
+ * Extract readable text from a PDF buffer using pdf-parse (handles FlateDecode/compressed streams).
+ * Falls back to latin1 stripping if pdf-parse fails (e.g. encrypted or corrupt PDFs).
+ * Returns a string guaranteed safe for PostgreSQL UTF-8 text columns (no null bytes).
  */
-function extractPdfText(buffer: Buffer, maxBytes = 8000): string {
-  return buffer
-    .toString("latin1", 0, Math.min(buffer.length, maxBytes))
-    .replace(/\0/g, "")                       // remove null bytes (0x00) — PostgreSQL rejects these
-    .replace(/[\x01-\x08\x0E-\x1F\x7F]/g, " ") // replace other non-printable control chars with space
-    .replace(/\s+/g, " ")                      // collapse whitespace
-    .trim();
+async function extractPdfText(buffer: Buffer): Promise<string> {
+  try {
+    const data = await pdfParse(buffer, { max: 0 }); // max:0 = all pages
+    // pdf-parse returns unicode text — only strip null bytes for DB safety
+    return data.text
+      .replace(/\0/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 12000); // generous limit for bill parsing
+  } catch {
+    // Fallback: latin1 decode + strip non-printable control chars
+    return buffer
+      .toString("latin1", 0, Math.min(buffer.length, 8000))
+      .replace(/\0/g, "")
+      .replace(/[\x01-\x08\x0E-\x1F\x7F]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
 }
 
 // GET /organisations/:orgId/energy/readings
@@ -116,8 +133,8 @@ router.post("/upload", requireAuth, requireOrgAdmin, upload.single("file"), asyn
       return;
     }
 
-    // Extract text from PDF (best-effort from first 8KB, null bytes stripped)
-    const fileText = extractPdfText(req.file.buffer);
+    // Extract text from PDF using pdf-parse (handles compressed content streams)
+    const fileText = await extractPdfText(req.file.buffer);
 
     // Auto-detect from bill text; caller may override any field
     const parsed = parseBillText(fileText);
@@ -255,8 +272,8 @@ router.post("/upload-batch", requireAuth, requireOrgAdmin, uploadBatch.array("fi
 
     for (const file of files) {
       try {
-        // Extract readable text from PDF buffer (best-effort, null bytes stripped)
-        const fileText = extractPdfText(file.buffer);
+        // Extract text from PDF using pdf-parse (handles compressed content streams)
+        const fileText = await extractPdfText(file.buffer);
 
         const parsed = parseBillText(fileText);
 
