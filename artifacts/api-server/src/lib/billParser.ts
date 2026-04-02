@@ -10,39 +10,60 @@ export interface ParsedBill {
   reviewFlags: string[];
 }
 
+// Providers sorted longest-first within each group so the most-specific name wins.
 const NZ_ELECTRICITY_PROVIDERS = [
-  "Contact Energy", "Contact",
-  "Mercury", "Mercury Energy",
-  "Genesis Energy", "Genesis",
-  "Meridian Energy", "Meridian",
-  "Vector", "Vector Metering",
-  "Powerco",
-  "Nova Energy", "Nova",
-  "Ecotricity",
-  "Trustpower",
-  "Electric Kiwi",
-  "Flick Electric", "Flick",
-  "Frank Energy", "Frank",
-  "Octopus Energy", "Octopus",
-  "Pulse Energy", "Pulse",
-  "King Country Energy",
-  "Network Tasman",
-  "Orion",
-  "Unison",
-  "Horizon Energy",
-  "Aurora Energy",
-  "Alpine Energy",
-  "Westpower",
+  // NZ — specific before short aliases
+  "Contact Energy", "Genesis Energy", "Mercury Energy", "Meridian Energy",
+  "Vector Metering", "King Country Energy", "Horizon Energy", "Aurora Energy",
+  "Alpine Energy", "Nova Energy", "Electric Kiwi", "Flick Electric",
+  "Frank Energy", "Octopus Energy", "Pulse Energy", "Network Tasman",
+  "Ecotricity", "Trustpower", "Powerco", "Unison", "Westpower", "Orion",
+  "Contact", "Genesis", "Mercury", "Meridian", "Vector", "Nova", "Flick", "Frank", "Octopus", "Pulse",
 ];
 
-const NZ_GAS_PROVIDERS = [
-  "Contact Energy", "Contact",
-  "Genesis Energy", "Genesis",
-  "Nova Energy", "Nova",
-  "Rockgas",
-  "Elgas",
-  "Todd Energy",
-  "Greymouth Gas",
+const AU_ELECTRICITY_PROVIDERS = [
+  "EnergyAustralia", "Origin Energy", "AGL Energy",
+  "Ergon Energy", "Energex", "Essential Energy", "ActewAGL",
+  "Aurora Energy Tasmania", "Powershop", "Amber Electric",
+  "OVO Energy Australia", "Alinta Energy", "Red Energy", "Lumo Energy",
+  "Dodo Power and Gas", "Simply Energy", "Momentum Energy", "Powerdirect",
+  "AGL", "Origin", "Ergon", "Alinta",
+];
+
+const UK_ELECTRICITY_PROVIDERS = [
+  "British Gas", "EDF Energy", "E.ON Energy", "OVO Energy", "Octopus Energy",
+  "Scottish Power", "Scottish and Southern Energy", "Shell Energy",
+  "So Energy", "Bulb Energy",
+  "EDF", "E.ON", "SSE", "npower", "Bulb",
+];
+
+const US_ELECTRICITY_PROVIDERS = [
+  "Pacific Gas and Electric", "Consolidated Edison", "Con Edison",
+  "Duke Energy", "Dominion Energy", "National Grid", "Southern California Edison",
+  "Florida Power and Light", "Florida Power & Light", "Xcel Energy",
+  "PG&E", "SCE", "FPL",
+];
+
+const ALL_ELECTRICITY_PROVIDERS = [
+  ...NZ_ELECTRICITY_PROVIDERS,
+  ...AU_ELECTRICITY_PROVIDERS,
+  ...UK_ELECTRICITY_PROVIDERS,
+  ...US_ELECTRICITY_PROVIDERS,
+];
+
+const ALL_GAS_PROVIDERS = [
+  // NZ
+  "Contact Energy", "Genesis Energy", "Nova Energy",
+  "Rockgas", "Elgas", "Todd Energy", "Greymouth Gas",
+  "Contact", "Genesis", "Nova",
+  // AU
+  "Origin Energy", "AGL Energy", "Alinta Energy", "Kleenheat", "Supagas", "Elgas Australia",
+  "AGL", "Origin", "Alinta",
+  // UK
+  "British Gas", "EDF Energy", "E.ON Energy", "OVO Energy", "Octopus Energy",
+  "EDF", "E.ON",
+  // US
+  "National Grid", "Dominion Energy", "Xcel Energy",
 ];
 
 const NZ_WATER_PROVIDERS = [
@@ -59,14 +80,19 @@ const NZ_WATER_PROVIDERS = [
   "New Plymouth District Council",
   "Far North District Council",
   "Water New Zealand",
+  // AU
+  "Sydney Water", "Melbourne Water", "Yarra Valley Water", "South East Water",
+  "Western Water", "Icon Water", "Unity Water",
+  // UK
+  "Thames Water", "Anglian Water", "Severn Trent", "Yorkshire Water",
 ];
 
 function detectUtilityType(text: string): { type: "electricity" | "gas" | "water"; confidence: number } {
   const t = text.toLowerCase();
 
-  const waterKeywords = ["water", "wastewater", "sewerage", "watercare", "cubic metre", "m³", "kl ", "kilolitre"];
-  const gasKeywords = ["natural gas", "reticulated gas", "lpg", "gas usage", "gas supply", "mj ", "megajoule", "gas meter"];
-  const electricityKeywords = ["electricity", "electric", "kwh", "kilowatt", "power supply", "energy usage", "grid", "peak", "off-peak", "anytime", "night rate"];
+  const waterKeywords = ["water", "wastewater", "sewerage", "watercare", "cubic metre", "m³", "kl ", "kilolitre", "water usage", "water supply"];
+  const gasKeywords = ["natural gas", "reticulated gas", "lpg", "gas usage", "gas supply", "mj ", "megajoule", "gas meter", "therms", " ccf", " mcf", " gj ", "gigajoule", "gas charge", "gas bill"];
+  const electricityKeywords = ["electricity", "electric", "kwh", "kilowatt", "power supply", "energy usage", "grid", "peak", "off-peak", "anytime", "night rate", "mwh", "megawatt", "units used", "meter reading", "icp number"];
 
   const waterScore  = waterKeywords.filter(k => t.includes(k)).length;
   const gasScore    = gasKeywords.filter(k => t.includes(k)).length;
@@ -83,8 +109,8 @@ function detectProvider(text: string, utilityType: "electricity" | "gas" | "wate
     utilityType === "water"
       ? NZ_WATER_PROVIDERS
       : utilityType === "gas"
-      ? NZ_GAS_PROVIDERS
-      : NZ_ELECTRICITY_PROVIDERS;
+      ? ALL_GAS_PROVIDERS
+      : ALL_ELECTRICITY_PROVIDERS;
 
   for (const provider of providers) {
     const escaped = provider.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -103,14 +129,33 @@ const NZ_MONTHS: Record<string, number> = {
 };
 
 function parseNZDate(str: string): Date | undefined {
-  str = str.trim();
+  str = str.trim().replace(/(\d+)(?:st|nd|rd|th)\b/g, "$1"); // strip ordinals: "1st" → "1"
 
-  // "1 January 2026" or "01 Jan 2026"
+  // "1 January 2026" or "01 Jan 2026" (4-digit year)
   const longMatch = str.match(/^(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})$/);
   if (longMatch) {
     const day = parseInt(longMatch[1]);
     const month = NZ_MONTHS[longMatch[2].toLowerCase()];
     const year = parseInt(longMatch[3]);
+    if (month !== undefined) return new Date(year, month, day);
+  }
+
+  // "28 Jun 25" — 2-digit year (Contact Energy table style)
+  const long2Match = str.match(/^(\d{1,2})\s+([A-Za-z]+)\s+(\d{2})$/);
+  if (long2Match) {
+    const day = parseInt(long2Match[1]);
+    const month = NZ_MONTHS[long2Match[2].toLowerCase()];
+    let year = parseInt(long2Match[3]);
+    if (year >= 0 && year <= 99) year += 2000;
+    if (month !== undefined) return new Date(year, month, day);
+  }
+
+  // US format: "January 1, 2026" or "Jan 1, 2026"
+  const usMatch = str.match(/^([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})$/);
+  if (usMatch) {
+    const month = NZ_MONTHS[usMatch[1].toLowerCase()];
+    const day = parseInt(usMatch[2]);
+    const year = parseInt(usMatch[3]);
     if (month !== undefined) return new Date(year, month, day);
   }
 
@@ -122,8 +167,8 @@ function parseNZDate(str: string): Date | undefined {
     if (month !== undefined) return new Date(year, month, 1);
   }
 
-  // "01/01/2026" or "01-01-2026"
-  const numericMatch = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  // "01/01/2026", "01-01-2026", or "01.01.2026" (European)
+  const numericMatch = str.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})$/);
   if (numericMatch) {
     const day = parseInt(numericMatch[1]);
     const month = parseInt(numericMatch[2]) - 1;
@@ -141,10 +186,15 @@ function parseNZDate(str: string): Date | undefined {
   return undefined;
 }
 
-const SEP = /\s*(?:to|–|—|-|through)\s*/i;
-const DATE_FULL  = /\d{1,2}\s+[A-Za-z]+\s+\d{4}/;  // "1 January 2026"
-const DATE_SHORT = /\d{1,2}\s+[A-Za-z]+/;           // "1 Jan" (no year)
-const DATE_NUM   = /\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/;
+// "bis" = German/Dutch "to"; "au" = French "to"; add alongside English variants
+const SEP = /\s*(?:to|bis|au|–|—|-|through)\s*/i;
+// Digit may carry an ordinal suffix: "1st", "2nd", "31st"
+const ORD = /(?:st|nd|rd|th)?/;
+const DATE_FULL  = new RegExp(`\\d{1,2}${ORD.source}\\s+[A-Za-z]+\\s+\\d{4}`);  // "1st January 2026" or "01 Jan 2026"
+const DATE_FULL2 = new RegExp(`\\d{1,2}${ORD.source}\\s+[A-Za-z]+\\s+\\d{2}`);  // "28 Jun 25" (2-digit year)
+const DATE_SHORT = new RegExp(`\\d{1,2}${ORD.source}\\s+[A-Za-z]+`);            // "1 Jan" (no year)
+const DATE_US    = /[A-Za-z]+\s+\d{1,2},?\s+\d{4}/;                             // "January 1, 2026"
+const DATE_NUM   = /\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}/;                     // "01/01/26" or "01.01.2026"
 const DATE_ISO   = /\d{4}-\d{2}-\d{2}/;
 
 /**
@@ -172,18 +222,24 @@ function detectBillingPeriod(text: string): { periodStart?: Date; periodEnd?: Da
   //   "01/02/2026 – 28/02/2026"
   //   "2026-01-01 to 2026-01-31"
   const rangePatterns: RegExp[] = [
-    // Both dates fully qualified: "1 January 2026 to 31 January 2026"
+    // Both dates fully qualified: "1 January 2026 to 31 January 2026" (with optional ordinals)
     new RegExp(`(${DATE_FULL.source})${SEP.source}(${DATE_FULL.source})`, "i"),
+    // US format: "January 1, 2026 to January 31, 2026"
+    new RegExp(`(${DATE_US.source})${SEP.source}(${DATE_US.source})`, "i"),
     // Short start + full end: "1 Jan – 31 Jan 2026" (Contact Energy style)
     new RegExp(`(${DATE_SHORT.source})${SEP.source}(${DATE_FULL.source})`, "i"),
-    // Numeric NZ: "01/02/2026 – 28/02/2026"
+    // Both dates with 2-digit year: "28 Jun 25 to 28 Jul 25" (Contact Energy table style)
+    new RegExp(`(${DATE_FULL2.source})${SEP.source}(${DATE_FULL2.source})`, "i"),
+    // Mixed: "28 Jun 25" to "28 Jul 2025"
+    new RegExp(`(${DATE_FULL2.source})${SEP.source}(${DATE_FULL.source})`, "i"),
+    // Numeric NZ/EU: "01/02/2026 – 28/02/2026" or "01.02.26 to 28.02.26"
     new RegExp(`(${DATE_NUM.source})${SEP.source}(${DATE_NUM.source})`),
     // ISO: "2026-01-01 to 2026-01-31"
     new RegExp(`(${DATE_ISO.source})${SEP.source}(${DATE_ISO.source})`),
   ];
 
-  // Optionally preceded by a billing-period label
-  const LABEL = /(?:bill(?:ing)?\s+period|invoice\s+period|service\s+period|your\s+(?:bill|usage)\s+(?:covers?|from)|period)[:\s]*/i;
+  // Optionally preceded by a billing-period label (NZ, AU, UK, US variants)
+  const LABEL = /(?:bill(?:ing)?\s+period|invoice\s+period|service\s+period|supply\s+period|read\s+period|energy\s+period|usage\s+period|your\s+(?:bill|usage)\s+(?:covers?|from|for)|period\s+from|from\s+period|covers?\s+the\s+\d+\s+day\s+period\s+from|for\s+the\s+period)[:\s]*/i;
 
   for (const pattern of rangePatterns) {
     // Try with label prefix first
@@ -265,30 +321,96 @@ function detectUsage(text: string, utilityType: "electricity" | "gas" | "water")
       if (vals.length > 0) return { usageKwh: Math.max(...vals) };
     }
 
-    // "kWh NNN" (label before number)
+    // MWh detection (large commercial / AU / EU) — convert to kWh
+    const mwhPatterns = [
+      /total\s+(?:electricity\s+)?(?:usage|consumption)[^\d]*(\d[\d,]*(?:\.\d+)?)\s*MWh/i,
+      /(\d[\d,]*(?:\.\d+)?)\s*MWh\s+(?:used|consumed|total)/i,
+      /(\d[\d,]*(?:\.\d+)?)\s*MWh/i,
+    ];
+    for (const p of mwhPatterns) {
+      const m = text.match(p);
+      if (m) {
+        const val = parseFloat(m[1].replace(/,/g, "")) * 1000; // MWh → kWh
+        if (val > 0 && val < 100_000_000) return { usageKwh: val };
+      }
+    }
+
+    // UK-style: "NNN units @ RATE p/unit" (pence per unit)
+    const pUnitMatches = [...text.matchAll(/(\d[\d,]*(?:\.\d+)?)\s*@\s*[\d.]+\s*p\/unit/gi)];
+    if (pUnitMatches.length > 0) {
+      const total = pUnitMatches.map(m => parseFloat(m[1].replace(/,/g, ""))).filter(v => v > 0 && v < 1_000_000).reduce((a, b) => a + b, 0);
+      if (total > 0) return { usageKwh: total };
+    }
+
+    // "kWh NNN" (label before number — some European formats)
     const kwhBefore = text.match(/kWh[^\d]*(\d[\d,]*(?:\.\d+)?)/i);
     if (kwhBefore) {
       const val = parseFloat(kwhBefore[1].replace(/,/g, ""));
       if (val > 0 && val < 1_000_000) return { usageKwh: val };
     }
   } else if (utilityType === "gas") {
-    const patterns = [
+    // MJ (NZ standard, AU sometimes)
+    const mjPatterns = [
       /total\s+(?:gas\s+)?(?:usage|consumption)[^\d]*(\d[\d,]*(?:\.\d+)?)\s*MJ/i,
+      /gas\s+used[^\d]*(\d[\d,]*(?:\.\d+)?)\s*MJ/i,
+      /(\d[\d,]*(?:\.\d+)?)\s*MJ\s+(?:used|consumed|total)/i,
       /(\d[\d,]*(?:\.\d+)?)\s*MJ/i,
-      /MJ[^\d]*(\d[\d,]*(?:\.\d+)?)/i,
     ];
-    for (const p of patterns) {
+    for (const p of mjPatterns) {
       const m = text.match(p);
       if (m) {
         const mj = parseFloat(m[1].replace(/,/g, ""));
-        if (mj > 0 && mj < 10_000_000) return { usageMj: mj, usageKwh: mj / 3.6 };
+        if (mj > 0 && mj < 10_000_000) return { usageMj: mj, usageKwh: Math.round(mj / 3.6) };
       }
     }
-    // Some gas bills show kWh
-    const kwhM = text.match(/(\d[\d,]*(?:\.\d+)?)\s*kWh/i);
-    if (kwhM) {
-      const val = parseFloat(kwhM[1].replace(/,/g, ""));
-      if (val > 0) return { usageKwh: val };
+
+    // GJ (gigajoule — large commercial NZ, AU)
+    const gjPatterns = [
+      /total\s+(?:gas\s+)?(?:usage|consumption)[^\d]*(\d[\d,]*(?:\.\d+)?)\s*GJ/i,
+      /(\d[\d,]*(?:\.\d+)?)\s*GJ\s+(?:used|consumed|total)/i,
+      /(\d[\d,]*(?:\.\d+)?)\s*GJ/i,
+    ];
+    for (const p of gjPatterns) {
+      const m = text.match(p);
+      if (m) {
+        const gj = parseFloat(m[1].replace(/,/g, ""));
+        if (gj > 0 && gj < 100_000) {
+          const mj = gj * 1000;
+          return { usageMj: mj, usageKwh: Math.round(mj / 3.6) };
+        }
+      }
+    }
+
+    // Therms or CCF (US, UK — 1 therm ≈ 29.3 kWh, 1 CCF ≈ 29.3 kWh)
+    const thermPatterns = [
+      [/(\d[\d,]*(?:\.\d+)?)\s*therms?/i, 29.3],
+      [/(\d[\d,]*(?:\.\d+)?)\s*CCF/i, 29.3],
+      [/(\d[\d,]*(?:\.\d+)?)\s*MCF/i, 293],
+    ] as [RegExp, number][];
+    for (const [p, factor] of thermPatterns) {
+      const m = text.match(p);
+      if (m) {
+        const qty = parseFloat(m[1].replace(/,/g, ""));
+        if (qty > 0 && qty < 100_000) {
+          const kwh = Math.round(qty * factor);
+          const mj = Math.round(kwh * 3.6);
+          return { usageMj: mj, usageKwh: kwh };
+        }
+      }
+    }
+
+    // Some gas bills (AU, UK) show kWh directly
+    const kwhGasPatterns = [
+      /total\s+(?:gas\s+)?(?:usage|consumption)[^\d]*(\d[\d,]*(?:\.\d+)?)\s*kWh/i,
+      /gas\s+used[^\d]*(\d[\d,]*(?:\.\d+)?)\s*kWh/i,
+      /(\d[\d,]*(?:\.\d+)?)\s*kWh/i,
+    ];
+    for (const p of kwhGasPatterns) {
+      const m = text.match(p);
+      if (m) {
+        const val = parseFloat(m[1].replace(/,/g, ""));
+        if (val > 0 && val < 1_000_000) return { usageKwh: val };
+      }
     }
   } else if (utilityType === "water") {
     // Water uses kL (kilolitres) or m³
@@ -312,17 +434,24 @@ function detectUsage(text: string, utilityType: "electricity" | "gas" | "water")
 }
 
 function detectCost(text: string): number | undefined {
-  // NZ bills: "Total Amount Due $123.45" or "Amount Due: $123.45"
+  // Currency symbol: $, £, €, A$, NZ$
+  const CUR = /(?:NZ\$|A\$|\$|£|€)\s*/;
+  const NUM = /(\d[\d,]*(?:\.\d+)?)/;
   const patterns = [
-    /(?:total\s+amount\s+due|amount\s+due|total\s+due|pay\s+this\s+amount)[^\d$]*\$\s*(\d[\d,]*(?:\.\d+)?)/i,
-    /(?:total\s+payable|please\s+pay)[^\d$]*\$\s*(\d[\d,]*(?:\.\d+)?)/i,
-    /\$\s*(\d[\d,]*\.\d{2})/,
+    // "Total amount due $123.45" / "Amount owing £45.67" / "Total due €99.00"
+    new RegExp(`(?:total\\s+amount\\s+due|amount\\s+(?:due|owing)|total\\s+due|pay\\s+this\\s+amount)[^\\d$£€]*${CUR.source}${NUM.source}`, "i"),
+    // "Total payable / please pay"
+    new RegExp(`(?:total\\s+payable|please\\s+pay|total\\s+charges|amount\\s+payable)[^\\d$£€]*${CUR.source}${NUM.source}`, "i"),
+    // Bare currency + 2 decimal places (most reliable catch-all for NZ/AU $)
+    /(?:NZ\$|A\$|\$)\s*(\d[\d,]*\.\d{2})/,
+    // £ or € for UK/EU
+    /[£€]\s*(\d[\d,]*\.\d{2})/,
   ];
   for (const p of patterns) {
     const m = text.match(p);
     if (m) {
       const val = parseFloat(m[1].replace(/,/g, ""));
-      if (val > 0 && val < 100_000) return val;
+      if (val > 0 && val < 1_000_000) return val;
     }
   }
   return undefined;
