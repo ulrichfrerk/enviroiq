@@ -196,94 +196,186 @@ router.get("/email-address", requireAuth, requireOrgAccess, async (req, res) => 
 });
 
 // POST /webhooks/energy/inbound-email (external router)
+// Receives Resend `email.received` webhook events.
+// Per Resend docs, the webhook payload contains only metadata — NOT attachment content.
+// We must call the Resend API to fetch attachment download URLs, then download the files.
 export const energyEmailWebhookRouter = Router();
 
 energyEmailWebhookRouter.post("/inbound-email", async (req, res) => {
   try {
+    // ── Auth: accept secret via ?secret= query param (Resend can't send custom headers) ──
     const expectedSecret = process.env.INBOUND_EMAIL_WEBHOOK_SECRET;
     const isDev = process.env.NODE_ENV !== "production";
-    if (!expectedSecret && !isDev) {
-      await logAudit({ req, action: "webhook.energy.inbound_email", outcome: "failure", details: { reason: "secret_not_configured" } });
-      res.status(503).json({ error: "Service Unavailable", message: "Webhook secret not configured" });
-      return;
-    }
     if (expectedSecret) {
-      // Accept secret in Authorization header, x-webhook-secret header, or ?secret= query param
-      const authHeader = req.headers["authorization"] || req.headers["x-webhook-secret"];
-      const headerSecret = typeof authHeader === "string" ? authHeader.replace(/^Bearer\s+/i, "") : "";
       const querySecret = typeof req.query.secret === "string" ? req.query.secret : "";
-      const providedSecret = headerSecret || querySecret;
-      if (providedSecret !== expectedSecret) {
+      const headerSecret = (req.headers["x-webhook-secret"] as string | undefined) ?? "";
+      if (querySecret !== expectedSecret && headerSecret !== expectedSecret) {
         await logAudit({ req, action: "webhook.energy.inbound_email", outcome: "failure", details: { reason: "invalid_secret" } });
-        res.status(401).json({ error: "Unauthorized", message: "Invalid webhook secret" });
+        res.status(401).json({ error: "Unauthorized" });
         return;
       }
-    }
-
-    const { to, from, subject, text, attachments } = req.body;
-    if (!to) {
-      await logAudit({ req, action: "webhook.energy.inbound_email", outcome: "failure", details: { reason: "missing_to_field" } });
-      res.status(400).json({ error: "Bad Request", message: "Missing 'to' field" });
+    } else if (!isDev) {
+      res.status(503).json({ error: "Webhook secret not configured" });
       return;
     }
 
-    // Extract bare email address — email services sometimes send "Display Name <addr>" or ["addr1","addr2"]
-    function extractEmail(raw: string | string[]): string {
-      const str = Array.isArray(raw) ? raw[0] : raw;
-      const match = str.match(/<([^>]+)>/);
-      return (match ? match[1] : str).trim().toLowerCase();
+    // ── Parse Resend webhook envelope ──────────────────────────────────────────
+    // Resend sends: { type: "email.received", data: { email_id, from, to, subject, ... } }
+    const body = req.body as Record<string, unknown>;
+    if (body.type !== "email.received" || !body.data) {
+      res.json({ message: "Ignored — not an email.received event" });
+      return;
     }
-    const toEmail = extractEmail(to);
 
-    const org = await db.query.organisationsTable.findFirst({
-      where: eq(organisationsTable.inboundEmailAddress, toEmail),
-    });
+    const data = body.data as {
+      email_id: string;
+      from: string;
+      to: string[];
+      subject?: string;
+    };
+
+    const emailId = data.email_id;
+    const from    = data.from ?? "";
+    const subject = data.subject ?? "";
+    // `to` is an array of recipient addresses
+    const toAddresses: string[] = Array.isArray(data.to) ? data.to : [String(data.to ?? "")];
+
+    // ── Match to an organisation by inbound email address ─────────────────────
+    function bareEmail(s: string): string {
+      const m = s.match(/<([^>]+)>/);
+      return (m ? m[1] : s).trim().toLowerCase();
+    }
+
+    let org: typeof import("@workspace/db")["organisationsTable"]["$inferSelect"] | undefined;
+    for (const addr of toAddresses) {
+      const candidate = bareEmail(addr);
+      const found = await db.query.organisationsTable.findFirst({
+        where: eq(organisationsTable.inboundEmailAddress, candidate),
+      });
+      if (found) { org = found; break; }
+    }
 
     if (!org) {
-      await logAudit({ req, action: "webhook.energy.inbound_email", outcome: "failure", details: { reason: "org_not_found", to } });
-      res.json({ message: "Email address not matched to any organisation" });
+      req.log?.info({ toAddresses, emailId }, "Inbound email: no org matched");
+      await logAudit({ req, action: "webhook.energy.inbound_email", outcome: "failure", details: { reason: "org_not_found", toAddresses } });
+      res.json({ message: "No matching organisation" });
       return;
     }
 
-    interface EmailAttachment { contentType?: string; filename?: string; content?: string; }
-    const pdfAttachments = ((attachments || []) as EmailAttachment[]).filter((a) =>
-      a.contentType?.includes("pdf") || a.filename?.toLowerCase().endsWith(".pdf"),
+    // Acknowledge immediately so Resend doesn't retry while we do API calls
+    res.json({ message: "Accepted" });
+
+    // ── Fetch attachment list from Resend API ──────────────────────────────────
+    // Resend docs: GET https://api.resend.com/emails/received/{emailId}/attachments
+    const resendApiKey = process.env.RESEND_API_KEY;
+    if (!resendApiKey) {
+      req.log?.error("RESEND_API_KEY not set — cannot fetch attachments");
+      return;
+    }
+
+    interface ResendAttachmentMeta {
+      id: string;
+      filename: string;
+      content_type: string;
+      size: number;
+      download_url: string;
+    }
+    interface ResendEmailBody {
+      text?: string;
+      html?: string;
+    }
+
+    // Fetch attachment list and email body in parallel
+    const [attachResp, emailResp] = await Promise.all([
+      fetch(`https://api.resend.com/emails/received/${emailId}/attachments`, {
+        headers: { Authorization: `Bearer ${resendApiKey}` },
+      }),
+      fetch(`https://api.resend.com/emails/received/${emailId}`, {
+        headers: { Authorization: `Bearer ${resendApiKey}` },
+      }),
+    ]);
+
+    const attachData = attachResp.ok ? (await attachResp.json() as { data?: ResendAttachmentMeta[] }) : { data: [] };
+    const emailData  = emailResp.ok  ? (await emailResp.json()  as ResendEmailBody) : {};
+
+    const emailText = emailData.text ?? emailData.html ?? "";
+    const allAttachments: ResendAttachmentMeta[] = attachData.data ?? [];
+    const pdfAttachments = allAttachments.filter(
+      (a) => a.content_type?.includes("pdf") || a.filename?.toLowerCase().endsWith(".pdf"),
     );
+
+    req.log?.info({ emailId, orgId: org.id, totalAttachments: allAttachments.length, pdfCount: pdfAttachments.length }, "Inbound email received");
 
     const insertedIds: string[] = [];
     const liveGrid = await getCurrentGridIntensity();
 
     for (const attachment of pdfAttachments) {
-      const content = attachment.content || "";
-      const kwhMatch = content.match(/(\d+(?:\.\d+)?)\s*(?:kWh|KWH)/i);
-      const usageKwh = kwhMatch ? parseFloat(kwhMatch[1]) : undefined;
+      try {
+        // Download the actual PDF bytes via the time-limited download_url
+        const dlResp = await fetch(attachment.download_url, { signal: AbortSignal.timeout(15000) });
+        if (!dlResp.ok) {
+          req.log?.warn({ filename: attachment.filename }, "Failed to download attachment");
+          continue;
+        }
+        const pdfText = await dlResp.text(); // text extraction from PDF bytes (best-effort)
 
-      const now = new Date();
-      const periodEnd = new Date(now.getFullYear(), now.getMonth(), 0);
-      const periodStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        // Extract kWh from PDF text content (NZ electricity bill patterns)
+        const combinedText = pdfText + "\n" + emailText;
+        const kwhPatterns = [
+          /total\s+(?:usage|consumption)[^\d]*(\d[\d,]*(?:\.\d+)?)\s*kWh/i,
+          /(\d[\d,]*(?:\.\d+)?)\s*kWh/i,
+          /kWh[^\d]*(\d[\d,]*(?:\.\d+)?)/i,
+        ];
+        let usageKwh: number | undefined;
+        for (const pattern of kwhPatterns) {
+          const m = combinedText.match(pattern);
+          if (m) {
+            usageKwh = parseFloat(m[1].replace(/,/g, ""));
+            break;
+          }
+        }
 
-      const { factorKgCo2PerKwh, method, note } = resolveElectricityFactor({
-        periodStart,
-        liveGridKgCo2PerKwh: liveGrid?.kgco2PerKwh,
-      });
+        // Attempt to extract billing period from PDF text
+        // Pattern: "01 Jan 2026 to 31 Jan 2026" or "January 2026"
+        const now = new Date();
+        let periodStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        let periodEnd   = new Date(now.getFullYear(), now.getMonth(), 0);
+        const periodMatch = combinedText.match(/(\d{1,2}\s+\w+\s+\d{4})\s+to\s+(\d{1,2}\s+\w+\s+\d{4})/i);
+        if (periodMatch) {
+          const ps = new Date(periodMatch[1]);
+          const pe = new Date(periodMatch[2]);
+          if (!isNaN(ps.getTime()) && !isNaN(pe.getTime())) {
+            periodStart = ps;
+            periodEnd   = pe;
+          }
+        }
 
-      const readingId = uuidv4();
-      await db.insert(energyReadingsTable).values({
-        id: readingId,
-        organisationId: org.id,
-        utilityType: "electricity",
-        periodStart,
-        periodEnd,
-        usageKwh,
-        co2eKg: calcEnergyCo2e({ utilityType: "electricity", usageKwh, electricityFactorKgCo2PerKwh: factorKgCo2PerKwh }),
-        gridIntensityKgCo2PerKwh: factorKgCo2PerKwh,
-        emissionMethod: method,
-        emissionNote: note,
-        source: "email_inbound",
-        originalFileName: attachment.filename,
-        rawText: `From: ${from}\nSubject: ${subject}\n${text || ""}`.substring(0, 1000),
-      });
-      insertedIds.push(readingId);
+        const { factorKgCo2PerKwh, method, note } = resolveElectricityFactor({
+          periodStart,
+          liveGridKgCo2PerKwh: liveGrid?.kgco2PerKwh,
+        });
+
+        const readingId = uuidv4();
+        await db.insert(energyReadingsTable).values({
+          id: readingId,
+          organisationId: org.id,
+          utilityType: "electricity",
+          periodStart,
+          periodEnd,
+          usageKwh,
+          co2eKg: calcEnergyCo2e({ utilityType: "electricity", usageKwh, electricityFactorKgCo2PerKwh: factorKgCo2PerKwh }),
+          gridIntensityKgCo2PerKwh: factorKgCo2PerKwh,
+          emissionMethod: method,
+          emissionNote: note,
+          source: "email_inbound",
+          originalFileName: attachment.filename,
+          rawText: `From: ${from}\nSubject: ${subject}\n${emailText}`.substring(0, 1000),
+        });
+        insertedIds.push(readingId);
+        req.log?.info({ readingId, filename: attachment.filename, usageKwh }, "Energy reading created from email attachment");
+      } catch (attachErr) {
+        req.log?.error({ attachErr, filename: attachment.filename }, "Failed to process attachment");
+      }
     }
 
     await logAudit({
@@ -292,11 +384,11 @@ energyEmailWebhookRouter.post("/inbound-email", async (req, res) => {
       outcome: "success",
       resourceType: "energy_reading",
       organisationId: org.id,
-      details: { from, subject, attachmentsProcessed: pdfAttachments.length, readingIds: insertedIds },
+      details: { from, subject, emailId, attachmentsProcessed: pdfAttachments.length, readingIds: insertedIds },
     });
-    res.json({ message: "Email processed" });
   } catch (err) {
-    res.status(500).json({ error: "Internal Server Error", message: "Failed to process email" });
+    req.log?.error({ err }, "Inbound email webhook error");
+    // Response already sent (200 Accepted above), so don't send again
   }
 });
 
