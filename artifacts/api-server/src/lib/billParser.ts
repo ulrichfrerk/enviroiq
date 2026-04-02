@@ -223,20 +223,44 @@ function detectBillingPeriod(text: string): { periodStart?: Date; periodEnd?: Da
 
 function detectUsage(text: string, utilityType: "electricity" | "gas" | "water"): { usageKwh?: number; usageMj?: number } {
   if (utilityType === "electricity") {
-    // Priority patterns for NZ electricity bills
-    const patterns = [
+    // --- High-confidence patterns (explicit labels or units) ---
+    const priorityPatterns = [
+      // "Total electricity usage 1,234 kWh" or "Total units 1,234 kWh"
       /total\s+(?:electricity\s+)?(?:usage|consumption|units)[^\d]*(\d[\d,]*(?:\.\d+)?)\s*kWh/i,
+      // "electricity/energy used 1,234 kWh"
       /(?:energy|electricity)\s+used[^\d]*(\d[\d,]*(?:\.\d+)?)\s*kWh/i,
+      // "1,234 kWh used/consumed/total"
       /(\d[\d,]*(?:\.\d+)?)\s*kWh\s+(?:used|consumed|total)/i,
-      /(\d[\d,]*(?:\.\d+)?)\s*kWh/i,
-      /kWh[^\d]*(\d[\d,]*(?:\.\d+)?)/i,
+      // Genesis/Meridian style: "8,220 @ 27.93 c/unit" in charge table
+      // The number here IS the kWh value (meter multiplier already applied by retailer)
+      /(\d[\d,]*(?:\.\d+)?)\s*@\s*[\d.]+\s*c\/unit/i,
+      // "Units used: 1,234" or "Units Used 1,234"
+      /units?\s+used[:\s]+(\d[\d,]*(?:\.\d+)?)/i,
     ];
-    for (const p of patterns) {
+    for (const p of priorityPatterns) {
       const m = text.match(p);
       if (m) {
         const val = parseFloat(m[1].replace(/,/g, ""));
         if (val > 0 && val < 1_000_000) return { usageKwh: val };
       }
+    }
+
+    // --- Fallback: collect ALL "NNN kWh" values and take the largest ---
+    // Chart Y-axis tick marks (e.g. "228 kWh" per-day scale) are always smaller
+    // than the monthly total, so the largest value is almost always the real usage.
+    const allKwhMatches = [...text.matchAll(/(\d[\d,]*(?:\.\d+)?)\s*kWh/gi)];
+    if (allKwhMatches.length > 0) {
+      const vals = allKwhMatches
+        .map(m => parseFloat(m[1].replace(/,/g, "")))
+        .filter(v => v > 0 && v < 1_000_000);
+      if (vals.length > 0) return { usageKwh: Math.max(...vals) };
+    }
+
+    // "kWh NNN" (label before number)
+    const kwhBefore = text.match(/kWh[^\d]*(\d[\d,]*(?:\.\d+)?)/i);
+    if (kwhBefore) {
+      const val = parseFloat(kwhBefore[1].replace(/,/g, ""));
+      if (val > 0 && val < 1_000_000) return { usageKwh: val };
     }
   } else if (utilityType === "gas") {
     const patterns = [
