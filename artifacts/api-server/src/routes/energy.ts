@@ -7,6 +7,7 @@ import { requireAuth, requireOrgAccess, requireOrgAdmin } from "../lib/auth.js";
 import { logAudit } from "../lib/audit.js";
 import { calcEnergyCo2e, resolveElectricityFactor } from "../lib/emissions.js";
 import { getCurrentGridIntensity } from "../lib/em6.js";
+import { parseBillText } from "../lib/billParser.js";
 
 const router = Router({ mergeParams: true });
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -170,6 +171,142 @@ router.post("/upload", requireAuth, requireOrgAdmin, upload.single("file"), asyn
   } catch (err) {
     req.log.error({ err }, "Upload energy bill failed");
     res.status(500).json({ error: "Internal Server Error", message: "Failed to upload bill" });
+  }
+});
+
+// POST /organisations/:orgId/energy/upload-batch
+// Smart bulk upload: accepts up to 40 PDFs, auto-detects all metadata from each bill.
+const uploadBatch = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024, files: 40 } });
+
+router.post("/upload-batch", requireAuth, requireOrgAdmin, uploadBatch.array("files", 40), async (req, res) => {
+  try {
+    const orgId = req.params.orgId as string;
+    const files = req.files as Express.Multer.File[] | undefined;
+    const batchRenewablePct = req.body.supplierRenewablePct !== undefined
+      ? Number(req.body.supplierRenewablePct)
+      : undefined;
+
+    if (!files || files.length === 0) {
+      res.status(400).json({ error: "Bad Request", message: "At least one file required" });
+      return;
+    }
+
+    const now = new Date();
+    const defaultPeriodStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const defaultPeriodEnd   = new Date(now.getFullYear(), now.getMonth(), 0);
+
+    // Fetch live grid intensity once for all current-period bills
+    const liveGrid = await getCurrentGridIntensity();
+
+    interface BatchFileResult {
+      filename: string;
+      status: "success" | "review" | "error";
+      utilityType?: string;
+      provider?: string;
+      periodStart?: string;
+      periodEnd?: string;
+      usageKwh?: number;
+      usageMj?: number;
+      costAmount?: number;
+      co2eKg?: number;
+      confidence?: number;
+      reviewFlags?: string[];
+      readingId?: string;
+      error?: string;
+    }
+
+    const results: BatchFileResult[] = [];
+
+    for (const file of files) {
+      try {
+        // Extract readable text from PDF buffer (best-effort from first 8KB)
+        const fileText = file.buffer.toString("utf8", 0, Math.min(file.buffer.length, 8000));
+
+        const parsed = parseBillText(fileText);
+
+        const periodStart = parsed.periodStart ?? defaultPeriodStart;
+        const periodEnd   = parsed.periodEnd   ?? defaultPeriodEnd;
+        const renewablePct = batchRenewablePct;
+
+        const isCurrentYear = periodStart.getFullYear() >= now.getFullYear();
+        const gridForPeriod = isCurrentYear ? liveGrid : null;
+
+        const { factorKgCo2PerKwh, method, note } = resolveElectricityFactor({
+          periodStart,
+          supplierRenewablePct: renewablePct,
+          liveGridKgCo2PerKwh: gridForPeriod?.kgco2PerKwh,
+        });
+
+        const co2eKg = calcEnergyCo2e({
+          utilityType: parsed.utilityType,
+          usageKwh: parsed.usageKwh,
+          usageMj: parsed.usageMj,
+          electricityFactorKgCo2PerKwh: factorKgCo2PerKwh,
+        });
+
+        const readingId = uuidv4();
+        await db.insert(energyReadingsTable).values({
+          id: readingId,
+          organisationId: orgId,
+          utilityType: parsed.utilityType,
+          provider: parsed.provider,
+          periodStart,
+          periodEnd,
+          usageKwh: parsed.usageKwh,
+          usageMj: parsed.usageMj,
+          costAmount: parsed.costAmount,
+          co2eKg,
+          gridIntensityKgCo2PerKwh: parsed.utilityType === "electricity" ? factorKgCo2PerKwh : undefined,
+          emissionMethod: parsed.utilityType === "electricity" ? method : undefined,
+          emissionNote: parsed.utilityType === "electricity" ? note : undefined,
+          supplierRenewablePct: renewablePct,
+          source: "pdf_upload",
+          originalFileName: file.originalname,
+          rawText: fileText.substring(0, 1000),
+        });
+
+        results.push({
+          filename: file.originalname,
+          status: parsed.reviewFlags.length > 0 ? "review" : "success",
+          utilityType: parsed.utilityType,
+          provider: parsed.provider,
+          periodStart: periodStart.toISOString(),
+          periodEnd: periodEnd.toISOString(),
+          usageKwh: parsed.usageKwh,
+          usageMj: parsed.usageMj,
+          costAmount: parsed.costAmount,
+          co2eKg,
+          confidence: parsed.confidence,
+          reviewFlags: parsed.reviewFlags,
+          readingId,
+        });
+      } catch (fileErr) {
+        req.log.error({ fileErr, filename: file.originalname }, "Batch upload: file processing failed");
+        results.push({
+          filename: file.originalname,
+          status: "error",
+          error: fileErr instanceof Error ? fileErr.message : "Processing failed",
+        });
+      }
+    }
+
+    await logAudit({
+      req,
+      action: "energy_bill.batch_upload",
+      resourceType: "energy_reading",
+      organisationId: orgId,
+      details: {
+        totalFiles: files.length,
+        success: results.filter(r => r.status === "success").length,
+        review: results.filter(r => r.status === "review").length,
+        error: results.filter(r => r.status === "error").length,
+      },
+    });
+
+    res.status(201).json({ results });
+  } catch (err) {
+    req.log.error({ err }, "Batch upload failed");
+    res.status(500).json({ error: "Internal Server Error", message: "Batch upload failed" });
   }
 });
 
