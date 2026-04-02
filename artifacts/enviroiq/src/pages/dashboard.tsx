@@ -1,27 +1,68 @@
-import React from "react";
+import React, { useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
-import { useGetOrganisationSummary, useGetEmissionTotals, useListFleetEvents } from "@workspace/api-client-react";
+import { useGetOrganisationSummary, useListFleetEvents } from "@workspace/api-client-react";
+import { useQuery } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
 import { CloudRain, Car, Zap, Target, ArrowUpRight, ArrowDownRight, Loader2 } from "lucide-react";
-import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip as RechartsTooltip, LineChart, Line, XAxis, YAxis, CartesianGrid } from "recharts";
-import { format } from "date-fns";
+import {
+  ResponsiveContainer, PieChart, Pie, Cell, Tooltip as RechartsTooltip,
+  AreaChart, Area, XAxis, YAxis, CartesianGrid,
+} from "recharts";
+import { format, parseISO } from "date-fns";
+
+// Period selector options — period sent to API, groupBy derived server-side
+const PERIODS = [
+  { label: "7D",  value: "7d",  groupBy: "day",   xFmt: (d: string) => format(parseISO(d), "d MMM"),   ttFmt: (d: string) => format(parseISO(d), "d MMM yyyy") },
+  { label: "30D", value: "30d", groupBy: "day",   xFmt: (d: string) => format(parseISO(d), "d MMM"),   ttFmt: (d: string) => format(parseISO(d), "d MMM yyyy") },
+  { label: "3M",  value: "3m",  groupBy: "week",  xFmt: (d: string) => format(parseISO(d), "d MMM"),   ttFmt: (d: string) => `Week of ${format(parseISO(d), "d MMM yyyy")}` },
+  { label: "12M", value: "12m", groupBy: "month", xFmt: (d: string) => format(parseISO(d), "MMM"),     ttFmt: (d: string) => format(parseISO(d), "MMMM yyyy") },
+] as const;
+
+type PeriodValue = (typeof PERIODS)[number]["value"];
+
+interface TimeSeriesPoint { date: string; co2eKg: number; }
+
+interface EmissionTotals {
+  period: string;
+  groupBy: string;
+  totalCo2eKg: number;
+  timeSeries: TimeSeriesPoint[];
+  breakdowns: { label: string; co2eKg: number; percentage: number }[];
+}
+
+function useEmissionTotals(orgId: string | undefined, period: PeriodValue) {
+  return useQuery<EmissionTotals>({
+    queryKey: ["emissionTotals", orgId, period],
+    enabled: !!orgId,
+    staleTime: 5 * 60 * 1000,
+    queryFn: async () => {
+      const params = new URLSearchParams({ period });
+      const res = await fetch(`/api/organisations/${orgId}/emissions/totals?${params}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch emission totals");
+      return res.json() as Promise<EmissionTotals>;
+    },
+  });
+}
 
 export default function Dashboard() {
   const { session } = useAuth();
   const orgId = session?.organisationId;
 
+  const [trendPeriod, setTrendPeriod] = useState<PeriodValue>("12m");
+  const activePeriod = PERIODS.find(p => p.value === trendPeriod)!;
+
   const { data: summary, isLoading: loadingSummary } = useGetOrganisationSummary(orgId!, undefined, { query: { enabled: !!orgId } });
-  const { data: emissions, isLoading: loadingEmissions } = useGetEmissionTotals(orgId!, { period: "year", groupBy: "month" }, { query: { enabled: !!orgId } });
+  const { data: emissions, isLoading: loadingEmissions } = useEmissionTotals(orgId, trendPeriod);
   const { data: fleetEvents } = useListFleetEvents(orgId!, { limit: 5 }, { query: { enabled: !!orgId } });
 
-  if (loadingSummary || loadingEmissions) {
+  if (loadingSummary) {
     return <div className="flex items-center justify-center h-64"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
   }
 
   if (!summary) return <div>No data available</div>;
 
   const COLORS = ['hsl(var(--chart-1))', 'hsl(var(--chart-2))', 'hsl(var(--chart-3))'];
-  
+
   const pieData = [
     { name: 'Fleet', value: summary.fleetCo2eKg },
     { name: 'Energy', value: summary.energyCo2eKg },
@@ -52,6 +93,18 @@ export default function Dashboard() {
     </Card>
   );
 
+  // Decide how many x-axis ticks to show based on data density
+  const ticks = (() => {
+    if (!emissions?.timeSeries?.length) return undefined;
+    const n = emissions.timeSeries.length;
+    if (n <= 14) return undefined; // show all
+    // For dense series (30d/day = ~30 points), tick every 5–7 days
+    const step = Math.ceil(n / 8);
+    return emissions.timeSeries.filter((_, i) => i % step === 0).map(d => d.date);
+  })();
+
+  const hasData = emissions?.timeSeries?.some(d => d.co2eKg > 0);
+
   return (
     <div className="space-y-8 pb-10">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
@@ -66,12 +119,12 @@ export default function Dashboard() {
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-        <StatCard 
-          title="Total CO₂e (kg)" 
-          value={summary.totalCo2eKg.toLocaleString()} 
-          icon={CloudRain} 
-          trend={summary.periodOverPeriodChange} 
-          trendGood={summary.periodOverPeriodChange! < 0} 
+        <StatCard
+          title="Total CO₂e (kg)"
+          value={summary.totalCo2eKg.toLocaleString()}
+          icon={CloudRain}
+          trend={summary.periodOverPeriodChange}
+          trendGood={summary.periodOverPeriodChange! < 0}
         />
         <StatCard title="Fleet Emissions (kg)" value={summary.fleetCo2eKg.toLocaleString()} icon={Car} />
         <StatCard title="Energy Usage (kWh)" value={summary.totalEnergyKwh.toLocaleString()} icon={Zap} />
@@ -96,9 +149,10 @@ export default function Dashboard() {
                 >
                   {pieData.map((_, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
                 </Pie>
-                <RechartsTooltip 
+                <RechartsTooltip
                   contentStyle={{ backgroundColor: 'hsl(var(--card))', borderColor: 'hsl(var(--border))', borderRadius: '8px' }}
                   itemStyle={{ color: 'hsl(var(--foreground))' }}
+                  formatter={(val: number) => [`${val.toLocaleString()} kg`, '']}
                 />
               </PieChart>
             </ResponsiveContainer>
@@ -114,42 +168,102 @@ export default function Dashboard() {
         </Card>
 
         <Card className="p-6 col-span-1 lg:col-span-2 border-border/50">
-          <h3 className="font-semibold text-lg mb-6">Emissions Trend (12 Months)</h3>
-          <div className="h-[280px]">
-            {emissions?.timeSeries && (() => {
-              // Exclude the current (incomplete) month so the chart doesn't drop artificially
-              const now = new Date();
-              const currentMonthPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-              const completedMonths = emissions.timeSeries.filter(
-                (d: { date: string }) => !d.date.startsWith(currentMonthPrefix)
-              );
-              if (completedMonths.length === 0) return <p className="text-muted-foreground text-sm">No data yet</p>;
-              return (
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={completedMonths} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
-                    <XAxis
-                      dataKey="date"
-                      stroke="hsl(var(--muted-foreground))"
-                      fontSize={12}
-                      tickLine={false}
-                      axisLine={false}
-                      tickFormatter={(val: string) => {
-                        try { return format(new Date(val.replace(' ', 'T')), "MMM yyyy"); } catch { return val; }
-                      }}
-                    />
-                    <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(val) => `${(val/1000).toFixed(1)}k`} />
-                    <RechartsTooltip
-                      contentStyle={{ backgroundColor: 'hsl(var(--card))', borderColor: 'hsl(var(--border))', borderRadius: '8px' }}
-                      labelFormatter={(val: string) => { try { return format(new Date(val.replace(' ', 'T')), "MMMM yyyy"); } catch { return val; } }}
-                      formatter={(val: number) => [`${val.toLocaleString()} kg CO₂e`, "Emissions"]}
-                    />
-                    <Line type="monotone" dataKey="co2eKg" stroke="hsl(var(--primary))" strokeWidth={3} dot={{ r: 4, fill: 'hsl(var(--background))', strokeWidth: 2 }} activeDot={{ r: 6 }} />
-                  </LineChart>
-                </ResponsiveContainer>
-              );
-            })()}
+          {/* Header row with period toggle */}
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="font-semibold text-lg">Emissions Trend</h3>
+            <div className="flex rounded-lg border border-border/60 overflow-hidden text-xs font-medium">
+              {PERIODS.map(p => (
+                <button
+                  key={p.value}
+                  onClick={() => setTrendPeriod(p.value)}
+                  className={`px-3 py-1.5 transition-colors ${
+                    trendPeriod === p.value
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-secondary/60"
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
           </div>
+
+          <div className="h-[280px]">
+            {loadingEmissions ? (
+              <div className="h-full flex items-center justify-center">
+                <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+              </div>
+            ) : !hasData ? (
+              <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
+                No emissions data for this period
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={emissions!.timeSeries} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
+                  <defs>
+                    <linearGradient id="co2Gradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.25} />
+                      <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+                  <XAxis
+                    dataKey="date"
+                    stroke="hsl(var(--muted-foreground))"
+                    fontSize={11}
+                    tickLine={false}
+                    axisLine={false}
+                    ticks={ticks}
+                    tickFormatter={(val: string) => {
+                      try { return activePeriod.xFmt(val); } catch { return val; }
+                    }}
+                  />
+                  <YAxis
+                    stroke="hsl(var(--muted-foreground))"
+                    fontSize={11}
+                    tickLine={false}
+                    axisLine={false}
+                    width={48}
+                    tickFormatter={(val: number) =>
+                      val >= 1000 ? `${(val / 1000).toFixed(1)}k` : String(Math.round(val))
+                    }
+                  />
+                  <RechartsTooltip
+                    contentStyle={{ backgroundColor: 'hsl(var(--card))', borderColor: 'hsl(var(--border))', borderRadius: '8px' }}
+                    labelFormatter={(val: string) => { try { return activePeriod.ttFmt(val); } catch { return val; } }}
+                    formatter={(val: number) => [`${val.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg CO₂e`, "Emissions"]}
+                    cursor={{ stroke: 'hsl(var(--border))', strokeWidth: 1 }}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="co2eKg"
+                    stroke="hsl(var(--primary))"
+                    strokeWidth={2.5}
+                    fill="url(#co2Gradient)"
+                    dot={false}
+                    activeDot={{ r: 5, fill: 'hsl(var(--primary))', strokeWidth: 0 }}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+
+          {/* Summary row below chart */}
+          {emissions && hasData && (
+            <div className="mt-4 pt-4 border-t border-border/40 flex flex-wrap gap-x-6 gap-y-1 text-xs text-muted-foreground">
+              <span>
+                <span className="font-semibold text-foreground">
+                  {emissions.totalCo2eKg.toLocaleString(undefined, { maximumFractionDigits: 0 })} kg
+                </span>{" "}total CO₂e
+              </span>
+              {emissions.breakdowns.map(b => b.co2eKg > 0 && (
+                <span key={b.label}>
+                  {b.label}: <span className="font-medium text-foreground/80">{b.co2eKg.toLocaleString(undefined, { maximumFractionDigits: 0 })} kg</span>
+                  <span className="ml-1">({b.percentage.toFixed(0)}%)</span>
+                </span>
+              ))}
+            </div>
+          )}
         </Card>
       </div>
 

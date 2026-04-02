@@ -111,19 +111,40 @@ router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
 });
 
 // GET /organisations/:orgId/emissions/totals
+// Query params:
+//   period  = "7d" | "30d" | "3m" | "12m"  (or legacy "day"|"week"|"month"|"quarter"|"year")
+//   groupBy = "day" | "week" | "month"      (default depends on period)
+//
+// Returns a fully-filled time series (every period in range, 0 for empty buckets)
+// using PostgreSQL generate_series so the chart never shows gaps.
 router.get("/totals", requireAuth, requireOrgAccess, async (req, res) => {
   try {
     const orgId = req.params.orgId as string;
-    const period = (req.query.period as string) || "month";
+    const periodParam = (req.query.period as string) || "12m";
 
     const now = new Date();
     const fromDate = new Date(now);
-    switch (period) {
-      case "day": fromDate.setDate(now.getDate() - 1); break;
-      case "week": fromDate.setDate(now.getDate() - 7); break;
-      case "month": fromDate.setMonth(now.getMonth() - 1); break;
-      case "quarter": fromDate.setMonth(now.getMonth() - 3); break;
-      case "year": fromDate.setFullYear(now.getFullYear() - 1); break;
+
+    // Map period string → lookback
+    switch (periodParam) {
+      case "7d":      case "day":     fromDate.setDate(now.getDate() - 7); break;
+      case "30d":     case "week":    fromDate.setDate(now.getDate() - 30); break;
+      case "3m":      case "quarter": fromDate.setMonth(now.getMonth() - 3); break;
+      case "12m":     case "year":    fromDate.setFullYear(now.getFullYear() - 1); break;
+      case "month":                   fromDate.setMonth(now.getMonth() - 1); break;
+      default:                        fromDate.setFullYear(now.getFullYear() - 1);
+    }
+
+    // Determine groupBy: explicit param wins, otherwise default by period
+    let groupByParam = (req.query.groupBy as string) || "";
+    if (!["day", "week", "month"].includes(groupByParam)) {
+      if (periodParam === "7d" || periodParam === "30d" || periodParam === "day" || periodParam === "week") {
+        groupByParam = "day";
+      } else if (periodParam === "3m" || periodParam === "quarter") {
+        groupByParam = "week";
+      } else {
+        groupByParam = "month";
+      }
     }
 
     const fleetTotals = await db.execute(sql`
@@ -145,20 +166,39 @@ router.get("/totals", requireAuth, requireOrgAccess, async (req, res) => {
     const energyCo2e = parseFloat(String(sqlRow(energyTotals).total ?? "0")) || 0;
     const totalCo2e = fleetCo2e + energyCo2e;
 
+    // Build fully-filled time series using generate_series so every period shows (even zeros)
+    // groupByParam is validated above to be one of "day" | "week" | "month"
+    const truncUnit = groupByParam === "day" ? "day" : groupByParam === "week" ? "week" : "month";
+    const stepInterval = truncUnit === "day" ? "1 day" : truncUnit === "week" ? "1 week" : "1 month";
+
     const timeSeries = await db.execute(sql`
-      SELECT date, SUM(co2e_kg) as co2e_kg FROM (
-        SELECT DATE_TRUNC('month', recorded_at) as date, co2e_kg
+      WITH series AS (
+        SELECT generate_series(
+          DATE_TRUNC(${truncUnit}, ${fromDate}::timestamptz),
+          DATE_TRUNC(${truncUnit}, ${now}::timestamptz),
+          ${stepInterval}::interval
+        ) AS bucket
+      ),
+      raw_data AS (
+        SELECT DATE_TRUNC(${truncUnit}, recorded_at) AS bucket, co2e_kg
         FROM fleet_events
         WHERE organisation_id = ${orgId}
           AND recorded_at >= ${fromDate}
+          AND recorded_at <= ${now}
         UNION ALL
-        SELECT DATE_TRUNC('month', period_start) as date, co2e_kg
+        SELECT DATE_TRUNC(${truncUnit}, period_start) AS bucket, co2e_kg
         FROM energy_readings
         WHERE organisation_id = ${orgId}
           AND period_start >= ${fromDate}
-      ) combined
-      GROUP BY date
-      ORDER BY date ASC
+          AND period_start <= ${now}
+      )
+      SELECT
+        TO_CHAR(s.bucket AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS date,
+        COALESCE(SUM(d.co2e_kg), 0) AS co2e_kg
+      FROM series s
+      LEFT JOIN raw_data d ON d.bucket = s.bucket
+      GROUP BY s.bucket
+      ORDER BY s.bucket ASC
     `);
 
     const timeSeriesRows = sqlRows(timeSeries);
@@ -178,7 +218,8 @@ router.get("/totals", requireAuth, requireOrgAccess, async (req, res) => {
 
     res.json({
       organisationId: orgId,
-      period,
+      period: periodParam,
+      groupBy: groupByParam,
       totalCo2eKg: totalCo2e,
       breakdowns,
       timeSeries: timeSeriesRows.map((r) => ({
