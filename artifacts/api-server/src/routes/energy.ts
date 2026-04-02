@@ -208,10 +208,11 @@ energyEmailWebhookRouter.post("/inbound-email", async (req, res) => {
       return;
     }
     if (expectedSecret) {
+      // Accept secret in Authorization header, x-webhook-secret header, or ?secret= query param
       const authHeader = req.headers["authorization"] || req.headers["x-webhook-secret"];
-      const providedSecret = typeof authHeader === "string"
-        ? authHeader.replace(/^Bearer\s+/i, "")
-        : "";
+      const headerSecret = typeof authHeader === "string" ? authHeader.replace(/^Bearer\s+/i, "") : "";
+      const querySecret = typeof req.query.secret === "string" ? req.query.secret : "";
+      const providedSecret = headerSecret || querySecret;
       if (providedSecret !== expectedSecret) {
         await logAudit({ req, action: "webhook.energy.inbound_email", outcome: "failure", details: { reason: "invalid_secret" } });
         res.status(401).json({ error: "Unauthorized", message: "Invalid webhook secret" });
