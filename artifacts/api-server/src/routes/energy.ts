@@ -117,6 +117,30 @@ router.post("/readings", requireAuth, requireOrgAdmin, async (req, res) => {
   }
 });
 
+// DELETE /organisations/:orgId/energy/readings/:id
+router.delete("/readings/:id", requireAuth, requireOrgAdmin, async (req, res) => {
+  try {
+    const orgId = req.params.orgId as string;
+    const id    = req.params.id as string;
+
+    const [deleted] = await db
+      .delete(energyReadingsTable)
+      .where(and(eq(energyReadingsTable.id, id), eq(energyReadingsTable.organisationId, orgId)))
+      .returning({ id: energyReadingsTable.id });
+
+    if (!deleted) {
+      res.status(404).json({ error: "Not Found", message: "Energy reading not found" });
+      return;
+    }
+
+    await logAudit({ req, action: "energy_reading.delete", resourceType: "energy_reading", resourceId: id });
+    res.status(204).end();
+  } catch (err) {
+    req.log.error({ err }, "Delete energy reading failed");
+    res.status(500).json({ error: "Internal Server Error", message: "Failed to delete energy reading" });
+  }
+});
+
 // POST /organisations/:orgId/energy/upload
 // Accepts a single PDF bill. When utilityType is omitted the bill parser auto-detects
 // utility type, provider, billing period, and usage from the PDF text.

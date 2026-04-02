@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import {
   Zap, Upload, Mail, FileText, Loader2, Copy, Check,
   Leaf, Wind, Info, AlertTriangle, CheckCircle2, XCircle,
-  Flame, Droplets, Clock,
+  Flame, Droplets, Clock, Trash2,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -145,6 +145,27 @@ export default function Energy() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isDone, setIsDone] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const deleteReading = async (id: string) => {
+    if (!orgId) return;
+    setDeletingId(id);
+    try {
+      const res = await fetch(`/api/organisations/${orgId}/energy/readings/${id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await qc.invalidateQueries({ queryKey: [`/api/organisations/${orgId}/energy/readings`] });
+      toast({ title: "Reading deleted" });
+    } catch {
+      toast({ variant: "destructive", title: "Delete failed", description: "Could not delete this reading." });
+    } finally {
+      setDeletingId(null);
+      setConfirmDeleteId(null);
+    }
+  };
 
   const doneCount   = queue.filter(f => ["success", "review", "error"].includes(f.status)).length;
   const successCount = queue.filter(f => f.status === "success").length;
@@ -546,6 +567,7 @@ export default function Energy() {
                 <th className="px-6 py-4">Usage</th>
                 <th className="px-6 py-4">Emission Factor</th>
                 <th className="px-6 py-4 text-right">CO₂e</th>
+                <th className="px-4 py-4 w-10" />
               </tr>
             </thead>
             <tbody className="divide-y divide-border/50">
@@ -558,7 +580,7 @@ export default function Energy() {
                   : null;
 
                 return (
-                  <tr key={reading.id} className="hover:bg-secondary/20 transition-colors">
+                  <tr key={reading.id} className="group hover:bg-secondary/20 transition-colors">
                     <td className="px-6 py-4 whitespace-nowrap text-foreground font-medium">
                       {format(new Date(reading.periodStart), "MMM d")} – {format(new Date(reading.periodEnd), "MMM d, yyyy")}
                     </td>
@@ -595,11 +617,38 @@ export default function Energy() {
                         {reading.co2eKg != null ? `${reading.co2eKg.toLocaleString(undefined, { maximumFractionDigits: 2 })} kg` : "—"}
                       </span>
                     </td>
+                    <td className="px-4 py-4 text-right">
+                      {confirmDeleteId === reading.id ? (
+                        <span className="flex items-center justify-end gap-1 text-xs">
+                          <button
+                            onClick={() => deleteReading(reading.id)}
+                            disabled={deletingId === reading.id}
+                            className="px-2 py-1 rounded bg-red-900/50 text-red-300 hover:bg-red-800/60 transition-colors disabled:opacity-50"
+                          >
+                            {deletingId === reading.id ? <Loader2 className="w-3 h-3 animate-spin" /> : "Yes"}
+                          </button>
+                          <button
+                            onClick={() => setConfirmDeleteId(null)}
+                            className="px-2 py-1 rounded bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+                          >
+                            No
+                          </button>
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => setConfirmDeleteId(reading.id)}
+                          className="opacity-0 group-hover:opacity-100 p-1.5 rounded hover:bg-red-900/30 text-muted-foreground hover:text-red-400 transition-all"
+                          title="Delete reading"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 );
               })}
               {(!readings?.items || readings.items.length === 0) && (
-                <tr><td colSpan={5} className="px-6 py-12 text-center text-muted-foreground">No energy readings yet. Upload your first bill.</td></tr>
+                <tr><td colSpan={6} className="px-6 py-12 text-center text-muted-foreground">No energy readings yet. Upload your first bill.</td></tr>
               )}
             </tbody>
           </table>
