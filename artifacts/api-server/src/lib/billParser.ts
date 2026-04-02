@@ -231,9 +231,6 @@ function detectUsage(text: string, utilityType: "electricity" | "gas" | "water")
       /(?:energy|electricity)\s+used[^\d]*(\d[\d,]*(?:\.\d+)?)\s*kWh/i,
       // "1,234 kWh used/consumed/total"
       /(\d[\d,]*(?:\.\d+)?)\s*kWh\s+(?:used|consumed|total)/i,
-      // Genesis/Meridian style: "8,220 @ 27.93 c/unit" in charge table
-      // The number here IS the kWh value (meter multiplier already applied by retailer)
-      /(\d[\d,]*(?:\.\d+)?)\s*@\s*[\d.]+\s*c\/unit/i,
       // "Units used: 1,234" or "Units Used 1,234"
       /units?\s+used[:\s]+(\d[\d,]*(?:\.\d+)?)/i,
     ];
@@ -243,6 +240,18 @@ function detectUsage(text: string, utilityType: "electricity" | "gas" | "water")
         const val = parseFloat(m[1].replace(/,/g, ""));
         if (val > 0 && val < 1_000_000) return { usageKwh: val };
       }
+    }
+
+    // Genesis/Meridian style: "8,220 @ 27.93 c/unit" per rate tier in charge table.
+    // Multi-rate bills (Anytime + Night) have multiple lines — SUM all tiers.
+    // c/day and c/month lines don't contain "c/unit" so they're excluded.
+    const cUnitMatches = [...text.matchAll(/(\d[\d,]*(?:\.\d+)?)\s*@\s*[\d.]+\s*c\/unit/gi)];
+    if (cUnitMatches.length > 0) {
+      const total = cUnitMatches
+        .map(m => parseFloat(m[1].replace(/,/g, "")))
+        .filter(v => v > 0 && v < 1_000_000)
+        .reduce((a, b) => a + b, 0);
+      if (total > 0) return { usageKwh: total };
     }
 
     // --- Fallback: collect ALL "NNN kWh" values and take the largest ---
