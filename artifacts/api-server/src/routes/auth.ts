@@ -450,7 +450,7 @@ router.post("/magic-link/request", async (req, res) => {
       const domain = productionDomain || domains[0] || process.env.REPLIT_DEV_DOMAIN?.trim() || "localhost:3001";
       return `https://${domain}`;
     })();
-    const verifyUrl = `${appUrl}/auth/verify?token=${token}`;
+    const verifyUrl = `${appUrl}/app/auth/verify?token=${token}`;
 
     try {
       const { devMode } = await sendMagicLinkEmail(email, verifyUrl);
