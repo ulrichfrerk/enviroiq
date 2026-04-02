@@ -141,29 +141,65 @@ function parseNZDate(str: string): Date | undefined {
   return undefined;
 }
 
+const SEP = /\s*(?:to|–|—|-|through)\s*/i;
+const DATE_FULL  = /\d{1,2}\s+[A-Za-z]+\s+\d{4}/;  // "1 January 2026"
+const DATE_SHORT = /\d{1,2}\s+[A-Za-z]+/;           // "1 Jan" (no year)
+const DATE_NUM   = /\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/;
+const DATE_ISO   = /\d{4}-\d{2}-\d{2}/;
+
+/**
+ * Given two raw date strings where the second may be missing a year,
+ * try to inherit the year from the other string.
+ */
+function parseDatePair(a: string, b: string): { periodStart?: Date; periodEnd?: Date } {
+  // If b has no year, try appending the year from a
+  const yearMatch = a.match(/\b(20\d{2})\b/) ?? b.match(/\b(20\d{2})\b/);
+  const aFull = a.includes("20") ? a : yearMatch ? `${a} ${yearMatch[1]}` : a;
+  const bFull = b.includes("20") ? b : yearMatch ? `${b} ${yearMatch[1]}` : b;
+  const periodStart = parseNZDate(aFull);
+  const periodEnd   = parseNZDate(bFull);
+  if (periodStart && periodEnd && !isNaN(periodStart.getTime()) && !isNaN(periodEnd.getTime())) {
+    return { periodStart, periodEnd };
+  }
+  return {};
+}
+
 function detectBillingPeriod(text: string): { periodStart?: Date; periodEnd?: Date } {
-  // Pattern: "1 January 2026 to 31 January 2026" or "1 Jan 2026 – 31 Jan 2026"
-  const rangePatterns = [
-    /(\d{1,2}\s+[A-Za-z]+\s+\d{4})\s*(?:to|–|-|through)\s*(\d{1,2}\s+[A-Za-z]+\s+\d{4})/i,
-    /billing period[:\s]+(\d{1,2}\s+[A-Za-z]+\s+\d{4})\s*(?:to|–|-)\s*(\d{1,2}\s+[A-Za-z]+\s+\d{4})/i,
-    /from[:\s]+(\d{1,2}\s+[A-Za-z]+\s+\d{4})\s+to\s+(\d{1,2}\s+[A-Za-z]+\s+\d{4})/i,
-    /(\d{2}\/\d{2}\/\d{4})\s*(?:to|–|-)\s*(\d{2}\/\d{2}\/\d{4})/,
-    /(\d{2}-\d{2}-\d{4})\s*(?:to|–|-)\s*(\d{2}-\d{2}-\d{4})/,
-    /(\d{4}-\d{2}-\d{2})\s*(?:to|–|-)\s*(\d{4}-\d{2}-\d{2})/,
+  // --- Primary: explicit date ranges ---
+  // Covers formats like:
+  //   "1 January 2026 to 31 January 2026"
+  //   "1 Jan – 31 Jan 2026"       (year only at end — Contact Energy style)
+  //   "01/02/2026 – 28/02/2026"
+  //   "2026-01-01 to 2026-01-31"
+  const rangePatterns: RegExp[] = [
+    // Both dates fully qualified: "1 January 2026 to 31 January 2026"
+    new RegExp(`(${DATE_FULL.source})${SEP.source}(${DATE_FULL.source})`, "i"),
+    // Short start + full end: "1 Jan – 31 Jan 2026" (Contact Energy style)
+    new RegExp(`(${DATE_SHORT.source})${SEP.source}(${DATE_FULL.source})`, "i"),
+    // Numeric NZ: "01/02/2026 – 28/02/2026"
+    new RegExp(`(${DATE_NUM.source})${SEP.source}(${DATE_NUM.source})`),
+    // ISO: "2026-01-01 to 2026-01-31"
+    new RegExp(`(${DATE_ISO.source})${SEP.source}(${DATE_ISO.source})`),
   ];
 
+  // Optionally preceded by a billing-period label
+  const LABEL = /(?:bill(?:ing)?\s+period|invoice\s+period|service\s+period|your\s+(?:bill|usage)\s+(?:covers?|from)|period)[:\s]*/i;
+
   for (const pattern of rangePatterns) {
-    const m = text.match(pattern);
-    if (m) {
-      const periodStart = parseNZDate(m[1]);
-      const periodEnd   = parseNZDate(m[2]);
-      if (periodStart && periodEnd && !isNaN(periodStart.getTime()) && !isNaN(periodEnd.getTime())) {
-        return { periodStart, periodEnd };
+    // Try with label prefix first
+    const labelledSrc = new RegExp(LABEL.source + pattern.source, "i");
+    for (const re of [labelledSrc, pattern]) {
+      const m = text.match(re);
+      if (m) {
+        const result = parseDatePair(m[1].trim(), m[2].trim());
+        if (result.periodStart && result.periodEnd) return result;
       }
     }
   }
 
-  // Fallback: single month/year mention — infer full month
+  // --- Fallback: collect all Month YYYY mentions, prefer the billing period ---
+  // Bills typically mention the billing month earliest; the issue/due date comes later.
+  // We pick the OLDEST (earliest) month mention as the billing period.
   const monthYearPattern = /\b([A-Za-z]+)\s+(20\d{2})\b/g;
   const mentions: Date[] = [];
   let m: RegExpExecArray | null;
@@ -174,8 +210,8 @@ function detectBillingPeriod(text: string): { periodStart?: Date; periodEnd?: Da
     }
   }
   if (mentions.length > 0) {
-    // Use most recent date found
-    mentions.sort((a, b) => b.getTime() - a.getTime());
+    // Use OLDEST date — billing periods appear before issue/due dates in NZ bills
+    mentions.sort((a, b) => a.getTime() - b.getTime());
     const d = mentions[0];
     const periodStart = new Date(d.getFullYear(), d.getMonth(), 1);
     const periodEnd   = new Date(d.getFullYear(), d.getMonth() + 1, 0);

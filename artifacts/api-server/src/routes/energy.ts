@@ -132,9 +132,11 @@ router.post("/upload", requireAuth, requireOrgAdmin, upload.single("file"), asyn
 
     // Extract text from PDF using pdf-parse (handles compressed content streams)
     const fileText = await extractPdfText(req.file.buffer);
+    req.log.debug({ filename: req.file.originalname, textPreview: fileText.slice(0, 300) }, "PDF text extracted");
 
     // Auto-detect from bill text; caller may override any field
     const parsed = parseBillText(fileText);
+    req.log.info({ filename: req.file.originalname, provider: parsed.provider, periodStart: parsed.periodStart, periodEnd: parsed.periodEnd, usageKwh: parsed.usageKwh, confidence: parsed.confidence, reviewFlags: parsed.reviewFlags }, "Bill parsed");
     const utilityType = utilityTypeOverride || parsed.utilityType;
     const provider    = providerOverride    || parsed.provider;
 
