@@ -269,7 +269,7 @@ export default function Admin() {
                         <Button
                           variant="ghost" size="icon"
                           title="Open org dashboard"
-                          onClick={() => setLocation(`/org/${org.slug}/dashboard`)}
+                          onClick={() => setLocation(`/${org.slug}`)}
                         >
                           <ExternalLink className="w-4 h-4" />
                         </Button>
