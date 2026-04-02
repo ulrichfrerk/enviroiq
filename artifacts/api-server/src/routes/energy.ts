@@ -89,39 +89,37 @@ router.post("/readings", requireAuth, requireOrgAdmin, async (req, res) => {
 });
 
 // POST /organisations/:orgId/energy/upload
+// Accepts a single PDF bill. When utilityType is omitted the bill parser auto-detects
+// utility type, provider, billing period, and usage from the PDF text.
 router.post("/upload", requireAuth, requireOrgAdmin, upload.single("file"), async (req, res) => {
   try {
     const orgId = req.params.orgId as string;
-    const { utilityType, supplierRenewablePct, periodStartOverride, periodEndOverride, provider } = req.body;
+    const { utilityType: utilityTypeOverride, supplierRenewablePct, periodStartOverride, periodEndOverride, provider: providerOverride } = req.body;
 
     if (!req.file) {
       res.status(400).json({ error: "Bad Request", message: "File required" });
       return;
     }
-    if (!utilityType) {
-      res.status(400).json({ error: "Bad Request", message: "utilityType required" });
-      return;
-    }
 
-    // Basic PDF text extraction (for full parsing, a PDF library would be needed in production)
-    const fileText = req.file.buffer.toString("utf8", 0, Math.min(req.file.buffer.length, 5000));
+    // Extract text from PDF (best-effort from first 8KB)
+    const fileText = req.file.buffer.toString("utf8", 0, Math.min(req.file.buffer.length, 8000));
 
-    // Simple heuristic parsing - look for common patterns
-    const kwhMatch = fileText.match(/(\d+(?:\.\d+)?)\s*(?:kWh|KWH|kwh)/i);
-    const costMatch = fileText.match(/\$\s*(\d+(?:\.\d+)?)/);
-    const usageKwh = kwhMatch ? parseFloat(kwhMatch[1]) : undefined;
-    const costAmount = costMatch ? parseFloat(costMatch[1]) : undefined;
+    // Auto-detect from bill text; caller may override any field
+    const parsed = parseBillText(fileText);
+    const utilityType = utilityTypeOverride || parsed.utilityType;
+    const provider    = providerOverride    || parsed.provider;
 
-    // Use user-supplied dates if provided, otherwise default to last month
     const now = new Date();
+    const defaultPeriodStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const defaultPeriodEnd   = new Date(now.getFullYear(), now.getMonth(), 0);
+
     const periodStart = periodStartOverride
       ? new Date(periodStartOverride)
-      : new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const periodEnd = periodEndOverride
+      : (parsed.periodStart ?? defaultPeriodStart);
+    const periodEnd   = periodEndOverride
       ? new Date(periodEndOverride)
-      : new Date(now.getFullYear(), now.getMonth(), 0);
+      : (parsed.periodEnd ?? defaultPeriodEnd);
 
-    // Determine the correct emission factor for the billing period
     const isCurrentYear = periodStart.getFullYear() >= now.getFullYear();
     const liveGrid = isCurrentYear ? await getCurrentGridIntensity() : null;
     const renewablePct = supplierRenewablePct !== undefined ? Number(supplierRenewablePct) : undefined;
@@ -132,7 +130,12 @@ router.post("/upload", requireAuth, requireOrgAdmin, upload.single("file"), asyn
       liveGridKgCo2PerKwh: liveGrid?.kgco2PerKwh,
     });
 
-    const co2eKg = calcEnergyCo2e({ utilityType, usageKwh, electricityFactorKgCo2PerKwh: factorKgCo2PerKwh });
+    const co2eKg = calcEnergyCo2e({
+      utilityType,
+      usageKwh: parsed.usageKwh,
+      usageMj: parsed.usageMj,
+      electricityFactorKgCo2PerKwh: factorKgCo2PerKwh,
+    });
 
     const [reading] = await db.insert(energyReadingsTable).values({
       id: uuidv4(),
@@ -141,8 +144,9 @@ router.post("/upload", requireAuth, requireOrgAdmin, upload.single("file"), asyn
       provider: provider || undefined,
       periodStart,
       periodEnd,
-      usageKwh,
-      costAmount,
+      usageKwh: parsed.usageKwh,
+      usageMj: parsed.usageMj,
+      costAmount: parsed.costAmount,
       co2eKg,
       gridIntensityKgCo2PerKwh: utilityType === "electricity" ? factorKgCo2PerKwh : undefined,
       emissionMethod: utilityType === "electricity" ? method : undefined,
@@ -158,15 +162,24 @@ router.post("/upload", requireAuth, requireOrgAdmin, upload.single("file"), asyn
       action: "energy_bill.upload",
       resourceType: "energy_reading",
       resourceId: reading.id,
-      details: { filename: req.file.originalname, period: `${periodStart.toISOString().slice(0, 7)}`, emissionMethod: method },
+      details: { filename: req.file.originalname, period: `${periodStart.toISOString().slice(0, 7)}`, emissionMethod: method, autoDetected: !utilityTypeOverride },
     });
 
     res.status(201).json({
       reading,
-      parsedFields: { usageKwh, cost: costAmount, periodStart, periodEnd },
+      parsedFields: {
+        utilityType,
+        provider,
+        usageKwh: parsed.usageKwh,
+        usageMj: parsed.usageMj,
+        cost: parsed.costAmount,
+        periodStart,
+        periodEnd,
+      },
       emissionFactorUsed: { factorKgCo2PerKwh, method, note },
-      confidence: usageKwh ? 0.7 : 0.2,
-      requiresReview: !usageKwh,
+      confidence: parsed.confidence,
+      reviewFlags: parsed.reviewFlags,
+      requiresReview: parsed.reviewFlags.length > 0,
     });
   } catch (err) {
     req.log.error({ err }, "Upload energy bill failed");

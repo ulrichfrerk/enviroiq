@@ -15,6 +15,8 @@ import { useDropzone } from "react-dropzone";
 import { useToast } from "@/hooks/use-toast";
 import { format, formatDistanceToNow } from "date-fns";
 
+const MAX_QUEUE = 40;
+
 interface GridIntensityData {
   region: string;
   tradingPeriodStart: string;
@@ -48,8 +50,7 @@ function GridIntensityBanner() {
   const intensityColor = isLow ? "text-emerald-400" : isMed ? "text-amber-400" : "text-red-400";
   const intensityBg = isLow
     ? "from-emerald-950/40 to-background border-emerald-800/30"
-    : isMed
-    ? "from-amber-950/40 to-background border-amber-800/30"
+    : isMed ? "from-amber-950/40 to-background border-amber-800/30"
     : "from-red-950/40 to-background border-red-800/30";
   const label = isLow ? "Low — great time to use power" : isMed ? "Moderate" : "High — more fossil fuel on grid";
 
@@ -86,6 +87,7 @@ function GridIntensityBanner() {
 type FileStatus = "pending" | "processing" | "success" | "review" | "error";
 
 interface QueuedFile {
+  /** Stable client-generated key — used for result association, never filename */
   id: string;
   file: File;
   status: FileStatus;
@@ -100,6 +102,20 @@ interface QueuedFile {
   error?: string;
 }
 
+interface UploadResult {
+  parsedFields: {
+    utilityType?: string;
+    provider?: string;
+    usageKwh?: number;
+    periodStart?: string | Date;
+    periodEnd?: string | Date;
+  };
+  reading: { id: string; co2eKg?: number };
+  confidence?: number;
+  reviewFlags?: string[];
+  requiresReview?: boolean;
+}
+
 function UtilityIcon({ type, className }: { type?: string; className?: string }) {
   if (type === "gas") return <Flame className={className ?? "w-4 h-4 text-orange-400"} />;
   if (type === "water") return <Droplets className={className ?? "w-4 h-4 text-blue-400"} />;
@@ -107,7 +123,7 @@ function UtilityIcon({ type, className }: { type?: string; className?: string })
 }
 
 function StatusIcon({ status }: { status: FileStatus }) {
-  if (status === "pending") return <Clock className="w-4 h-4 text-muted-foreground" />;
+  if (status === "pending") return <Clock className="w-4 h-4 text-muted-foreground/50" />;
   if (status === "processing") return <Loader2 className="w-4 h-4 text-primary animate-spin" />;
   if (status === "success") return <CheckCircle2 className="w-4 h-4 text-emerald-400" />;
   if (status === "review") return <AlertTriangle className="w-4 h-4 text-amber-400" />;
@@ -130,113 +146,100 @@ export default function Energy() {
   const [isDone, setIsDone] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  const summary = {
-    total: queue.length,
-    done: queue.filter(f => f.status === "success" || f.status === "review" || f.status === "error").length,
-    success: queue.filter(f => f.status === "success").length,
-    review: queue.filter(f => f.status === "review").length,
-    error: queue.filter(f => f.status === "error").length,
-    totalKwh: queue.filter(f => f.usageKwh).reduce((s, f) => s + (f.usageKwh ?? 0), 0),
-    totalCo2e: queue.filter(f => f.co2eKg != null).reduce((s, f) => s + (f.co2eKg ?? 0), 0),
-  };
+  const doneCount   = queue.filter(f => ["success", "review", "error"].includes(f.status)).length;
+  const successCount = queue.filter(f => f.status === "success").length;
+  const reviewCount  = queue.filter(f => f.status === "review").length;
+  const errorCount   = queue.filter(f => f.status === "error").length;
+  const totalKwh     = queue.filter(f => f.usageKwh != null).reduce((s, f) => s + (f.usageKwh ?? 0), 0);
+  const totalCo2e    = queue.filter(f => f.co2eKg != null).reduce((s, f) => s + (f.co2eKg ?? 0), 0);
+  const pendingCount = queue.filter(f => f.status === "pending").length;
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles.length === 0) return;
-    const newItems: QueuedFile[] = acceptedFiles.map(f => ({
-      id: `${f.name}-${f.size}-${Date.now()}-${Math.random()}`,
-      file: f,
-      status: "pending",
-    }));
-    setQueue(prev => [...prev, ...newItems]);
+    setQueue(prev => {
+      const remaining = MAX_QUEUE - prev.length;
+      if (remaining <= 0) {
+        toast({ variant: "destructive", title: "Queue full", description: `Maximum ${MAX_QUEUE} files per upload.` });
+        return prev;
+      }
+      const toAdd = acceptedFiles.slice(0, remaining);
+      if (toAdd.length < acceptedFiles.length) {
+        toast({ title: "Some files skipped", description: `Only ${toAdd.length} of ${acceptedFiles.length} files added — ${MAX_QUEUE} file limit reached.` });
+      }
+      const newItems: QueuedFile[] = toAdd.map(f => ({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        file: f,
+        status: "pending",
+      }));
+      return [...prev, ...newItems];
+    });
     setIsDone(false);
-  }, []);
+  }, [toast]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     accept: { "application/pdf": [".pdf"] },
-    maxFiles: 40,
     disabled: isProcessing,
   });
 
+  // Process files one-at-a-time sequentially so each row transitions live
   const processQueue = useCallback(async () => {
     if (!orgId || isProcessing) return;
-    const pending = queue.filter(f => f.status === "pending");
-    if (pending.length === 0) return;
+
+    // Snapshot the pending items at this moment
+    const pendingSnapshot = queue.filter(f => f.status === "pending");
+    if (pendingSnapshot.length === 0) return;
 
     setIsProcessing(true);
 
-    const fd = new FormData();
-    for (const item of pending) fd.append("files", item.file);
-    if (batchRenewablePct > 0) fd.append("supplierRenewablePct", String(batchRenewablePct));
+    for (const item of pendingSnapshot) {
+      // Mark this row as processing
+      setQueue(prev => prev.map(f => f.id === item.id ? { ...f, status: "processing" } : f));
 
-    // Mark all pending as processing
-    setQueue(prev => prev.map(f =>
-      f.status === "pending" ? { ...f, status: "processing" as FileStatus } : f
-    ));
+      try {
+        const fd = new FormData();
+        fd.append("file", item.file);
+        if (batchRenewablePct > 0) fd.append("supplierRenewablePct", String(batchRenewablePct));
 
-    try {
-      const res = await fetch(`/api/organisations/${orgId}/energy/upload-batch`, {
-        method: "POST",
-        body: fd,
-        credentials: "include",
-      });
+        const res = await fetch(`/api/organisations/${orgId}/energy/upload`, {
+          method: "POST",
+          body: fd,
+          credentials: "include",
+        });
 
-      if (!res.ok) {
-        const err = await res.json() as { message?: string };
-        throw new Error(err.message ?? "Batch upload failed");
-      }
+        if (!res.ok) {
+          const errBody = await res.json() as { message?: string };
+          throw new Error(errBody.message ?? `HTTP ${res.status}`);
+        }
 
-      const data = await res.json() as {
-        results: Array<{
-          filename: string;
-          status: "success" | "review" | "error";
-          utilityType?: string;
-          provider?: string;
-          periodStart?: string;
-          periodEnd?: string;
-          usageKwh?: number;
-          co2eKg?: number;
-          confidence?: number;
-          reviewFlags?: string[];
-          readingId?: string;
-          error?: string;
-        }>;
-      };
+        const data = await res.json() as UploadResult;
+        const pf = data.parsedFields;
 
-      // Map results back to queue items by filename
-      const resultMap = new Map(data.results.map(r => [r.filename, r]));
-
-      setQueue(prev => prev.map(f => {
-        const result = resultMap.get(f.file.name);
-        if (!result) return { ...f, status: "error" as FileStatus, error: "No result returned" };
-        return {
+        setQueue(prev => prev.map(f => f.id === item.id ? {
           ...f,
-          status: result.status,
-          utilityType: result.utilityType,
-          provider: result.provider,
-          periodStart: result.periodStart,
-          periodEnd: result.periodEnd,
-          usageKwh: result.usageKwh,
-          co2eKg: result.co2eKg,
-          confidence: result.confidence,
-          reviewFlags: result.reviewFlags,
-          error: result.error,
-        };
-      }));
+          status: (data.reviewFlags?.length ?? 0) > 0 ? "review" : "success",
+          utilityType: pf.utilityType,
+          provider: pf.provider,
+          periodStart: pf.periodStart ? new Date(pf.periodStart).toISOString() : undefined,
+          periodEnd:   pf.periodEnd   ? new Date(pf.periodEnd).toISOString()   : undefined,
+          usageKwh:  pf.usageKwh,
+          co2eKg:    data.reading.co2eKg,
+          confidence: data.confidence,
+          reviewFlags: data.reviewFlags,
+        } : f));
 
-      await qc.invalidateQueries({ queryKey: ["listEnergyReadings", orgId] });
-      setIsDone(true);
-    } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : "Upload failed";
-      // Mark processing items as error
-      setQueue(prev => prev.map(f =>
-        f.status === "processing" ? { ...f, status: "error" as FileStatus, error: message } : f
-      ));
-      toast({ variant: "destructive", title: "Upload failed", description: message });
-    } finally {
-      setIsProcessing(false);
+        // Invalidate so the history table stays fresh
+        await qc.invalidateQueries({ queryKey: ["listEnergyReadings", orgId] });
+
+      } catch (e: unknown) {
+        const message = e instanceof Error ? e.message : "Upload failed";
+        setQueue(prev => prev.map(f => f.id === item.id ? { ...f, status: "error", error: message } : f));
+      }
     }
-  }, [orgId, queue, batchRenewablePct, isProcessing, qc, toast]);
+
+    setIsProcessing(false);
+    setIsDone(true);
+  }, [orgId, queue, batchRenewablePct, isProcessing, qc]);
 
   const resetUpload = () => {
     setQueue([]);
@@ -245,9 +248,7 @@ export default function Energy() {
   };
 
   const handleOpenChange = (open: boolean) => {
-    if (!open && !isProcessing) {
-      resetUpload();
-    }
+    if (!open && !isProcessing) resetUpload();
     setIsUploadOpen(open);
   };
 
@@ -283,11 +284,11 @@ export default function Energy() {
                 Bulk Bill Upload
               </DialogTitle>
               <p className="text-sm text-muted-foreground pt-1">
-                Drop up to 40 PDFs at once. EnviroIQ will auto-detect utility type, provider, billing period, and usage from each bill.
+                Drop up to {MAX_QUEUE} PDFs at once. Utility type, provider, billing period and usage are auto-detected from each bill.
               </p>
             </DialogHeader>
 
-            <div className="flex-1 overflow-y-auto space-y-4 pr-1 py-2">
+            <div className="flex-1 overflow-y-auto space-y-4 pr-1 py-2 min-h-0">
 
               {/* Renewable override */}
               <div className="rounded-xl border border-emerald-800/30 bg-emerald-950/20 p-4 space-y-3">
@@ -313,8 +314,8 @@ export default function Energy() {
                     disabled={isProcessing}
                   />
                   <span className="text-sm font-semibold text-emerald-400 w-12 text-right">{batchRenewablePct}%</span>
-                  {batchRenewablePct > 0 && (
-                    <button onClick={() => setBatchRenewablePct(0)} disabled={isProcessing} className="text-xs text-muted-foreground hover:text-foreground">reset</button>
+                  {batchRenewablePct > 0 && !isProcessing && (
+                    <button onClick={() => setBatchRenewablePct(0)} className="text-xs text-muted-foreground hover:text-foreground">reset</button>
                   )}
                 </div>
                 <p className="text-xs text-muted-foreground">
@@ -326,33 +327,34 @@ export default function Energy() {
                 </p>
               </div>
 
-              {/* Summary banner — shown once processing starts */}
-              {queue.length > 0 && isDone && (
+              {/* Summary banner — shown after all done */}
+              {isDone && queue.length > 0 && (
                 <div className={`rounded-xl border p-4 flex flex-wrap gap-x-6 gap-y-2 text-sm ${
-                  summary.error > 0 ? "bg-amber-950/20 border-amber-800/30" : "bg-emerald-950/20 border-emerald-800/30"
+                  errorCount > 0 ? "bg-amber-950/20 border-amber-800/30" : "bg-emerald-950/20 border-emerald-800/30"
                 }`}>
-                  <span className="font-semibold text-foreground">{summary.success + summary.review} of {summary.total} processed</span>
-                  {summary.totalKwh > 0 && (
-                    <span className="text-muted-foreground">{summary.totalKwh.toLocaleString(undefined, { maximumFractionDigits: 0 })} kWh total</span>
+                  <span className="font-semibold text-foreground">
+                    {doneCount} of {queue.length} processed
+                  </span>
+                  {totalKwh > 0 && (
+                    <span className="text-muted-foreground">{totalKwh.toLocaleString(undefined, { maximumFractionDigits: 0 })} kWh total</span>
                   )}
-                  {summary.totalCo2e > 0 && (
-                    <span className="text-muted-foreground">{summary.totalCo2e.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg CO₂e total</span>
+                  {totalCo2e > 0 && (
+                    <span className="text-muted-foreground">{totalCo2e.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg CO₂e total</span>
                   )}
-                  {summary.review > 0 && (
-                    <span className="text-amber-400">{summary.review} need review</span>
-                  )}
-                  {summary.error > 0 && (
-                    <span className="text-red-400">{summary.error} failed</span>
+                  {reviewCount > 0 && <span className="text-amber-400">{reviewCount} need review</span>}
+                  {errorCount > 0 && <span className="text-red-400">{errorCount} failed</span>}
+                  {successCount > 0 && errorCount === 0 && reviewCount === 0 && (
+                    <span className="text-emerald-400">All parsed successfully</span>
                   )}
                 </div>
               )}
 
-              {/* Dropzone */}
+              {/* Dropzone — hide once all files are done */}
               {!isDone && (
                 <div
                   {...getRootProps()}
-                  className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-colors ${
-                    isProcessing ? "opacity-50 cursor-not-allowed" : ""
+                  className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors ${
+                    isProcessing ? "opacity-50 cursor-not-allowed pointer-events-none" : "cursor-pointer"
                   } ${isDragActive ? "border-primary bg-primary/5" : "border-border hover:border-primary/50 bg-secondary/20"}`}
                 >
                   <input {...getInputProps()} />
@@ -364,27 +366,31 @@ export default function Energy() {
                   <p className="font-medium text-foreground mb-1">
                     {isDragActive ? "Drop PDFs here" : "Drag & drop PDF bills here"}
                   </p>
-                  <p className="text-xs text-muted-foreground">or click to browse · up to 40 files at once</p>
-                  <p className="text-xs text-muted-foreground mt-1 opacity-60">
-                    Utility type, provider, period, and kWh are auto-detected from each bill
-                  </p>
+                  <p className="text-xs text-muted-foreground">or click to browse · up to {MAX_QUEUE} files total</p>
+                  {queue.length > 0 && (
+                    <p className="text-xs text-muted-foreground mt-1 opacity-60">{MAX_QUEUE - queue.length} slots remaining</p>
+                  )}
                 </div>
               )}
 
-              {/* File queue */}
+              {/* File queue list */}
               {queue.length > 0 && (
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-sm font-medium text-muted-foreground">
-                      {queue.length} file{queue.length !== 1 ? "s" : ""} queued
+                      {queue.length} file{queue.length !== 1 ? "s" : ""}
+                      {isProcessing && pendingCount > 0 && ` · ${pendingCount} remaining`}
                     </span>
                     {isDone && (
-                      <button onClick={resetUpload} className="text-xs text-muted-foreground hover:text-foreground transition-colors">
+                      <button
+                        onClick={resetUpload}
+                        className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                      >
                         Clear &amp; upload more
                       </button>
                     )}
                   </div>
-                  <div className="rounded-xl border border-border/50 divide-y divide-border/50 overflow-hidden max-h-[320px] overflow-y-auto">
+                  <div className="rounded-xl border border-border/50 divide-y divide-border/50 overflow-hidden max-h-[300px] overflow-y-auto">
                     {queue.map((item) => (
                       <div key={item.id} className="flex items-start gap-3 px-4 py-3 hover:bg-secondary/20 transition-colors">
                         <div className="mt-0.5 shrink-0">
@@ -407,8 +413,7 @@ export default function Energy() {
                             )}
                           </div>
 
-                          {/* Period + usage */}
-                          {(item.periodStart || item.usageKwh) && (
+                          {(item.periodStart || item.usageKwh != null) && (
                             <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-1 text-xs text-muted-foreground">
                               {item.periodStart && item.periodEnd && (
                                 <span>
@@ -419,14 +424,13 @@ export default function Energy() {
                                 <span>{item.usageKwh.toLocaleString(undefined, { maximumFractionDigits: 0 })} kWh</span>
                               )}
                               {item.co2eKg != null && (
-                                <span className={item.co2eKg === 0 ? "text-emerald-400" : "text-foreground"}>
+                                <span className={item.co2eKg === 0 ? "text-emerald-400" : ""}>
                                   {item.co2eKg.toLocaleString(undefined, { maximumFractionDigits: 2 })} kg CO₂e
                                 </span>
                               )}
                             </div>
                           )}
 
-                          {/* Review flags */}
                           {item.reviewFlags && item.reviewFlags.length > 0 && (
                             <div className="mt-1 space-y-0.5">
                               {item.reviewFlags.map((flag, i) => (
@@ -435,18 +439,15 @@ export default function Energy() {
                             </div>
                           )}
 
-                          {/* Error */}
-                          {item.error && item.status === "error" && (
+                          {item.status === "error" && item.error && (
                             <p className="mt-1 text-xs text-red-400">{item.error}</p>
                           )}
 
-                          {/* Processing state */}
                           {item.status === "pending" && (
-                            <p className="mt-1 text-xs text-muted-foreground/60">Waiting…</p>
+                            <p className="mt-1 text-xs text-muted-foreground/50">Waiting…</p>
                           )}
                         </div>
 
-                        {/* Confidence badge */}
                         {item.confidence != null && item.status !== "error" && (
                           <Tooltip>
                             <TooltipTrigger asChild>
@@ -468,15 +469,15 @@ export default function Energy() {
               )}
             </div>
 
-            {/* Footer actions */}
+            {/* Footer */}
             <div className="shrink-0 pt-3 border-t border-border/50 flex items-center justify-between gap-3">
               <span className="text-xs text-muted-foreground">
                 {isProcessing
-                  ? `Processing ${queue.filter(f => f.status === "processing").length} bill${queue.filter(f => f.status === "processing").length !== 1 ? "s" : ""}…`
+                  ? `Processing… ${pendingCount} file${pendingCount !== 1 ? "s" : ""} remaining`
                   : isDone
                   ? "Upload complete"
-                  : queue.length > 0
-                  ? `${queue.filter(f => f.status === "pending").length} file${queue.filter(f => f.status === "pending").length !== 1 ? "s" : ""} ready to process`
+                  : pendingCount > 0
+                  ? `${pendingCount} file${pendingCount !== 1 ? "s" : ""} ready`
                   : "Add PDFs above to start"}
               </span>
               <div className="flex gap-2">
@@ -485,17 +486,17 @@ export default function Energy() {
                     Done
                   </Button>
                 )}
-                {!isDone && queue.some(f => f.status === "pending") && (
+                {!isDone && pendingCount > 0 && (
                   <Button
                     size="sm"
                     onClick={processQueue}
-                    disabled={isProcessing || queue.filter(f => f.status === "pending").length === 0}
+                    disabled={isProcessing || pendingCount === 0}
                     className="shadow-sm shadow-primary/20"
                   >
                     {isProcessing ? (
                       <><Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" />Processing…</>
                     ) : (
-                      <><Upload className="w-3.5 h-3.5 mr-2" />Process {queue.filter(f => f.status === "pending").length} Bill{queue.filter(f => f.status === "pending").length !== 1 ? "s" : ""}</>
+                      <><Upload className="w-3.5 h-3.5 mr-2" />Process {pendingCount} Bill{pendingCount !== 1 ? "s" : ""}</>
                     )}
                   </Button>
                 )}
@@ -547,7 +548,7 @@ export default function Energy() {
             <tbody className="divide-y divide-border/50">
               {readings?.items.map((reading) => {
                 const isRenewable = reading.emissionMethod?.includes("renewable");
-                const isLive = reading.emissionMethod?.includes("live_em6");
+                const isLive      = reading.emissionMethod?.includes("live_em6");
                 const isHistorical = reading.emissionMethod?.includes("annual_avg");
                 const factorG = reading.gridIntensityKgCo2PerKwh != null
                   ? (reading.gridIntensityKgCo2PerKwh * 1000).toFixed(1) + " g/kWh"
@@ -565,7 +566,7 @@ export default function Energy() {
                         {reading.provider && <span className="text-muted-foreground text-xs">· {reading.provider}</span>}
                       </div>
                     </td>
-                    <td className="px-6 py-4 font-medium">{reading.usageKwh ? `${reading.usageKwh.toLocaleString()} kWh` : "-"}</td>
+                    <td className="px-6 py-4 font-medium">{reading.usageKwh ? `${reading.usageKwh.toLocaleString()} kWh` : "—"}</td>
                     <td className="px-6 py-4">
                       {reading.utilityType === "electricity" && reading.emissionNote ? (
                         <Tooltip>
