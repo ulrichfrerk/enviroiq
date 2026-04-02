@@ -57,6 +57,73 @@ router.post("/vehicles", requireAuth, requireOrgAdmin, async (req, res) => {
   }
 });
 
+// GET /organisations/:orgId/fleet/vehicles/lookup-plate?plate=XXX
+// Looks up a vehicle by NZ plate number using the EECA Fuelsaver API and returns
+// WLTP CO₂ g/km + derived kg CO₂e/km emission factor (with NZ MfE WTT upstream uplift).
+router.get("/vehicles/lookup-plate", requireAuth, requireOrgAccess, async (req, res) => {
+  const plate = ((req.query.plate as string) ?? "").trim().toUpperCase().replace(/\s+/g, "");
+  if (!plate || plate.length < 2) {
+    res.status(400).json({ error: "plate query param required" });
+    return;
+  }
+
+  const login = process.env.FUELSAVER_LOGIN;
+  const password = process.env.FUELSAVER_PASSWORD;
+  if (!login || !password) {
+    res.status(503).json({ found: false, configured: false, error: "Fuelsaver credentials not set" });
+    return;
+  }
+
+  try {
+    const params = JSON.stringify({ api: "labels", listingid: "001", login, password, plate });
+    const url = `https://resources.fuelsaver.govt.nz/api/?params=${encodeURIComponent(params)}`;
+    const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (!resp.ok) {
+      res.status(502).json({ found: false, error: `Fuelsaver HTTP ${resp.status}` });
+      return;
+    }
+    const data = await resp.json() as Record<string, unknown>;
+
+    // Fuelsaver returns ErrorCode when plate not found or credentials wrong
+    if (data.ErrorCode || !data.CO2) {
+      res.json({ found: false, plate, errorCode: data.ErrorCode ?? "NO_CO2" });
+      return;
+    }
+
+    const co2GPerKm = Number(data.CO2);
+    const fuelRaw = ((data.FuelType as string) ?? "").toLowerCase();
+    const fuelType = fuelRaw.includes("diesel")   ? "diesel"
+      : fuelRaw.includes("electric") ? "electric"
+      : fuelRaw.includes("hybrid")   ? "hybrid"
+      : fuelRaw.includes("lpg")      ? "lpg"
+      : "petrol";
+
+    // WTT upstream uplift per NZ MfE: ~15% for diesel/petrol, 0 for electric
+    const wttUplift = fuelType === "electric" ? 0 : 1.15;
+    const emissionFactorKgPerKm = fuelType === "electric" ? 0 : (co2GPerKm * wttUplift) / 1000;
+
+    res.json({
+      found: true,
+      plate,
+      make:                  data.Make   ?? null,
+      model:                 data.Model  ?? null,
+      subModel:              data.SubModel ?? null,
+      fuelType,
+      co2GPerKm,
+      co2Stars:              data.CO2stars ?? null,
+      fuelL100km:            data.FuelConsumption ?? null,
+      emissionFactorKgPerKm,
+      wttUplift,
+      yearlyTonnes:          data.YearlyCO2 ?? null,
+      annualCostNzd:         data.AnnFuelCostText ?? null,
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    req.log.error({ err, plate }, "Fuelsaver lookup failed");
+    res.status(502).json({ found: false, error: "Fuelsaver request failed", detail: msg });
+  }
+});
+
 // GET /organisations/:orgId/fleet/vehicles/:vehicleId
 router.get("/vehicles/:vehicleId", requireAuth, requireOrgAccess, async (req, res) => {
   try {

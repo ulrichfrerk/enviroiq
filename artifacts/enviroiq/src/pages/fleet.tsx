@@ -14,7 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import {
   Car, Plus, Trash2, Loader2, Navigation, Server, Upload, Download,
-  CheckCircle2, XCircle, Gauge, FileSpreadsheet, AlertTriangle,
+  CheckCircle2, XCircle, Gauge, FileSpreadsheet, AlertTriangle, Search, Star,
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
@@ -323,6 +323,25 @@ function parseKmCSV(text: string): { rows: KmRow[]; errors: string[] } {
   return { rows, errors };
 }
 
+// ─── Fuelsaver plate lookup ───────────────────────────────────────────────────
+
+type PlateLookupResult =
+  | { found: false; configured?: boolean; errorCode?: string }
+  | {
+      found: true;
+      plate: string;
+      make: string | null;
+      model: string | null;
+      subModel: string | null;
+      fuelType: string;
+      co2GPerKm: number;
+      co2Stars: number | null;
+      fuelL100km: string | null;
+      emissionFactorKgPerKm: number;
+      yearlyTonnes: number | null;
+      annualCostNzd: string | null;
+    };
+
 // ─── Form schema ─────────────────────────────────────────────────────────────
 
 const vehicleSchema = z.object({
@@ -400,6 +419,37 @@ export default function Fleet() {
   const createVehicle = useCreateVehicle();
   const deleteVehicle = useDeleteVehicle();
   const { stats: vehicleStats, loadingStats } = useVehicleStats(orgId);
+
+  // ── Fuelsaver plate lookup state ──────────────────────────────────────────
+  const [plateLookup, setPlateLookup] = useState<PlateLookupResult | null>(null);
+  const [plateLookupLoading, setPlateLookupLoading] = useState(false);
+
+  const lookupPlate = async (plate: string) => {
+    const p = plate.trim().replace(/\s+/g, "").toUpperCase();
+    if (!p || p.length < 2 || !orgId) return;
+    setPlateLookupLoading(true);
+    setPlateLookup(null);
+    try {
+      const res = await fetch(`/app/api/organisations/${orgId}/fleet/vehicles/lookup-plate?plate=${encodeURIComponent(p)}`, { credentials: "include" });
+      const json = await res.json() as PlateLookupResult;
+      setPlateLookup(json);
+      if (json.found) {
+        if (json.fuelType) form.setValue("fuelType", json.fuelType as z.infer<typeof vehicleSchema>["fuelType"]);
+        if (json.make)    form.setValue("make", json.make);
+        if (json.model) {
+          const fullModel = [json.model, json.subModel].filter(Boolean).join(" ");
+          form.setValue("model", fullModel);
+        }
+        if (!form.getValues("name")) {
+          form.setValue("name", [json.make, json.model].filter(Boolean).join(" ") || p);
+        }
+      }
+    } catch {
+      setPlateLookup({ found: false });
+    } finally {
+      setPlateLookupLoading(false);
+    }
+  };
 
   const knownVehicles = new Set([
     ...(vehicles?.items.map(v => v.name.toLowerCase().trim()) ?? []),
@@ -568,16 +618,19 @@ export default function Fleet() {
 
   const onSubmit = async (data: z.infer<typeof vehicleSchema>) => {
     try {
+      const fuelsaverFactor = plateLookup?.found ? plateLookup.emissionFactorKgPerKm : undefined;
       await createVehicle.mutateAsync({
         orgId: orgId!,
         data: {
           ...data,
           fuelType: data.fuelType as CreateVehicleRequestFuelType,
           gpsProvider: data.gpsProvider as CreateVehicleRequestGpsProvider,
+          ...(fuelsaverFactor !== undefined ? { emissionFactorKgPerKm: fuelsaverFactor } : {}),
         },
       });
-      toast({ title: "Vehicle added" });
+      toast({ title: "Vehicle added", description: fuelsaverFactor ? `WLTP emission factor applied: ${fuelsaverFactor.toFixed(3)} kg CO₂e/km` : undefined });
       setIsDialogOpen(false);
+      setPlateLookup(null);
       form.reset();
     } catch (e: unknown) {
       toast({ variant: "destructive", title: "Error", description: e instanceof Error ? e.message : "Could not add vehicle" });
@@ -883,39 +936,122 @@ export default function Fleet() {
           </Dialog>
 
           {/* ── Add Vehicle ── */}
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+          <Dialog open={isDialogOpen} onOpenChange={(open) => { setIsDialogOpen(open); if (!open) { setPlateLookup(null); setPlateLookupLoading(false); } }}>
             <DialogTrigger asChild>
               <Button className="hover-elevate active-elevate-2 shadow-lg shadow-primary/20">
                 <Plus className="w-4 h-4 mr-2" /> Add Vehicle
               </Button>
             </DialogTrigger>
-            <DialogContent className="bg-card border-border sm:max-w-[500px]">
+            <DialogContent className="bg-card border-border sm:max-w-[520px]">
               <DialogHeader><DialogTitle>Register New Vehicle</DialogTitle></DialogHeader>
               <Form {...form}>
                 <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-4">
-                  <FormField control={form.control} name="name" render={({ field }) => (
-                    <FormItem><FormLabel>Internal Name</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>
-                  )} />
-                  <div className="grid grid-cols-2 gap-4">
-                    <FormField control={form.control} name="registration" render={({ field }) => (
-                      <FormItem><FormLabel>Registration Plate</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>
-                    )} />
-                    <FormField control={form.control} name="fuelType" render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Fuel Type</FormLabel>
+
+                  {/* Registration + Fuelsaver lookup */}
+                  <FormField control={form.control} name="registration" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Registration Plate</FormLabel>
+                      <div className="flex gap-2">
                         <FormControl>
-                          <select className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 md:text-sm" {...field}>
-                            <option value="diesel">Diesel</option>
-                            <option value="petrol">Petrol</option>
-                            <option value="electric">Electric</option>
-                            <option value="hybrid">Hybrid</option>
-                            <option value="lpg">LPG</option>
-                          </select>
+                          <Input
+                            {...field}
+                            placeholder="e.g. ABC123"
+                            className="uppercase"
+                            onChange={e => { field.onChange(e.target.value.toUpperCase()); setPlateLookup(null); }}
+                          />
                         </FormControl>
-                        <FormMessage />
-                      </FormItem>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="gap-1.5 shrink-0"
+                          disabled={plateLookupLoading || !field.value || field.value.length < 2}
+                          onClick={() => lookupPlate(field.value ?? "")}
+                        >
+                          {plateLookupLoading
+                            ? <Loader2 className="w-4 h-4 animate-spin" />
+                            : <Search className="w-4 h-4" />}
+                          Look up
+                        </Button>
+                      </div>
+                      <FormMessage />
+
+                      {/* Fuelsaver result badge */}
+                      {plateLookup && (
+                        <div className={`mt-2 rounded-lg border px-4 py-3 text-sm ${
+                          plateLookup.found
+                            ? "border-emerald-500/30 bg-emerald-500/10"
+                            : plateLookup.configured === false
+                              ? "border-amber-500/30 bg-amber-500/10"
+                              : "border-destructive/30 bg-destructive/10"
+                        }`}>
+                          {plateLookup.found ? (
+                            <div className="space-y-1">
+                              <div className="flex items-center justify-between">
+                                <span className="font-semibold text-emerald-400 flex items-center gap-1.5">
+                                  <CheckCircle2 className="w-4 h-4" /> WLTP data found
+                                </span>
+                                <span className="text-xs text-muted-foreground flex items-center gap-0.5">
+                                  {Array.from({ length: 6 }).map((_, i) => (
+                                    <Star key={i} className={`w-3 h-3 ${i < (plateLookup.co2Stars ?? 0) ? "fill-emerald-400 text-emerald-400" : "text-muted-foreground/30"}`} />
+                                  ))}
+                                  <span className="ml-1">{plateLookup.co2Stars ?? "?"}/6</span>
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs text-muted-foreground mt-1">
+                                <span>Tailpipe CO₂: <strong className="text-foreground">{plateLookup.co2GPerKm} g/km</strong></span>
+                                <span>CO₂e factor: <strong className="text-foreground">{plateLookup.emissionFactorKgPerKm.toFixed(3)} kg/km</strong></span>
+                                {plateLookup.fuelL100km && <span>Economy: <strong className="text-foreground">{plateLookup.fuelL100km} L/100km</strong></span>}
+                                {plateLookup.yearlyTonnes && <span>Yearly: <strong className="text-foreground">{plateLookup.yearlyTonnes} t CO₂</strong></span>}
+                              </div>
+                              <p className="text-xs text-muted-foreground mt-1 italic">
+                                Fuel type, make, model and emission factor auto-filled. Includes 15% NZ MfE upstream uplift.
+                              </p>
+                            </div>
+                          ) : plateLookup.configured === false ? (
+                            <p className="text-amber-400 text-xs">Fuelsaver API not configured yet — add <code>FUELSAVER_LOGIN</code> and <code>FUELSAVER_PASSWORD</code> in Secrets.</p>
+                          ) : (
+                            <p className="text-destructive text-xs">
+                              No WLTP data found for this plate (code: {(plateLookup as {errorCode?: string}).errorCode ?? "unknown"}). Fill in details manually.
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </FormItem>
+                  )} />
+
+                  {/* Internal name */}
+                  <FormField control={form.control} name="name" render={({ field }) => (
+                    <FormItem><FormLabel>Internal Name</FormLabel><FormControl><Input {...field} placeholder="e.g. Truck 01 or DLK588" /></FormControl><FormMessage /></FormItem>
+                  )} />
+
+                  {/* Make / Model */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <FormField control={form.control} name="make" render={({ field }) => (
+                      <FormItem><FormLabel>Make</FormLabel><FormControl><Input {...field} placeholder="e.g. Toyota" /></FormControl><FormMessage /></FormItem>
+                    )} />
+                    <FormField control={form.control} name="model" render={({ field }) => (
+                      <FormItem><FormLabel>Model</FormLabel><FormControl><Input {...field} placeholder="e.g. Hilux SR5" /></FormControl><FormMessage /></FormItem>
                     )} />
                   </div>
+
+                  {/* Fuel type */}
+                  <FormField control={form.control} name="fuelType" render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Fuel Type</FormLabel>
+                      <FormControl>
+                        <select className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 md:text-sm" {...field}>
+                          <option value="diesel">Diesel</option>
+                          <option value="petrol">Petrol</option>
+                          <option value="electric">Electric</option>
+                          <option value="hybrid">Hybrid</option>
+                          <option value="lpg">LPG</option>
+                        </select>
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )} />
+
+                  {/* GPS */}
                   <div className="grid grid-cols-2 gap-4">
                     <FormField control={form.control} name="gpsProvider" render={({ field }) => (
                       <FormItem>
@@ -935,6 +1071,7 @@ export default function Fleet() {
                       <FormItem><FormLabel>Device ID (optional)</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>
                     )} />
                   </div>
+
                   <Button type="submit" className="w-full mt-4" disabled={createVehicle.isPending}>
                     {createVehicle.isPending ? "Saving..." : "Save Vehicle"}
                   </Button>
