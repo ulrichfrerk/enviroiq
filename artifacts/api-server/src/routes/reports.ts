@@ -26,6 +26,7 @@ router.get("/trend", requireAuth, requireOrgAccess, async (req, res) => {
     const orgId = req.params.orgId as string;
     const months = parseInt(req.query.months as string) || 24;
 
+    // Exclude the current (incomplete) month so charts only show complete months
     const [fleetRows, energyRows] = await Promise.all([
       db.execute(sql`
         SELECT
@@ -35,6 +36,7 @@ router.get("/trend", requireAuth, requireOrgAccess, async (req, res) => {
         FROM fleet_events
         WHERE organisation_id = ${orgId}
           AND recorded_at >= NOW() - (${months} || ' months')::interval
+          AND recorded_at < DATE_TRUNC('month', NOW())
         GROUP BY 1
         ORDER BY 1
       `),
@@ -46,6 +48,7 @@ router.get("/trend", requireAuth, requireOrgAccess, async (req, res) => {
         FROM energy_readings
         WHERE organisation_id = ${orgId}
           AND period_start >= NOW() - (${months} || ' months')::interval
+          AND period_start < DATE_TRUNC('month', NOW())
         GROUP BY 1
         ORDER BY 1
       `),

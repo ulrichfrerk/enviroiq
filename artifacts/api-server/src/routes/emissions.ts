@@ -174,11 +174,19 @@ router.get("/totals", requireAuth, requireOrgAccess, async (req, res) => {
     const truncUnit = groupByParam === "day" ? "day" : groupByParam === "week" ? "week" : "month";
     const stepInterval = truncUnit === "day" ? "1 day" : truncUnit === "week" ? "1 week" : "1 month";
 
+    // For monthly grouping, cap the series at the last *complete* month so partial
+    // current-month data doesn't appear as a misleading drop at the end of the chart.
+    const seriesEndDate = new Date(now);
+    if (truncUnit === "month") {
+      // Setting day to 0 rolls back to the last day of the previous month
+      seriesEndDate.setDate(0);
+    }
+
     const timeSeries = await db.execute(sql`
       WITH series AS (
         SELECT generate_series(
           DATE_TRUNC(${truncUnit}, ${fromDate}::timestamptz),
-          DATE_TRUNC(${truncUnit}, ${now}::timestamptz),
+          DATE_TRUNC(${truncUnit}, ${seriesEndDate}::timestamptz),
           ${stepInterval}::interval
         ) AS bucket
       ),
