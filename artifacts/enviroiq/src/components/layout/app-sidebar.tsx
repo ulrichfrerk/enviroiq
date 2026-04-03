@@ -2,7 +2,7 @@ import { Link, useLocation } from "wouter";
 import {
   BarChart3, Car, Zap, Target, FileText, Settings, Users,
   ShieldAlert, Shield, LogOut, Leaf, UserCircle, Beaker, TrendingDown, Sparkles,
-  HeartHandshake, Building2, FolderOpen, Recycle, HardHat,
+  HeartHandshake, Building2, FolderOpen, Recycle, HardHat, BrainCircuit,
 } from "lucide-react";
 import {
   Sidebar,
@@ -58,6 +58,7 @@ const groups: { label: string; items: NavItem[] }[] = [
     items: [
       { title: "Reports", url: "/reports", icon: FileText },
       { title: "Mission Statement", url: "/mission", icon: Sparkles },
+      { title: "AI ESG Advisor", url: "/advisor", icon: BrainCircuit },
     ],
   },
   {
