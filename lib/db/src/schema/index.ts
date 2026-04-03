@@ -15,3 +15,4 @@ export * from "./governance-data";
 export * from "./projects";
 export * from "./waste-data";
 export * from "./subcontractors";
+export * from "./advisor-cache";
