@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import {
   Building2, Users, Car, CloudRain, Plus, Loader2,
   CheckCircle, XCircle, Pencil, Trash2, Power, PowerOff,
-  ExternalLink,
+  ExternalLink, RefreshCw,
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
@@ -37,6 +37,9 @@ export default function Admin() {
   const [editForm, setEditForm] = useState({ name: "", industry: "", country: "" });
 
   const [deleteOrg, setDeleteOrg] = useState<Organisation | null>(null);
+  const [recalcOrg, setRecalcOrg] = useState<Organisation | null>(null);
+  const [recalcRunning, setRecalcRunning] = useState(false);
+  const [recalcResult, setRecalcResult] = useState<{ updated: number; skipped: number; errors: number; totalEvents: number } | null>(null);
 
   const { data: stats, isLoading: loadingStats } = useGetAdminStats({
     query: { enabled: session?.role === "super_admin" },
@@ -103,6 +106,32 @@ export default function Admin() {
       refetch();
     } catch (e: unknown) {
       toast({ variant: "destructive", title: "Error", description: e instanceof Error ? e.message : "Could not delete" });
+    }
+  };
+
+  const handleRecalculate = async () => {
+    if (!recalcOrg) return;
+    setRecalcRunning(true);
+    setRecalcResult(null);
+    try {
+      const res = await fetch(`/api/admin/organisations/${recalcOrg.id}/recalculate-emissions`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({})) as { message?: string };
+        throw new Error(err.message || `HTTP ${res.status}`);
+      }
+      const result = await res.json() as { updated: number; skipped: number; errors: number; totalEvents: number };
+      setRecalcResult(result);
+      toast({
+        title: "Recalculation complete",
+        description: `${result.updated} records updated, ${result.skipped} unchanged, ${result.errors} errors.`,
+      });
+    } catch (e: unknown) {
+      toast({ variant: "destructive", title: "Recalculation failed", description: e instanceof Error ? e.message : "Unknown error" });
+    } finally {
+      setRecalcRunning(false);
     }
   };
 
@@ -274,6 +303,15 @@ export default function Admin() {
                           <ExternalLink className="w-4 h-4" />
                         </Button>
 
+                        {/* Recalculate emissions */}
+                        <Button
+                          variant="ghost" size="icon"
+                          title="Recalculate emissions"
+                          onClick={() => { setRecalcOrg(org); setRecalcResult(null); }}
+                        >
+                          <RefreshCw className="w-4 h-4 text-blue-400" />
+                        </Button>
+
                         {/* Edit */}
                         <Button
                           variant="ghost" size="icon"
@@ -378,6 +416,66 @@ export default function Admin() {
               {deleteOrgMut.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
               Delete Permanently
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Recalculate emissions dialog */}
+      <Dialog open={!!recalcOrg} onOpenChange={(o) => { if (!o && !recalcRunning) { setRecalcOrg(null); setRecalcResult(null); } }}>
+        <DialogContent className="bg-card border-border sm:max-w-[480px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <RefreshCw className="w-5 h-5 text-blue-400" />
+              Recalculate Emissions — {recalcOrg?.name}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 pt-2 text-sm text-muted-foreground">
+            {!recalcResult ? (
+              <>
+                <p>
+                  This will re-run the current emission factor logic against <strong className="text-foreground">all stored fleet events</strong> for this organisation.
+                </p>
+                <ul className="list-disc list-inside space-y-1 text-xs">
+                  <li>Vehicle class factors (Hilux, Hiace, Isuzu NPR, Fuso Canter…)</li>
+                  <li>Petrol/hybrid/PHEV auto-detection from model strings</li>
+                  <li>Any custom per-vehicle emission factor overrides</li>
+                  <li>Fuel litres (if available) take priority over distance estimates</li>
+                </ul>
+                <p className="text-xs">Records that haven't changed are skipped. This is safe to run multiple times.</p>
+              </>
+            ) : (
+              <div className="rounded-lg border border-border p-4 space-y-3">
+                <p className="font-semibold text-foreground">Recalculation complete</p>
+                <div className="grid grid-cols-3 gap-3 text-center text-xs">
+                  <div className="rounded-md bg-emerald-500/10 p-3">
+                    <p className="text-2xl font-bold text-emerald-400">{recalcResult.updated}</p>
+                    <p className="text-muted-foreground mt-1">Updated</p>
+                  </div>
+                  <div className="rounded-md bg-secondary/50 p-3">
+                    <p className="text-2xl font-bold text-foreground">{recalcResult.skipped}</p>
+                    <p className="text-muted-foreground mt-1">Unchanged</p>
+                  </div>
+                  <div className={`rounded-md p-3 ${recalcResult.errors > 0 ? "bg-destructive/10" : "bg-secondary/50"}`}>
+                    <p className={`text-2xl font-bold ${recalcResult.errors > 0 ? "text-destructive" : "text-foreground"}`}>{recalcResult.errors}</p>
+                    <p className="text-muted-foreground mt-1">Errors</p>
+                  </div>
+                </div>
+                <p className="text-xs text-center text-muted-foreground">{recalcResult.totalEvents} total fleet events processed</p>
+              </div>
+            )}
+          </div>
+          <DialogFooter className="mt-4">
+            <Button variant="outline" onClick={() => { setRecalcOrg(null); setRecalcResult(null); }} disabled={recalcRunning}>
+              {recalcResult ? "Close" : "Cancel"}
+            </Button>
+            {!recalcResult && (
+              <Button onClick={handleRecalculate} disabled={recalcRunning} className="gap-2">
+                {recalcRunning
+                  ? <><Loader2 className="w-4 h-4 animate-spin" /> Recalculating…</>
+                  : <><RefreshCw className="w-4 h-4" /> Run Recalculation</>
+                }
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
