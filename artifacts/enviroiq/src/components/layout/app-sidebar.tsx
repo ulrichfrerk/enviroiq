@@ -83,8 +83,10 @@ export function AppSidebar() {
     <Sidebar className="border-r border-border bg-sidebar">
       <SidebarHeader className="h-16 flex items-center px-4 border-b border-border/50">
         <div className="flex items-center gap-2.5">
-          <img src="/favicon.svg" alt="EnviroIQ" className="w-8 h-8 rounded-lg shrink-0" />
-          <span className="font-display font-bold text-xl text-foreground tracking-tight">EnviroIQ</span>
+          <img src="/mark-white.svg" alt="" className="h-8 w-8 shrink-0" />
+          <span className="font-bold text-xl text-foreground tracking-tight">
+            Enviro<span className="text-primary">IQ</span>
+          </span>
         </div>
       </SidebarHeader>
 

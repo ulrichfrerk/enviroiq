@@ -5,8 +5,11 @@ export function Navbar() {
   return (
     <nav className="fixed top-0 w-full z-50 bg-background/90 backdrop-blur-md border-b border-border shadow-sm">
       <div className="container mx-auto px-6 h-20 flex items-center justify-between">
-        <Link href="/" className="flex items-center group">
-          <img src="/logo.png" alt="EnviroIQ" className="h-12 w-auto" />
+        <Link href="/" className="flex items-center gap-2.5 group">
+          <img src="/mark-white.svg" alt="" className="h-10 w-10 shrink-0" />
+          <span className="text-xl font-bold tracking-tight text-foreground">
+            Enviro<span className="text-primary">IQ</span>
+          </span>
         </Link>
         
         <div className="hidden md:flex items-center gap-8">
@@ -14,7 +17,7 @@ export function Navbar() {
           <Link href="#solution" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Solution</Link>
           <Link href="#features" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Features</Link>
           <Link href="#use-cases" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Use Cases</Link>
-          <Link href="#procurement" className="text-sm text-emerald-600 hover:text-emerald-700 font-medium transition-colors">NZ Procurement</Link>
+          <Link href="#procurement" className="text-sm text-primary hover:text-primary/80 font-medium transition-colors">NZ Procurement</Link>
         </div>
 
         <div className="flex items-center gap-4">
