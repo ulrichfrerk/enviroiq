@@ -4,10 +4,11 @@ import { useAuth } from "@/hooks/use-auth";
 import { useListEnergyReadings, useGetEnergyEmailAddress } from "@workspace/api-client-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Zap, Upload, Mail, FileText, Loader2, Copy, Check,
   Leaf, Wind, Info, AlertTriangle, CheckCircle2, XCircle,
-  Flame, Droplets, Clock, Trash2,
+  Flame, Droplets, Clock, Trash2, Search, ChevronLeft, ChevronRight,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -151,6 +152,12 @@ export default function Energy() {
   const [copied, setCopied] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const BILL_PAGE_SIZE = 15;
+  const [billSearch, setBillSearch] = useState("");
+  const [billDateFrom, setBillDateFrom] = useState("");
+  const [billDateTo, setBillDateTo] = useState("");
+  const [billPage, setBillPage] = useState(1);
 
   const deleteReading = async (id: string) => {
     if (!orgId) return;
@@ -592,9 +599,57 @@ export default function Energy() {
         </div>
       </Card>
 
+      {(() => {
+        const allReadings = readings?.items ?? [];
+        const q = billSearch.trim().toLowerCase();
+        const filtered = allReadings.filter(r => {
+          if (q && !`${r.provider ?? ""} ${r.utilityType ?? ""}`.toLowerCase().includes(q)) return false;
+          if (billDateFrom && r.periodEnd < billDateFrom) return false;
+          if (billDateTo && r.periodStart > billDateTo) return false;
+          return true;
+        });
+        const totalPages = Math.max(1, Math.ceil(filtered.length / BILL_PAGE_SIZE));
+        const safePage = Math.min(billPage, totalPages);
+        const pageItems = filtered.slice((safePage - 1) * BILL_PAGE_SIZE, safePage * BILL_PAGE_SIZE);
+
+        return (
       <Card className="border-border/50 overflow-hidden">
-        <div className="p-6 border-b border-border/50 bg-secondary/20">
-          <h3 className="font-semibold text-lg">Reading History</h3>
+        <div className="p-6 border-b border-border/50 bg-secondary/20 space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="font-semibold text-lg">Reading History</h3>
+            <span className="text-xs text-muted-foreground">{filtered.length} of {allReadings.length} bill{allReadings.length !== 1 ? "s" : ""}</span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <div className="relative flex-1 min-w-[180px]">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+              <Input
+                value={billSearch}
+                onChange={e => { setBillSearch(e.target.value); setBillPage(1); }}
+                placeholder="Search provider or utility…"
+                className="pl-9 h-8 text-sm bg-background"
+              />
+            </div>
+            <Input
+              type="date"
+              value={billDateFrom}
+              onChange={e => { setBillDateFrom(e.target.value); setBillPage(1); }}
+              className="h-8 text-sm bg-background w-36"
+              title="From date"
+            />
+            <Input
+              type="date"
+              value={billDateTo}
+              onChange={e => { setBillDateTo(e.target.value); setBillPage(1); }}
+              className="h-8 text-sm bg-background w-36"
+              title="To date"
+            />
+            {(billSearch || billDateFrom || billDateTo) && (
+              <Button variant="ghost" size="sm" className="h-8 px-2 text-muted-foreground"
+                onClick={() => { setBillSearch(""); setBillDateFrom(""); setBillDateTo(""); setBillPage(1); }}>
+                Clear
+              </Button>
+            )}
+          </div>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm text-left">
@@ -609,7 +664,7 @@ export default function Energy() {
               </tr>
             </thead>
             <tbody className="divide-y divide-border/50">
-              {readings?.items.map((reading) => {
+              {pageItems.map((reading) => {
                 const isRenewable = reading.emissionMethod?.includes("renewable");
                 const isLive      = reading.emissionMethod?.includes("live_em6");
                 const isHistorical = reading.emissionMethod?.includes("annual_avg");
@@ -685,13 +740,36 @@ export default function Energy() {
                   </tr>
                 );
               })}
-              {(!readings?.items || readings.items.length === 0) && (
-                <tr><td colSpan={6} className="px-6 py-12 text-center text-muted-foreground">No energy readings yet. Upload your first bill.</td></tr>
+              {pageItems.length === 0 && (
+                <tr><td colSpan={6} className="px-6 py-12 text-center text-muted-foreground">
+                  {allReadings.length === 0 ? "No energy readings yet. Upload your first bill." : "No bills match your search."}
+                </td></tr>
               )}
             </tbody>
           </table>
         </div>
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between px-6 py-3 border-t border-border/50 bg-secondary/10">
+            <span className="text-xs text-muted-foreground">
+              Page {safePage} of {totalPages} · {filtered.length} bill{filtered.length !== 1 ? "s" : ""}
+            </span>
+            <div className="flex items-center gap-1">
+              <Button variant="ghost" size="icon" className="h-7 w-7"
+                disabled={safePage <= 1}
+                onClick={() => setBillPage(p => Math.max(1, p - 1))}>
+                <ChevronLeft className="w-4 h-4" />
+              </Button>
+              <Button variant="ghost" size="icon" className="h-7 w-7"
+                disabled={safePage >= totalPages}
+                onClick={() => setBillPage(p => Math.min(totalPages, p + 1))}>
+                <ChevronRight className="w-4 h-4" />
+              </Button>
+            </div>
+          </div>
+        )}
       </Card>
+        );
+      })()}
     </div>
   );
 }

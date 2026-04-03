@@ -15,6 +15,7 @@ import { Progress } from "@/components/ui/progress";
 import {
   Car, Plus, Trash2, Loader2, Navigation, Server, Upload, Download,
   CheckCircle2, XCircle, Gauge, FileSpreadsheet, AlertTriangle, Search, Star,
+  ChevronLeft, ChevronRight,
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
@@ -423,6 +424,10 @@ export default function Fleet() {
   // ── Fuelsaver plate lookup state ──────────────────────────────────────────
   const [plateLookup, setPlateLookup] = useState<PlateLookupResult | null>(null);
   const [plateLookupLoading, setPlateLookupLoading] = useState(false);
+
+  const VEHICLE_PAGE_SIZE = 15;
+  const [vehicleSearch, setVehicleSearch] = useState("");
+  const [vehiclePage, setVehiclePage] = useState(1);
 
   const lookupPlate = async (plate: string) => {
     const p = plate.trim().replace(/\s+/g, "").toUpperCase();
@@ -1190,7 +1195,34 @@ export default function Fleet() {
       </Card>
 
       {/* Vehicle Table */}
+      {(() => {
+        const allVehicles = vehicles?.items ?? [];
+        const vq = vehicleSearch.trim().toLowerCase();
+        const filteredVehicles = vq
+          ? allVehicles.filter(v =>
+              `${v.name} ${v.registration ?? ""} ${v.make ?? ""} ${v.model ?? ""}`.toLowerCase().includes(vq)
+            )
+          : allVehicles;
+        const vTotalPages = Math.max(1, Math.ceil(filteredVehicles.length / VEHICLE_PAGE_SIZE));
+        const vSafePage = Math.min(vehiclePage, vTotalPages);
+        const vPageItems = filteredVehicles.slice((vSafePage - 1) * VEHICLE_PAGE_SIZE, vSafePage * VEHICLE_PAGE_SIZE);
+
+        return (
       <Card className="border-border/50 overflow-hidden">
+        <div className="p-4 border-b border-border/50 bg-secondary/20 flex items-center gap-3">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+            <Input
+              value={vehicleSearch}
+              onChange={e => { setVehicleSearch(e.target.value); setVehiclePage(1); }}
+              placeholder="Search vehicle, rego, make or model…"
+              className="pl-9 h-8 text-sm bg-background"
+            />
+          </div>
+          <span className="text-xs text-muted-foreground whitespace-nowrap">
+            {filteredVehicles.length} of {allVehicles.length}
+          </span>
+        </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm text-left">
             <thead className="bg-secondary/30 text-muted-foreground uppercase text-xs font-semibold">
@@ -1203,7 +1235,7 @@ export default function Fleet() {
               </tr>
             </thead>
             <tbody className="divide-y divide-border/50">
-              {vehicles?.items.map((vehicle) => (
+              {vPageItems.map((vehicle) => (
                 <tr key={vehicle.id} className="hover:bg-secondary/20 transition-colors">
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-3">
@@ -1232,13 +1264,36 @@ export default function Fleet() {
                   </td>
                 </tr>
               ))}
-              {(!vehicles?.items || vehicles.items.length === 0) && (
-                <tr><td colSpan={5} className="px-6 py-12 text-center text-muted-foreground">No vehicles registered yet. Import from TN360 or add one manually.</td></tr>
+              {vPageItems.length === 0 && (
+                <tr><td colSpan={5} className="px-6 py-12 text-center text-muted-foreground">
+                  {allVehicles.length === 0 ? "No vehicles registered yet. Import from TN360 or add one manually." : "No vehicles match your search."}
+                </td></tr>
               )}
             </tbody>
           </table>
         </div>
+        {vTotalPages > 1 && (
+          <div className="flex items-center justify-between px-6 py-3 border-t border-border/50 bg-secondary/10">
+            <span className="text-xs text-muted-foreground">
+              Page {vSafePage} of {vTotalPages} · {filteredVehicles.length} vehicle{filteredVehicles.length !== 1 ? "s" : ""}
+            </span>
+            <div className="flex items-center gap-1">
+              <Button variant="ghost" size="icon" className="h-7 w-7"
+                disabled={vSafePage <= 1}
+                onClick={() => setVehiclePage(p => Math.max(1, p - 1))}>
+                <ChevronLeft className="w-4 h-4" />
+              </Button>
+              <Button variant="ghost" size="icon" className="h-7 w-7"
+                disabled={vSafePage >= vTotalPages}
+                onClick={() => setVehiclePage(p => Math.min(vTotalPages, p + 1))}>
+                <ChevronRight className="w-4 h-4" />
+              </Button>
+            </div>
+          </div>
+        )}
       </Card>
+        );
+      })()}
     </div>
   );
 }
