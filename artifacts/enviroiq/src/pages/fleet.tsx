@@ -651,6 +651,7 @@ export default function Fleet() {
 
   const matchedKmRows = kmRows.filter(r => knownVehicles.has(r.vehicle.toLowerCase().trim()));
   const unmatchedKmRows = kmRows.filter(r => !knownVehicles.has(r.vehicle.toLowerCase().trim()));
+  const newUniquePlates = [...new Set(unmatchedKmRows.map(r => r.vehicle))];
   const zHistoryCount = importRows.filter(r => r.skip).length;
 
   return (
@@ -668,7 +669,7 @@ export default function Fleet() {
             <DialogTrigger asChild>
               <Button variant="outline" className="gap-2"><Gauge className="w-4 h-4" /> Import KMs</Button>
             </DialogTrigger>
-            <DialogContent className="bg-card border-border sm:max-w-[680px]">
+            <DialogContent className="bg-card border-border sm:max-w-[680px] max-h-[90vh] flex flex-col overflow-hidden">
               <DialogHeader><DialogTitle>Import KM / Distance Data</DialogTitle></DialogHeader>
 
               {kmImportState === "idle" && (
@@ -695,7 +696,7 @@ export default function Fleet() {
               )}
 
               {kmImportState === "preview" && (
-                <div className="space-y-4 pt-2">
+                <div className="space-y-4 pt-2 overflow-y-auto flex-1 pr-1">
                   {/* TN360 detected banner */}
                   {kmMeta?.source === "tn360-trip" && kmRows.length > 0 && (
                     <div className="flex items-start gap-3 rounded-lg border border-primary/20 bg-primary/5 p-3">
@@ -719,14 +720,14 @@ export default function Fleet() {
                     <>
                       <div className="flex gap-3 text-sm">
                         <span className="flex items-center gap-1.5 text-emerald-500"><CheckCircle2 className="w-4 h-4" /> {matchedKmRows.length} matched</span>
-                        {unmatchedKmRows.length > 0 && (
-                          <span className="flex items-center gap-1.5 text-blue-500"><CheckCircle2 className="w-4 h-4" /> {unmatchedKmRows.length} new (will be auto-created)</span>
+                        {newUniquePlates.length > 0 && (
+                          <span className="flex items-center gap-1.5 text-blue-500"><CheckCircle2 className="w-4 h-4" /> {newUniquePlates.length} new vehicle{newUniquePlates.length !== 1 ? "s" : ""} (will be auto-created)</span>
                         )}
                       </div>
-                      {unmatchedKmRows.length > 0 && (
+                      {newUniquePlates.length > 0 && (
                         <div className="rounded-lg border border-blue-500/20 bg-blue-500/5 p-3">
                           <p className="text-xs text-blue-600 font-semibold mb-1">New vehicles — will be added automatically:</p>
-                          <p className="text-xs text-muted-foreground font-mono">{unmatchedKmRows.map(r => r.vehicle).join(", ")}</p>
+                          <p className="text-xs text-muted-foreground font-mono">{newUniquePlates.join(", ")}</p>
                           <p className="text-xs text-muted-foreground mt-1">These will be created as diesel vehicles. You can edit the details afterwards.</p>
                         </div>
                       )}
