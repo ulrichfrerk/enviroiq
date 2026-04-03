@@ -48,7 +48,7 @@ router.get("/readings", requireAuth, requireOrgAccess, async (req, res) => {
     const orgId = req.params.orgId as string;
     const { from, to } = req.query;
     const page = parseInt(req.query.page as string) || 1;
-    const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
+    const limit = Math.min(parseInt(req.query.limit as string) || 20, 500);
     const offset = (page - 1) * limit;
 
     const conditions = [eq(energyReadingsTable.organisationId, orgId)];

@@ -141,7 +141,7 @@ export default function Energy() {
   const { toast } = useToast();
   const qc = useQueryClient();
 
-  const { data: readings, isLoading } = useListEnergyReadings(orgId!, { limit: 100 }, { query: { enabled: !!orgId } });
+  const { data: readings, isLoading } = useListEnergyReadings(orgId!, { limit: 500 }, { query: { enabled: !!orgId } });
   const { data: emailInfo } = useGetEnergyEmailAddress(orgId!, { query: { enabled: !!orgId } });
 
   const [isUploadOpen, setIsUploadOpen] = useState(false);
