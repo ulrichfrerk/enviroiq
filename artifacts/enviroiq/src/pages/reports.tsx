@@ -147,10 +147,29 @@ export default function Reports() {
     const years = [...new Set(raw.map(r => r.month.split("-")[0]))].sort().slice(-2);
     if (years.length < 2) return null;
     const [prev, cur] = years;
-    const curTotal = raw.filter(r => r.month.startsWith(cur)).reduce((s, r) => s + r.fleetCo2e + r.energyCo2e, 0);
-    const prevTotal = raw.filter(r => r.month.startsWith(prev)).reduce((s, r) => s + r.fleetCo2e + r.energyCo2e, 0);
+
+    // Only compare months that have data in the CURRENT year (same-period comparison).
+    // This avoids a misleading result when the current year is partial (e.g. Jan–Mar only).
+    const curMonths = new Set(
+      raw.filter(r => r.month.startsWith(cur)).map(r => r.month.slice(5, 7))
+    );
+    const curTotal = raw
+      .filter(r => r.month.startsWith(cur))
+      .reduce((s, r) => s + r.fleetCo2e + r.energyCo2e, 0);
+    const prevTotal = raw
+      .filter(r => r.month.startsWith(prev) && curMonths.has(r.month.slice(5, 7)))
+      .reduce((s, r) => s + r.fleetCo2e + r.energyCo2e, 0);
+
     if (prevTotal === 0) return null;
-    return { pct: ((curTotal - prevTotal) / prevTotal) * 100, cur, prev, curTotal, prevTotal };
+
+    // Build a human-readable period label e.g. "Jan–Mar"
+    const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const sortedMonths = [...curMonths].sort();
+    const firstMon = MONTH_NAMES[parseInt(sortedMonths[0], 10) - 1];
+    const lastMon  = MONTH_NAMES[parseInt(sortedMonths[sortedMonths.length - 1], 10) - 1];
+    const periodLabel = firstMon === lastMon ? firstMon : `${firstMon}–${lastMon}`;
+
+    return { pct: ((curTotal - prevTotal) / prevTotal) * 100, cur, prev, curTotal, prevTotal, periodLabel };
   }, [trendData]);
 
   const chartYears = useMemo(() => {
@@ -257,7 +276,7 @@ export default function Reports() {
           </div>
           {yoyAnnual && (
             <div className="text-right">
-              <p className="text-xs text-muted-foreground mb-1">Annual YoY change</p>
+              <p className="text-xs text-muted-foreground mb-1">Same-period YoY ({yoyAnnual.periodLabel})</p>
               <YoYBadge pct={yoyAnnual.pct} />
             </div>
           )}
@@ -293,15 +312,15 @@ export default function Reports() {
         {yoyAnnual && (
           <div className="px-6 pb-4 grid grid-cols-3 gap-4 text-center text-xs">
             <div className="rounded-lg bg-secondary/30 p-3">
-              <p className="text-muted-foreground mb-1">{chartYears.prev} Total</p>
+              <p className="text-muted-foreground mb-1">{chartYears.prev} ({yoyAnnual.periodLabel})</p>
               <p className="font-bold text-foreground text-base">{(yoyAnnual.prevTotal / 1000).toFixed(2)} t</p>
             </div>
             <div className="rounded-lg bg-secondary/30 p-3">
-              <p className="text-muted-foreground mb-1">{chartYears.cur} Total</p>
+              <p className="text-muted-foreground mb-1">{chartYears.cur} ({yoyAnnual.periodLabel})</p>
               <p className="font-bold text-foreground text-base">{(yoyAnnual.curTotal / 1000).toFixed(2)} t</p>
             </div>
             <div className="rounded-lg bg-secondary/30 p-3">
-              <p className="text-muted-foreground mb-1">Change</p>
+              <p className="text-muted-foreground mb-1">Same-period change</p>
               <p className={`font-bold text-base ${yoyAnnual.pct < 0 ? "text-emerald-400" : "text-red-400"}`}>
                 {yoyAnnual.pct > 0 ? "+" : ""}{yoyAnnual.pct.toFixed(1)}%
               </p>
