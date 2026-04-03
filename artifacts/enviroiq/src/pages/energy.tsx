@@ -100,6 +100,10 @@ interface QueuedFile {
   confidence?: number;
   reviewFlags?: string[];
   error?: string;
+  /** DB reading ID returned after upload — used for inline delete */
+  readingId?: string;
+  /** True when the user deleted this reading from the upload results */
+  removed?: boolean;
 }
 
 interface UploadResult {
@@ -249,6 +253,7 @@ export default function Energy() {
           co2eKg:      data.reading.co2eKg,
           confidence:  data.confidence,
           reviewFlags: data.reviewFlags,
+          readingId:   data.reading.id,
         } : f));
 
         // Refresh history immediately so the new row appears as soon as each file is done
@@ -270,6 +275,20 @@ export default function Energy() {
     setIsDone(false);
     setBatchRenewablePct(0);
   };
+
+  const handleDeleteUploaded = useCallback(async (item: QueuedFile) => {
+    if (!orgId || !item.readingId) return;
+    try {
+      await fetch(`/api/organisations/${orgId}/energy/readings/${item.readingId}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      setQueue(prev => prev.map(f => f.id === item.id ? { ...f, removed: true } : f));
+      await qc.invalidateQueries({ queryKey: [`/api/organisations/${orgId}/energy/readings`] });
+    } catch {
+      // silently ignore — reading can be deleted from the main table
+    }
+  }, [orgId, qc]);
 
   const handleOpenChange = (open: boolean) => {
     if (!open && !isProcessing) resetUpload();
@@ -472,7 +491,26 @@ export default function Energy() {
                           )}
                         </div>
 
-                        {item.confidence != null && item.status !== "error" && (
+                        {/* Delete button — shown after upload completes, lets user remove a bad reading */}
+                        {isDone && item.readingId && !item.removed && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <button
+                                onClick={() => handleDeleteUploaded(item)}
+                                className="p-1 text-muted-foreground/40 hover:text-red-400 transition-colors shrink-0"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent className="text-xs">Remove this reading</TooltipContent>
+                          </Tooltip>
+                        )}
+
+                        {item.removed && (
+                          <span className="text-xs text-muted-foreground/40 line-through shrink-0">removed</span>
+                        )}
+
+                        {item.confidence != null && item.status !== "error" && !item.removed && (
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <span className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 cursor-help ${
