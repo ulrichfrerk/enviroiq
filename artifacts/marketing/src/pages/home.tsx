@@ -80,9 +80,9 @@ export default function Home() {
               className="mt-16 flex flex-wrap gap-4"
             >
               {[
-                { label: "Environmental", sub: "Fleet · Energy · Grid Intensity", color: "bg-emerald-50 border-emerald-200 text-emerald-800" },
-                { label: "Social", sub: "Workforce · H&S · Training", color: "bg-blue-50 border-blue-200 text-blue-800" },
-                { label: "Governance", sub: "Board · Policy · Frameworks", color: "bg-purple-50 border-purple-200 text-purple-800" },
+                { label: "Environmental", sub: "Fleet · Energy · Grid Intensity", color: "bg-primary/10 border-primary/30 text-primary" },
+                { label: "Social", sub: "Workforce · H&S · Training", color: "bg-blue-500/10 border-blue-500/30 text-blue-400" },
+                { label: "Governance", sub: "Board · Policy · Frameworks", color: "bg-purple-500/10 border-purple-500/30 text-purple-400" },
               ].map((p, i) => (
                 <div key={i} className={`px-5 py-3 rounded-xl border text-sm font-semibold ${p.color}`}>
                   {p.label}
@@ -144,7 +144,7 @@ export default function Home() {
                 whileInView={{ opacity: 1, scale: 1 }}
                 viewport={{ once: true }}
                 transition={{ duration: 0.8 }}
-                className="relative rounded-2xl border border-border bg-white shadow-md flex flex-col justify-center p-10"
+                className="relative rounded-2xl border border-border bg-card shadow-md flex flex-col justify-center p-10"
               >
                 <div className="space-y-8">
                   {[
@@ -153,10 +153,10 @@ export default function Home() {
                     { label: "Decisions Made (Too Late)", q: "Q3", op: "text-destructive" }
                   ].map((item, i) => (
                     <div key={i} className={`flex items-center gap-4 ${item.op}`}>
-                      <div className={`w-12 h-12 rounded-full border flex items-center justify-center ${item.op === "text-destructive" ? "border-destructive bg-destructive/10 text-destructive" : "border-dashed border-gray-300"}`}>
+                      <div className={`w-12 h-12 rounded-full border flex items-center justify-center ${item.op === "text-destructive" ? "border-destructive bg-destructive/10 text-destructive" : "border-dashed border-border"}`}>
                         <span className="text-xs font-bold">{item.q}</span>
                       </div>
-                      <div className={`h-px flex-1 ${item.op === "text-destructive" ? "bg-destructive" : "bg-gray-200"}`} />
+                      <div className={`h-px flex-1 ${item.op === "text-destructive" ? "bg-destructive" : "bg-border"}`} />
                       <div className={`text-sm font-mono text-center ${item.op === "text-destructive" ? "font-bold text-destructive" : "text-muted-foreground"}`}>{item.label}</div>
                     </div>
                   ))}
@@ -182,8 +182,8 @@ export default function Home() {
             {/* ── Environmental ── */}
             <div className="mb-16">
               <div className="flex items-center gap-3 mb-8">
-                <div className="w-8 h-8 rounded-lg bg-emerald-100 flex items-center justify-center">
-                  <Leaf className="w-5 h-5 text-emerald-700" />
+                <div className="w-8 h-8 rounded-lg bg-primary/15 flex items-center justify-center">
+                  <Leaf className="w-5 h-5 text-primary" />
                 </div>
                 <h3 className="text-2xl font-bold text-foreground">Environmental</h3>
                 <div className="h-px flex-1 bg-border" />
@@ -233,13 +233,13 @@ export default function Home() {
                     whileInView={{ opacity: 1, y: 0 }}
                     viewport={{ once: true }}
                     transition={{ delay: i * 0.07 }}
-                    className="p-6 rounded-2xl bg-emerald-50 border border-emerald-100 hover:border-emerald-300 hover:shadow-sm transition-all"
+                    className="p-6 rounded-2xl bg-primary/8 border border-primary/15 hover:border-primary/40 hover:shadow-sm transition-all"
                   >
                     <div className="flex items-start justify-between mb-4">
-                      <div className="p-2.5 rounded-xl bg-emerald-100">
-                        <f.icon className="w-5 h-5 text-emerald-700" />
+                      <div className="p-2.5 rounded-xl bg-primary/15">
+                        <f.icon className="w-5 h-5 text-primary" />
                       </div>
-                      <span className="text-[10px] font-mono font-bold text-emerald-700 bg-emerald-100 px-2 py-1 rounded-full">{f.badge}</span>
+                      <span className="text-[10px] font-mono font-bold text-primary bg-primary/15 px-2 py-1 rounded-full">{f.badge}</span>
                     </div>
                     <h4 className="font-bold text-foreground mb-2">{f.title}</h4>
                     <p className="text-sm text-muted-foreground leading-relaxed">{f.desc}</p>
@@ -251,8 +251,8 @@ export default function Home() {
             {/* ── Social ── */}
             <div className="mb-16">
               <div className="flex items-center gap-3 mb-8">
-                <div className="w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center">
-                  <Users className="w-5 h-5 text-blue-700" />
+                <div className="w-8 h-8 rounded-lg bg-blue-500/15 flex items-center justify-center">
+                  <Users className="w-5 h-5 text-blue-400" />
                 </div>
                 <h3 className="text-2xl font-bold text-foreground">Social</h3>
                 <div className="h-px flex-1 bg-border" />
@@ -302,13 +302,13 @@ export default function Home() {
                     whileInView={{ opacity: 1, y: 0 }}
                     viewport={{ once: true }}
                     transition={{ delay: i * 0.07 }}
-                    className="p-6 rounded-2xl bg-blue-50 border border-blue-100 hover:border-blue-300 hover:shadow-sm transition-all"
+                    className="p-6 rounded-2xl bg-blue-500/8 border border-blue-500/15 hover:border-blue-500/40 hover:shadow-sm transition-all"
                   >
                     <div className="flex items-start justify-between mb-4">
-                      <div className="p-2.5 rounded-xl bg-blue-100">
-                        <f.icon className="w-5 h-5 text-blue-700" />
+                      <div className="p-2.5 rounded-xl bg-blue-500/15">
+                        <f.icon className="w-5 h-5 text-blue-400" />
                       </div>
-                      <span className="text-[10px] font-mono font-bold text-blue-700 bg-blue-100 px-2 py-1 rounded-full">{f.badge}</span>
+                      <span className="text-[10px] font-mono font-bold text-blue-400 bg-blue-500/15 px-2 py-1 rounded-full">{f.badge}</span>
                     </div>
                     <h4 className="font-bold text-foreground mb-2">{f.title}</h4>
                     <p className="text-sm text-muted-foreground leading-relaxed">{f.desc}</p>
@@ -320,8 +320,8 @@ export default function Home() {
             {/* ── Governance ── */}
             <div>
               <div className="flex items-center gap-3 mb-8">
-                <div className="w-8 h-8 rounded-lg bg-purple-100 flex items-center justify-center">
-                  <Scale className="w-5 h-5 text-purple-700" />
+                <div className="w-8 h-8 rounded-lg bg-purple-500/15 flex items-center justify-center">
+                  <Scale className="w-5 h-5 text-purple-400" />
                 </div>
                 <h3 className="text-2xl font-bold text-foreground">Governance</h3>
                 <div className="h-px flex-1 bg-border" />
@@ -371,13 +371,13 @@ export default function Home() {
                     whileInView={{ opacity: 1, y: 0 }}
                     viewport={{ once: true }}
                     transition={{ delay: i * 0.07 }}
-                    className="p-6 rounded-2xl bg-purple-50 border border-purple-100 hover:border-purple-300 hover:shadow-sm transition-all"
+                    className="p-6 rounded-2xl bg-purple-500/8 border border-purple-500/15 hover:border-purple-500/40 hover:shadow-sm transition-all"
                   >
                     <div className="flex items-start justify-between mb-4">
-                      <div className="p-2.5 rounded-xl bg-purple-100">
-                        <f.icon className="w-5 h-5 text-purple-700" />
+                      <div className="p-2.5 rounded-xl bg-purple-500/15">
+                        <f.icon className="w-5 h-5 text-purple-400" />
                       </div>
-                      <span className="text-[10px] font-mono font-bold text-purple-700 bg-purple-100 px-2 py-1 rounded-full">{f.badge}</span>
+                      <span className="text-[10px] font-mono font-bold text-purple-400 bg-purple-500/15 px-2 py-1 rounded-full">{f.badge}</span>
                     </div>
                     <h4 className="font-bold text-foreground mb-2">{f.title}</h4>
                     <p className="text-sm text-muted-foreground leading-relaxed">{f.desc}</p>
@@ -477,7 +477,7 @@ export default function Home() {
                   "H&S incident register",
                   "Solar & generation systems",
                 ].map((item, i) => (
-                  <div key={i} className="px-5 py-3.5 rounded-xl bg-white border border-border text-sm font-mono text-muted-foreground flex items-center shadow-sm">
+                  <div key={i} className="px-5 py-3.5 rounded-xl bg-card border border-border text-sm font-mono text-muted-foreground flex items-center shadow-sm">
                     <div className="w-2 h-2 rounded-full bg-primary/60 mr-4 shrink-0" />
                     {item}
                   </div>
@@ -553,7 +553,7 @@ export default function Home() {
                   viewport={{ once: true }}
                   transition={{ delay: i * 0.1 }}
                   key={i}
-                  className="p-10 rounded-3xl bg-white border border-border hover:border-primary/30 hover:shadow-md transition-all group shadow-sm"
+                  className="p-10 rounded-3xl bg-card border border-border hover:border-primary/30 hover:shadow-md transition-all group shadow-sm"
                 >
                   <div className="flex justify-between items-start mb-8">
                     <div className="p-4 rounded-2xl bg-primary/10 text-primary group-hover:scale-110 transition-transform">
@@ -599,7 +599,7 @@ export default function Home() {
                   icon: LayoutDashboard
                 }
               ].map((uc, i) => (
-                <div key={i} className="p-8 rounded-2xl border border-border bg-white shadow-sm hover:shadow-md hover:border-primary/30 transition-all flex flex-col">
+                <div key={i} className="p-8 rounded-2xl border border-border bg-card shadow-sm hover:shadow-md hover:border-primary/30 transition-all flex flex-col">
                   <div className="p-3 rounded-xl bg-primary/10 w-fit mb-6">
                     <uc.icon className="w-7 h-7 text-primary" />
                   </div>
@@ -797,10 +797,10 @@ export default function Home() {
                   whileInView={{ opacity: 1, y: 0 }}
                   viewport={{ once: true }}
                   transition={{ delay: i * 0.1 }}
-                  className="p-7 rounded-2xl border border-border bg-white shadow-sm text-center"
+                  className="p-7 rounded-2xl border border-border bg-card shadow-sm text-center"
                 >
-                  <div className="p-3 rounded-xl bg-slate-100 w-fit mx-auto mb-4">
-                    <item.icon className="w-6 h-6 text-slate-700" />
+                  <div className="p-3 rounded-xl bg-secondary w-fit mx-auto mb-4">
+                    <item.icon className="w-6 h-6 text-primary" />
                   </div>
                   <h4 className="font-bold text-foreground mb-2">{item.title}</h4>
                   <p className="text-sm text-muted-foreground leading-relaxed">{item.desc}</p>
@@ -834,7 +834,7 @@ export default function Home() {
                   className={`relative flex items-center md:justify-between flex-col md:flex-row gap-8 ${phase.current ? "text-primary" : "text-muted-foreground"}`}
                 >
                   <div className={`w-full md:w-5/12 ${i % 2 === 0 ? "md:text-right" : "md:order-3"}`}>
-                    <div className={`p-6 rounded-2xl border ${phase.current ? "border-primary/40 bg-primary/5 shadow-sm" : "border-border bg-white shadow-sm"}`}>
+                    <div className={`p-6 rounded-2xl border ${phase.current ? "border-primary/40 bg-primary/5 shadow-sm" : "border-border bg-card shadow-sm"}`}>
                       <div className="font-mono text-sm mb-2 opacity-70">{phase.phase}</div>
                       <h4 className={`text-xl font-bold mb-2 ${phase.current ? "text-primary" : "text-foreground"}`}>{phase.title}</h4>
                       <p className="opacity-80">{phase.desc}</p>

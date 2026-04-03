@@ -54,49 +54,50 @@
 }
 
 :root {
-  /* Enforcing Dark Mode as Default for this Premium App */
-  --background: 222 47% 7%;
-  --foreground: 210 40% 98%;
+  /* Brand: Charcoal #0B0D0F dark theme */
+  --background: 210 15% 5%;
+  --foreground: 0 0% 96%;
   
-  --card: 222 47% 11%;
-  --card-foreground: 210 40% 98%;
-  --card-border: 215 28% 17%;
+  --card: 215 17% 8%;
+  --card-foreground: 0 0% 96%;
+  --card-border: 215 17% 14%;
   
-  --popover: 222 47% 11%;
-  --popover-foreground: 210 40% 98%;
-  --popover-border: 215 28% 17%;
+  --popover: 215 17% 8%;
+  --popover-foreground: 0 0% 96%;
+  --popover-border: 215 17% 14%;
   
-  /* Vibrant Green Accent */
-  --primary: 142 76% 45%;
-  --primary-foreground: 144 100% 11%;
+  /* Brand: Electric Green #22C55E */
+  --primary: 142 71% 45%;
+  --primary-foreground: 0 0% 100%;
   
-  --secondary: 215 28% 17%;
-  --secondary-foreground: 210 40% 98%;
+  --secondary: 215 17% 12%;
+  --secondary-foreground: 0 0% 96%;
   
-  --muted: 215 28% 17%;
-  --muted-foreground: 215 20% 65%;
+  --muted: 215 17% 10%;
+  --muted-foreground: 215 15% 55%;
   
-  --accent: 142 76% 45%;
-  --accent-foreground: 144 100% 11%;
+  --accent: 142 71% 45%;
+  --accent-foreground: 0 0% 100%;
   
-  --destructive: 0 84% 60%;
-  --destructive-foreground: 210 40% 98%;
+  --destructive: 0 84% 55%;
+  --destructive-foreground: 0 0% 100%;
   
-  --border: 215 28% 17%;
-  --input: 215 28% 17%;
-  --ring: 142 76% 45%;
+  --border: 215 17% 14%;
+  --input: 215 17% 14%;
+  --ring: 142 71% 45%;
   
-  --sidebar: 224 50% 5%;
-  --sidebar-foreground: 210 40% 98%;
-  --sidebar-border: 215 28% 17%;
-  --sidebar-primary: 142 76% 45%;
-  --sidebar-primary-foreground: 144 100% 11%;
-  --sidebar-accent: 215 28% 17%;
-  --sidebar-accent-foreground: 210 40% 98%;
-  --sidebar-ring: 142 76% 45%;
+  /* Brand sidebar: near #0B0D0F */
+  --sidebar: 210 15% 4%;
+  --sidebar-foreground: 0 0% 96%;
+  --sidebar-border: 215 17% 12%;
+  --sidebar-primary: 142 71% 45%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-accent: 215 17% 10%;
+  --sidebar-accent-foreground: 0 0% 96%;
+  --sidebar-ring: 142 71% 45%;
   
-  --chart-1: 142 76% 45%;
-  --chart-2: 210 100% 60%;
+  --chart-1: 142 71% 45%;
+  --chart-2: 199 89% 48%;
   --chart-3: 35 100% 55%;
   --chart-4: 280 80% 60%;
   --chart-5: 0 84% 60%;
