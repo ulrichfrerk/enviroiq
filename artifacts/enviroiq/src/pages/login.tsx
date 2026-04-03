@@ -4,7 +4,7 @@ import { useRequestMagicLink } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
-import { Leaf, Fingerprint, Mail, ArrowRight, Loader2, MailCheck } from "lucide-react";
+import { Fingerprint, Mail, ArrowRight, Loader2, MailCheck } from "lucide-react";
 import { useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 
@@ -52,11 +52,13 @@ export default function Login() {
 
       <Card className="relative z-10 w-full max-w-md p-8 glass-panel animate-in fade-in slide-in-from-bottom-8 duration-700">
         <div className="flex flex-col items-center text-center mb-10">
-          <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary to-emerald-500 flex items-center justify-center mb-6 shadow-lg shadow-primary/25">
-            <Leaf className="w-8 h-8 text-primary-foreground" />
-          </div>
+          <img
+            src={`${import.meta.env.BASE_URL}favicon.svg`}
+            alt="EnviroIQ"
+            className="w-16 h-16 rounded-2xl mb-6 shadow-lg"
+          />
           <h1 className="text-3xl font-display font-bold text-foreground tracking-tight mb-2">EnviroIQ</h1>
-          <p className="text-muted-foreground text-sm">Measure. Report. Improve.</p>
+          <p className="text-xs font-semibold tracking-widest text-primary uppercase">Real Time ESG Intelligence</p>
         </div>
 
         {mode === "login" && (

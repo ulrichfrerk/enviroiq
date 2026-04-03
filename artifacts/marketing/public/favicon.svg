@@ -1,37 +1,28 @@
 <svg width="180" height="180" viewBox="0 0 180 180" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="180" y2="180" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#047857"/>
-      <stop offset="100%" stop-color="#10b981"/>
-    </linearGradient>
-  </defs>
+  <!-- Background: charcoal -->
+  <rect width="180" height="180" rx="36" fill="#0F1115"/>
 
-  <!-- Background -->
-  <rect width="180" height="180" rx="40" fill="url(#bg)"/>
+  <!-- Q ring — thick white circle -->
+  <circle cx="80" cy="85" r="44" fill="none" stroke="white" stroke-width="19"/>
 
-  <!-- Leaf body -->
-  <path
-    d="M90 32
-       C90 32 148 42 148 100
-       C148 134 122 155 90 155
-       C58 155 32 134 32 100
-       C32 42 90 32 90 32Z"
-    fill="white" opacity="0.95"
-  />
+  <!-- Q tail — diagonal stroke extending from lower-right of circle -->
+  <line x1="110" y1="116" x2="150" y2="158"
+        stroke="white" stroke-width="19" stroke-linecap="round"/>
 
-  <!-- Central vein -->
-  <path
-    d="M90 155 C90 155 90 80 90 48"
-    stroke="#059669" stroke-width="6" stroke-linecap="round"
-  />
+  <!-- ECG / pulse waveform — green, running through centre of Q -->
+  <path d="M 28 85
+           L 48 85
+           L 56 72
+           L 64 85
+           L 70 85
+           L 78 50
+           L 86 105
+           L 92 85
+           L 132 85"
+        stroke="#22C55E" stroke-width="5.5"
+        stroke-linecap="round" stroke-linejoin="round"
+        fill="none"/>
 
-  <!-- Left veins -->
-  <path d="M90 115 C75 105 58 108 50 100" stroke="#059669" stroke-width="3.5" stroke-linecap="round" opacity="0.7"/>
-  <path d="M90 95  C72 83  55 87  46 79"  stroke="#059669" stroke-width="3" stroke-linecap="round" opacity="0.55"/>
-  <path d="M90 75  C76 65  63 68  57 60"  stroke="#059669" stroke-width="2.5" stroke-linecap="round" opacity="0.4"/>
-
-  <!-- Right veins -->
-  <path d="M90 115 C105 105 122 108 130 100" stroke="#059669" stroke-width="3.5" stroke-linecap="round" opacity="0.7"/>
-  <path d="M90 95  C108 83  125 87  134 79"  stroke="#059669" stroke-width="3" stroke-linecap="round" opacity="0.55"/>
-  <path d="M90 75  C104 65  117 68  123 60"  stroke="#059669" stroke-width="2.5" stroke-linecap="round" opacity="0.4"/>
+  <!-- Data-point dot — green, upper-right of Q ring -->
+  <circle cx="122" cy="46" r="7" fill="#22C55E"/>
 </svg>

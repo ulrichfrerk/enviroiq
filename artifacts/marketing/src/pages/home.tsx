@@ -47,7 +47,7 @@ export default function Home() {
               <motion.h1 variants={fadeIn} className="text-5xl md:text-7xl font-bold tracking-tighter mb-8 leading-[1.1]">
                 EnviroIQ:<br />
                 <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary to-emerald-500">
-                  Real-Time ESG Intelligence
+                  Real Time ESG Intelligence
                 </span>
               </motion.h1>
 
