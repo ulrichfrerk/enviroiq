@@ -9,23 +9,24 @@ import { calcEnergyCo2e, resolveElectricityFactor } from "../lib/emissions.js";
 import { getCurrentGridIntensity } from "../lib/em6.js";
 import { parseBillText } from "../lib/billParser.js";
 import { createRequire } from "module";
-// pdf-parse is CJS-only — load it via require so it works from our ESM bundle
-type PdfParseResult = { text: string; numpages: number };
-const pdfParse = createRequire(import.meta.url)("pdf-parse") as (buffer: Buffer, options?: { max?: number }) => Promise<PdfParseResult>;
+// pdf-parse v2 is ESM-first — load the CJS build via createRequire so it works from our ESM bundle
+const { PDFParse } = createRequire(import.meta.url)("pdf-parse") as {
+  PDFParse: new (opts: { data: Buffer }) => { getText: () => Promise<{ text: string; pages: unknown[] }> };
+};
 
 const router = Router({ mergeParams: true });
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 /**
- * Extract readable text from a PDF buffer using pdf-parse (handles FlateDecode/compressed streams).
+ * Extract readable text from a PDF buffer using pdf-parse v2 (handles FlateDecode/compressed streams).
  * Falls back to latin1 stripping if pdf-parse fails (e.g. encrypted or corrupt PDFs).
  * Returns a string guaranteed safe for PostgreSQL UTF-8 text columns (no null bytes).
  */
 async function extractPdfText(buffer: Buffer): Promise<string> {
   try {
-    const data = await pdfParse(buffer, { max: 0 }); // max:0 = all pages
-    // pdf-parse returns unicode text — only strip null bytes for DB safety
-    return data.text
+    const parser = new PDFParse({ data: buffer });
+    const result = await parser.getText();
+    return (result.text || "")
       .replace(/\0/g, "")
       .replace(/\s+/g, " ")
       .trim()
