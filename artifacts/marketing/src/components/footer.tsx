@@ -1,5 +1,4 @@
 import { Link } from "wouter";
-import { Leaf } from "lucide-react";
 
 export function Footer() {
   return (
@@ -7,10 +6,8 @@ export function Footer() {
       <div className="container mx-auto px-6">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-12 mb-16">
           <div className="col-span-1 md:col-span-2">
-            <Link href="/" className="flex items-center gap-2 mb-6">
-              <div className="bg-primary/10 p-2 rounded-lg">
-                <Leaf className="w-6 h-6 text-primary" />
-              </div>
+            <Link href="/" className="flex items-center gap-2.5 mb-6">
+              <img src="/favicon.svg" alt="EnviroIQ" className="w-9 h-9 rounded-xl" />
               <span className="font-bold text-xl tracking-tight text-foreground">EnviroIQ</span>
             </Link>
             <p className="text-muted-foreground max-w-sm">

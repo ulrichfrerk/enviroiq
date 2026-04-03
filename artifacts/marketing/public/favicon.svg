@@ -1,3 +1,37 @@
 <svg width="180" height="180" viewBox="0 0 180 180" fill="none" xmlns="http://www.w3.org/2000/svg">
-<rect width="180" height="180" rx="36" fill="#FF3C00"/>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="180" y2="180" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#047857"/>
+      <stop offset="100%" stop-color="#10b981"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="180" height="180" rx="40" fill="url(#bg)"/>
+
+  <!-- Leaf body -->
+  <path
+    d="M90 32
+       C90 32 148 42 148 100
+       C148 134 122 155 90 155
+       C58 155 32 134 32 100
+       C32 42 90 32 90 32Z"
+    fill="white" opacity="0.95"
+  />
+
+  <!-- Central vein -->
+  <path
+    d="M90 155 C90 155 90 80 90 48"
+    stroke="#059669" stroke-width="6" stroke-linecap="round"
+  />
+
+  <!-- Left veins -->
+  <path d="M90 115 C75 105 58 108 50 100" stroke="#059669" stroke-width="3.5" stroke-linecap="round" opacity="0.7"/>
+  <path d="M90 95  C72 83  55 87  46 79"  stroke="#059669" stroke-width="3" stroke-linecap="round" opacity="0.55"/>
+  <path d="M90 75  C76 65  63 68  57 60"  stroke="#059669" stroke-width="2.5" stroke-linecap="round" opacity="0.4"/>
+
+  <!-- Right veins -->
+  <path d="M90 115 C105 105 122 108 130 100" stroke="#059669" stroke-width="3.5" stroke-linecap="round" opacity="0.7"/>
+  <path d="M90 95  C108 83  125 87  134 79"  stroke="#059669" stroke-width="3" stroke-linecap="round" opacity="0.55"/>
+  <path d="M90 75  C104 65  117 68  123 60"  stroke="#059669" stroke-width="2.5" stroke-linecap="round" opacity="0.4"/>
 </svg>

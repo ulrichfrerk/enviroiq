@@ -1,15 +1,12 @@
 import { Link } from "wouter";
-import { Leaf } from "lucide-react";
 import { Button } from "./ui/button";
 
 export function Navbar() {
   return (
     <nav className="fixed top-0 w-full z-50 bg-background/90 backdrop-blur-md border-b border-border shadow-sm">
       <div className="container mx-auto px-6 h-20 flex items-center justify-between">
-        <Link href="/" className="flex items-center gap-2 group">
-          <div className="bg-primary/10 p-2 rounded-lg group-hover:bg-primary/20 transition-colors">
-            <Leaf className="w-6 h-6 text-primary" />
-          </div>
+        <Link href="/" className="flex items-center gap-2.5 group">
+          <img src="/favicon.svg" alt="EnviroIQ" className="w-9 h-9 rounded-xl" />
           <span className="font-bold text-xl tracking-tight">EnviroIQ</span>
         </Link>
         
