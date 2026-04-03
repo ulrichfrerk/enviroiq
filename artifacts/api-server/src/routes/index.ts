@@ -16,6 +16,8 @@ import targetsRouter from "./targets.js";
 import maturityRouter from "./maturity.js";
 import scenariosRouter from "./scenarios.js";
 import missionRouter from "./mission.js";
+import socialRouter from "./social.js";
+import governanceRouter from "./governance.js";
 
 const router = Router();
 
@@ -39,6 +41,8 @@ router.use("/organisations/:orgId/targets", targetsRouter);
 router.use("/organisations/:orgId/maturity", maturityRouter);
 router.use("/organisations/:orgId/scenarios", scenariosRouter);
 router.use("/organisations/:orgId/mission", missionRouter);
+router.use("/organisations/:orgId/social", socialRouter);
+router.use("/organisations/:orgId/governance", governanceRouter);
 
 // Webhooks (no auth - use API keys/tokens)
 router.use("/webhooks/fleet", fleetWebhookRouter);

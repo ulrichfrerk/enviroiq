@@ -23,6 +23,8 @@ import Audit from "@/pages/audit";
 import Widget from "@/pages/widget";
 import Account from "@/pages/account";
 import SettingsPage from "@/pages/settings";
+import Social from "@/pages/social";
+import Governance from "@/pages/governance";
 
 import { AppLayout } from "@/components/layout/app-layout";
 import { useAuth } from "@/hooks/use-auth";
@@ -73,6 +75,8 @@ function Router() {
       <Route path="/audit"><ProtectedRoute component={Audit} /></Route>
       <Route path="/admin"><ProtectedRoute component={Admin} /></Route>
       <Route path="/account"><ProtectedRoute component={Account} /></Route>
+      <Route path="/social"><ProtectedRoute component={Social} /></Route>
+      <Route path="/governance"><ProtectedRoute component={Governance} /></Route>
       <Route path="/:slug" component={OrgLogin} />
       <Route component={NotFound} />
     </Switch>

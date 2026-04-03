@@ -2,6 +2,7 @@ import { Link, useLocation } from "wouter";
 import { 
   BarChart3, Car, Zap, Target, FileText, Settings, Users, 
   ShieldAlert, Shield, LogOut, Leaf, UserCircle, Beaker, TrendingDown, Sparkles,
+  HeartHandshake, Building2,
 } from "lucide-react";
 import {
   Sidebar,
@@ -28,6 +29,8 @@ export function AppSidebar() {
     { title: "Dashboard", url: "/dashboard", icon: BarChart3 },
     { title: "Fleet", url: "/fleet", icon: Car },
     { title: "Energy", url: "/energy", icon: Zap },
+    { title: "Social", url: "/social", icon: HeartHandshake },
+    { title: "Governance", url: "/governance", icon: Building2 },
     { title: "Targets", url: "/targets", icon: TrendingDown },
     { title: "Scenarios", url: "/scenarios", icon: Beaker },
     { title: "Mission Statement", url: "/mission", icon: Sparkles },

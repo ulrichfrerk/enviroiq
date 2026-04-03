@@ -10,3 +10,5 @@ export * from "./emission-readings";
 export * from "./grid-intensity";
 export * from "./targets";
 export * from "./scenarios";
+export * from "./social-data";
+export * from "./governance-data";
