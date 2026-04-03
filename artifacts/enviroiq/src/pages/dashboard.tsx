@@ -88,6 +88,10 @@ interface EsgSummary {
   goalsBehind: number;
   periodOverPeriodChange: number;
   lastUpdated: string;
+  fleetMarginPct?: number;
+  energyMarginPct?: number;
+  co2eMarginPct?: number;
+  fuelCoveragePct?: number;
 }
 
 function useSummary(orgId: string | undefined, period: PeriodValue) {
@@ -192,13 +196,15 @@ export default function Dashboard() {
     { name: 'Other', value: Math.max(0, summary.totalCo2eKg - summary.fleetCo2eKg - summary.energyCo2eKg) }
   ].filter(d => d.value > 0);
 
-  const StatCard = ({ title, value, icon: Icon, trend, trendGood, loading }: {
+  const StatCard = ({ title, value, icon: Icon, trend, trendGood, loading, marginPct, marginTooltip }: {
     title: string;
     value: string;
     icon: React.ComponentType<{ className?: string }>;
     trend?: number | null;
     trendGood?: boolean;
     loading?: boolean;
+    marginPct?: number;
+    marginTooltip?: string;
   }) => (
     <Card className="p-6 bg-card border-border/50 shadow-lg shadow-black/5 hover:border-border transition-all">
       <div className="flex justify-between items-start mb-4">
@@ -216,7 +222,17 @@ export default function Dashboard() {
       {loading ? (
         <div className="mt-2"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>
       ) : (
-        <p className="text-3xl font-display font-bold text-foreground mt-1 tracking-tight">{value}</p>
+        <div className="mt-1 flex items-end gap-2">
+          <p className="text-3xl font-display font-bold text-foreground tracking-tight">{value}</p>
+          {marginPct != null && marginPct > 0 && (
+            <span
+              title={marginTooltip}
+              className="mb-1 text-xs font-medium px-1.5 py-0.5 rounded-md bg-amber-500/10 text-amber-500 border border-amber-500/20 cursor-help whitespace-nowrap"
+            >
+              ±{marginPct}%
+            </span>
+          )}
+        </div>
       )}
     </Card>
   );
@@ -279,18 +295,32 @@ export default function Dashboard() {
           trend={summary.periodOverPeriodChange || null}
           trendGood={(summary.periodOverPeriodChange ?? 0) < 0}
           loading={loadingSummary}
+          marginPct={summary.co2eMarginPct}
+          marginTooltip={
+            summary.co2eMarginPct
+              ? `Estimated ±${summary.co2eMarginPct}% — fleet uses distance-based factors. Improves when fuel bill data is added.`
+              : undefined
+          }
         />
         <StatCard
           title="Fleet Emissions (kg)"
           value={summary.fleetCo2eKg.toLocaleString()}
           icon={Car}
           loading={loadingSummary}
+          marginPct={summary.fleetMarginPct}
+          marginTooltip={
+            summary.fleetMarginPct
+              ? `±${summary.fleetMarginPct}% — based on distance × NZ MfE emission factors. ${summary.fuelCoveragePct === 0 ? "No fuel data yet." : `${summary.fuelCoveragePct}% of trips have measured fuel.`} Add fuel card data to reduce uncertainty.`
+              : undefined
+          }
         />
         <StatCard
           title="Energy Usage (kWh)"
           value={summary.totalEnergyKwh.toLocaleString()}
           icon={Zap}
           loading={loadingSummary}
+          marginPct={summary.energyMarginPct}
+          marginTooltip={summary.energyMarginPct ? `±${summary.energyMarginPct}% — from NZ grid emission factor uncertainty (MfE annual averages).` : undefined}
         />
         <StatCard
           title="Goals On Track"

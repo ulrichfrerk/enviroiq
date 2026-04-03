@@ -277,9 +277,13 @@ router.get("/:orgId/summary", requireAuth, requireOrgAccess, async (req, res) =>
       ? sql`AND period_start >= ${fromDate} AND period_end <= ${now}`
       : sql``;
 
-    // Get fleet emission totals
+    // Get fleet emission totals + data quality (% events with real fuel data)
     const fleetResult = await db.execute(sql`
-      SELECT COALESCE(SUM(co2e_kg), 0) as total_co2e, COALESCE(SUM(distance_km), 0) as total_distance
+      SELECT
+        COALESCE(SUM(co2e_kg), 0)       as total_co2e,
+        COALESCE(SUM(distance_km), 0)   as total_distance,
+        COUNT(*)                         as total_events,
+        COUNT(*) FILTER (WHERE fuel_litres IS NOT NULL AND fuel_litres > 0) as events_with_fuel
       FROM fleet_events
       WHERE organisation_id = ${orgId}
         ${fleetDateClause}
@@ -318,6 +322,27 @@ router.get("/:orgId/summary", requireAuth, requireOrgAccess, async (req, res) =>
     const goalsOnTrack = intCol(gr, "on_track");
     const totalGoals = intCol(gr, "total");
 
+    // Data quality — what % of fleet events have measured fuel litres?
+    const totalFleetEvents = intCol(fr, "total_events");
+    const fleetEventsWithFuel = intCol(fr, "events_with_fuel");
+    const fuelCoveragePct = totalFleetEvents > 0 ? (fleetEventsWithFuel / totalFleetEvents) * 100 : 0;
+
+    // Margin of error: distance-only estimates ±20%; real fuel data tightens to ±3%
+    const fleetMarginPct =
+      fuelCoveragePct === 100 ? 3 :
+      fuelCoveragePct >= 70  ? 5 :
+      fuelCoveragePct >= 30  ? 10 :
+      fuelCoveragePct >= 1   ? 15 : 20;
+
+    // Energy bills have measured kWh so only emission factor uncertainty (~5%)
+    const energyMarginPct = energyKwh > 0 ? 5 : 0;
+
+    // Weighted combined margin across fleet + energy
+    const totalCo2e = fleetCo2e + energyCo2e;
+    const co2eMarginPct = totalCo2e > 0
+      ? Math.round((fleetCo2e * fleetMarginPct + energyCo2e * energyMarginPct) / totalCo2e)
+      : 0;
+
     const score = calcSustainabilityScore({
       totalCo2eKg: fleetCo2e + energyCo2e,
       fleetDistanceKm: fleetDistance,
@@ -339,6 +364,11 @@ router.get("/:orgId/summary", requireAuth, requireOrgAccess, async (req, res) =>
       goalsBehind: intCol(gr, "behind"),
       periodOverPeriodChange: 0,
       lastUpdated: now.toISOString(),
+      // Data quality & margin of error
+      fleetMarginPct,
+      energyMarginPct,
+      co2eMarginPct,
+      fuelCoveragePct: Math.round(fuelCoveragePct),
     });
   } catch (err) {
     req.log.error({ err }, "Get summary failed");
