@@ -56,31 +56,31 @@
 }
 
 :root {
-  /* Brand: Charcoal #0B0D0F dark theme */
-  --background: 210 15% 5%;
-  --foreground: 0 0% 96%;
+  /* Marketing site: clean white light theme */
+  --background: 0 0% 100%;
+  --foreground: 210 15% 8%;
 
-  --border: 215 17% 14%;
-  --input: 215 17% 14%;
+  --border: 220 13% 91%;
+  --input: 220 13% 91%;
   --ring: 142 71% 45%;
 
-  --card: 215 17% 8%;
-  --card-foreground: 0 0% 96%;
-  --card-border: 215 17% 14%;
+  --card: 0 0% 98%;
+  --card-foreground: 210 15% 8%;
+  --card-border: 220 13% 91%;
 
-  --popover: 215 17% 8%;
-  --popover-foreground: 0 0% 96%;
-  --popover-border: 215 17% 14%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 210 15% 8%;
+  --popover-border: 220 13% 91%;
 
   /* Primary: Electric Green #22C55E */
   --primary: 142 71% 45%;
   --primary-foreground: 0 0% 100%;
 
-  --secondary: 215 17% 12%;
-  --secondary-foreground: 0 0% 96%;
+  --secondary: 210 14% 96%;
+  --secondary-foreground: 210 15% 20%;
 
-  --muted: 215 17% 10%;
-  --muted-foreground: 215 15% 55%;
+  --muted: 210 14% 96%;
+  --muted-foreground: 215 15% 45%;
 
   --accent: 142 71% 45%;
   --accent-foreground: 0 0% 100%;
@@ -95,21 +95,21 @@
   --chart-5: 0 84% 60%;
 
   --radius: 0.5rem;
-  --button-outline: rgba(255, 255, 255, 0.10);
-  --badge-outline: rgba(255, 255, 255, 0.08);
+  --button-outline: rgba(0, 0, 0, 0.08);
+  --badge-outline: rgba(0, 0, 0, 0.06);
   --opaque-button-border-intensity: 9;
-  --elevate-1: rgba(255, 255, 255, 0.04);
-  --elevate-2: rgba(255, 255, 255, 0.08);
+  --elevate-1: rgba(0, 0, 0, 0.03);
+  --elevate-2: rgba(0, 0, 0, 0.06);
 
-  /* Shadows — on dark bg */
-  --shadow-2xs: 0px 1px 2px 0px rgba(0,0,0,0.40);
-  --shadow-xs:  0px 1px 3px 0px rgba(0,0,0,0.45);
-  --shadow-sm:  0px 1px 3px 0px rgba(0,0,0,0.45), 0px 1px 2px -1px rgba(0,0,0,0.30);
-  --shadow:     0px 2px 4px 0px rgba(0,0,0,0.50), 0px 1px 2px -1px rgba(0,0,0,0.30);
-  --shadow-md:  0px 4px 8px -1px rgba(0,0,0,0.55), 0px 2px 4px -1px rgba(0,0,0,0.30);
-  --shadow-lg:  0px 8px 16px -2px rgba(0,0,0,0.60), 0px 4px 6px -2px rgba(0,0,0,0.30);
-  --shadow-xl:  0px 16px 32px -4px rgba(0,0,0,0.65), 0px 8px 12px -4px rgba(0,0,0,0.30);
-  --shadow-2xl: 0px 24px 48px -8px rgba(0,0,0,0.70);
+  /* Shadows — on light bg */
+  --shadow-2xs: 0px 1px 2px 0px rgba(0,0,0,0.06);
+  --shadow-xs:  0px 1px 3px 0px rgba(0,0,0,0.08);
+  --shadow-sm:  0px 1px 3px 0px rgba(0,0,0,0.08), 0px 1px 2px -1px rgba(0,0,0,0.06);
+  --shadow:     0px 2px 4px 0px rgba(0,0,0,0.10), 0px 1px 2px -1px rgba(0,0,0,0.06);
+  --shadow-md:  0px 4px 8px -1px rgba(0,0,0,0.12), 0px 2px 4px -1px rgba(0,0,0,0.06);
+  --shadow-lg:  0px 8px 16px -2px rgba(0,0,0,0.14), 0px 4px 6px -2px rgba(0,0,0,0.06);
+  --shadow-xl:  0px 16px 32px -4px rgba(0,0,0,0.16), 0px 8px 12px -4px rgba(0,0,0,0.06);
+  --shadow-2xl: 0px 24px 48px -8px rgba(0,0,0,0.18);
 
   --primary-border: hsl(var(--primary));
   --secondary-border: hsl(var(--secondary));

@@ -7,7 +7,7 @@ export function Footer() {
         <div className="grid grid-cols-1 md:grid-cols-4 gap-12 mb-16">
           <div className="col-span-1 md:col-span-2">
             <Link href="/" className="flex items-center gap-2.5 mb-3">
-              <img src="/mark-white.svg" alt="" className="h-9 w-9 shrink-0" />
+              <img src="/mark-dark.svg" alt="" className="h-9 w-9 shrink-0" />
               <span className="text-xl font-bold tracking-tight text-foreground">
                 Enviro<span className="text-primary">IQ</span>
               </span>

@@ -6,7 +6,7 @@ export function Navbar() {
     <nav className="fixed top-0 w-full z-50 bg-background/90 backdrop-blur-md border-b border-border shadow-sm">
       <div className="container mx-auto px-6 h-20 flex items-center justify-between">
         <Link href="/" className="flex items-center gap-2.5 group">
-          <img src="/mark-white.svg" alt="" className="h-10 w-10 shrink-0" />
+          <img src="/mark-dark.svg" alt="" className="h-10 w-10 shrink-0" />
           <span className="text-xl font-bold tracking-tight text-foreground">
             Enviro<span className="text-primary">IQ</span>
           </span>
