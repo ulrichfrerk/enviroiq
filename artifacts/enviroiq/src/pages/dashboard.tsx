@@ -141,7 +141,8 @@ export default function Dashboard() {
   // Shared period — drives both stat cards (summary) and trend chart
   const [period, setPeriod] = useState<PeriodValue>(() => {
     const saved = typeof localStorage !== "undefined" ? localStorage.getItem(LS_KEY) : null;
-    return (saved as PeriodValue) || "all";
+    const validValues = PERIODS.map(p => p.value) as string[];
+    return (saved && validValues.includes(saved) ? saved as PeriodValue : "all");
   });
 
   // Persist period choice to localStorage
