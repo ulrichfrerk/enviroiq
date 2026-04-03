@@ -412,7 +412,7 @@ export default function Fleet() {
   const [kmErrors, setKmErrors] = useState<string[]>([]);
   const [kmProgress, setKmProgress] = useState(0);
   const [kmMeta, setKmMeta] = useState<KmImportMeta | null>(null);
-  const [kmResults, setKmResults] = useState<{ imported: number; skipped: string[]; errors: string[] }>({ imported: 0, skipped: [], errors: [] });
+  const [kmResults, setKmResults] = useState<{ imported: number; created: string[]; errors: string[] }>({ imported: 0, created: [], errors: [] });
   const kmFileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: vehicles, isLoading, refetch } = useListVehicles(orgId!, { query: { enabled: !!orgId } });
@@ -582,7 +582,7 @@ export default function Fleet() {
         const err = await response.json().catch(() => ({})) as { message?: string };
         throw new Error(err.message || `HTTP ${response.status}`);
       }
-      const result = await response.json() as { imported: number; skipped: string[]; errors: string[] };
+      const result = await response.json() as { imported: number; created: string[]; errors: string[] };
       setKmProgress(100);
       setKmResults(result);
       setKmImportState("done");
@@ -599,7 +599,7 @@ export default function Fleet() {
     setKmErrors([]);
     setKmProgress(0);
     setKmMeta(null);
-    setKmResults({ imported: 0, skipped: [], errors: [] });
+    setKmResults({ imported: 0, created: [], errors: [] });
     if (kmFileInputRef.current) kmFileInputRef.current.value = "";
   };
 
@@ -720,14 +720,14 @@ export default function Fleet() {
                       <div className="flex gap-3 text-sm">
                         <span className="flex items-center gap-1.5 text-emerald-500"><CheckCircle2 className="w-4 h-4" /> {matchedKmRows.length} matched</span>
                         {unmatchedKmRows.length > 0 && (
-                          <span className="flex items-center gap-1.5 text-amber-500"><XCircle className="w-4 h-4" /> {unmatchedKmRows.length} unmatched (will be skipped)</span>
+                          <span className="flex items-center gap-1.5 text-blue-500"><CheckCircle2 className="w-4 h-4" /> {unmatchedKmRows.length} new (will be auto-created)</span>
                         )}
                       </div>
                       {unmatchedKmRows.length > 0 && (
-                        <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
-                          <p className="text-xs text-amber-600 font-semibold mb-1">Vehicles not found in your fleet:</p>
+                        <div className="rounded-lg border border-blue-500/20 bg-blue-500/5 p-3">
+                          <p className="text-xs text-blue-600 font-semibold mb-1">New vehicles — will be added automatically:</p>
                           <p className="text-xs text-muted-foreground font-mono">{unmatchedKmRows.map(r => r.vehicle).join(", ")}</p>
-                          <p className="text-xs text-muted-foreground mt-1">Register these vehicles first, then re-import.</p>
+                          <p className="text-xs text-muted-foreground mt-1">These will be created as diesel vehicles. You can edit the details afterwards.</p>
                         </div>
                       )}
                       <div className="max-h-56 overflow-y-auto rounded-lg border border-border text-xs">
@@ -741,29 +741,22 @@ export default function Fleet() {
                             {kmRows.map((row, i) => {
                               const matched = knownVehicles.has(row.vehicle.toLowerCase().trim());
                               return (
-                                <tr key={i} className={`hover:bg-secondary/20 ${!matched ? "opacity-50" : ""}`}>
+                                <tr key={i} className="hover:bg-secondary/20">
                                   <td className="px-3 py-2 font-medium">{row.vehicle}</td>
                                   <td className="px-3 py-2 text-muted-foreground">{row.date}</td>
                                   <td className="px-3 py-2">{row.distanceKm} km</td>
                                   <td className="px-3 py-2 text-muted-foreground">{row.fuelLitres || "—"}</td>
-                                  <td className="px-3 py-2">{matched ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" /> : <XCircle className="w-3.5 h-3.5 text-amber-500" />}</td>
+                                  <td className="px-3 py-2">{matched ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" /> : <span className="text-xs text-blue-500 font-medium">New</span>}</td>
                                 </tr>
                               );
                             })}
                           </tbody>
                         </table>
                       </div>
-                      {matchedKmRows.length === 0 ? (
-                        <div className="space-y-2">
-                          <p className="text-sm text-destructive">No rows match registered vehicles. Register the vehicles first, then re-import.</p>
-                          <Button variant="outline" className="w-full" onClick={resetKmImport}>Choose Different File</Button>
-                        </div>
-                      ) : (
-                        <div className="flex gap-3">
-                          <Button variant="outline" className="flex-1" onClick={resetKmImport}>Choose Different File</Button>
-                          <Button className="flex-1 gap-2" onClick={handleKmImport}><Upload className="w-4 h-4" /> Import {matchedKmRows.length} record{matchedKmRows.length !== 1 ? "s" : ""}</Button>
-                        </div>
-                      )}
+                      <div className="flex gap-3">
+                        <Button variant="outline" className="flex-1" onClick={resetKmImport}>Choose Different File</Button>
+                        <Button className="flex-1 gap-2" onClick={handleKmImport}><Upload className="w-4 h-4" /> Import {kmRows.length} record{kmRows.length !== 1 ? "s" : ""}</Button>
+                      </div>
                     </>
                   )}
                   {kmRows.length === 0 && kmErrors.length > 0 && (
@@ -788,7 +781,7 @@ export default function Fleet() {
                       <p className="font-semibold">Import complete</p>
                       <p className="text-sm text-muted-foreground">
                         {kmResults.imported} record{kmResults.imported !== 1 ? "s" : ""} imported
-                        {kmResults.skipped.length > 0 && <>, <span className="text-amber-500">{kmResults.skipped.length} skipped</span></>}
+                        {kmResults.created.length > 0 && <>, <span className="text-blue-500">{kmResults.created.length} new vehicle{kmResults.created.length !== 1 ? "s" : ""} added</span></>}
                         {kmResults.errors.length > 0 && <>, <span className="text-destructive">{kmResults.errors.length} errors</span></>}.
                       </p>
                     </div>

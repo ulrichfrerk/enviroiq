@@ -505,7 +505,7 @@ router.post("/import-km", requireAuth, requireOrgAdmin, async (req, res) => {
     );
 
     let imported = 0;
-    const skipped: string[] = [];
+    const created: string[] = [];
     const errors: string[] = [];
 
     for (let i = 0; i < rows.length; i++) {
@@ -513,10 +513,24 @@ router.post("/import-km", requireAuth, requireOrgAdmin, async (req, res) => {
       const label = row.vehicle?.trim() || `Row ${i + 1}`;
       const vehicleKey = label.toLowerCase();
 
-      const vehicle = byName.get(vehicleKey) ?? byRego.get(vehicleKey);
+      let vehicle = byName.get(vehicleKey) ?? byRego.get(vehicleKey);
       if (!vehicle) {
-        skipped.push(label);
-        continue;
+        // Auto-create the vehicle so new registrations aren't silently dropped
+        const [newVehicle] = await db.insert(vehiclesTable).values({
+          id: uuidv4(),
+          organisationId: orgId,
+          name: label,
+          registration: label,
+          fuelType: "diesel",
+          isActive: true,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        }).returning();
+        vehicle = newVehicle;
+        byName.set(vehicleKey, newVehicle);
+        byRego.set(vehicleKey, newVehicle);
+        created.push(label);
+        await logAudit({ req, action: "vehicle.auto_create", resourceType: "vehicle", resourceId: newVehicle.id, organisationId: orgId, details: { name: label, source: "import" } });
       }
 
       const distanceKm = Number(row.distanceKm);
@@ -563,11 +577,11 @@ router.post("/import-km", requireAuth, requireOrgAdmin, async (req, res) => {
       req,
       action: "fleet.import_km",
       outcome: "success",
-      details: { imported, skipped: skipped.length, errors: errors.length },
+      details: { imported, created: created.length, errors: errors.length },
       organisationId: orgId,
     });
 
-    res.json({ imported, skipped, errors });
+    res.json({ imported, created, errors });
   } catch (err) {
     req.log.error({ err }, "Fleet KM import failed");
     res.status(500).json({ error: "Internal Server Error", message: "Failed to import KM data" });
