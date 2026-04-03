@@ -109,6 +109,52 @@ All under `/api`:
 node_modules/.bin/tsx artifacts/api-server/src/seed.ts
 ```
 
+## Brand Guidelines (Official)
+
+### Colours
+| Name | Hex | RGB |
+|---|---|---|
+| Charcoal | `#0B0D0F` | 11 13 15 |
+| Electric Green | `#22C55E` | 34 197 94 |
+| IQ Blue | `#0EA5E8` | 14 165 233 |
+| Steel | `#64748B` | 100 116 139 |
+| Mist | `#F3F4F6` | 243 244 246 |
+| White | `#FFFFFF` | 255 255 255 |
+
+### Typography
+- **Font**: Inter only — Light, Regular, Medium, SemiBold, Bold
+- Wordmark: "Enviro" in regular/medium weight, "IQ" in bold + Electric Green
+
+### Logo Mark Anatomy
+The Q mark comprises three elements:
+1. **System / World** — Bold Q ring (circle with arrow tail = magnifying glass/search)
+2. **Signal / Pulse** — Green ECG/mountain waveform inside the Q ring = Intelligence in motion
+3. **Data Point** — Green dot at top-right of the ring = Live, connected, real-time
+
+### Logo Variants & Usage
+| Variant | File | Usage |
+|---|---|---|
+| Primary lockup (dark bg) | `mark-white.svg` + CSS wordmark | App sidebar, login page, dark surfaces |
+| Primary lockup (light bg) | `mark-dark.svg` + CSS wordmark | Marketing navbar/footer, light surfaces |
+| Icon only | `favicon.svg` | Browser tab only (charcoal rounded-square bg) |
+
+### Logo Rules
+- Clear space around logo = height of the green dot
+- Never crowd or distort the logo
+- On dark: white Q ring + white tail + green ECG + green dot
+- On light: charcoal Q ring + charcoal tail + green ECG + green dot
+- "IQ" is always Electric Green in the wordmark
+
+### App vs Marketing Theme
+- **App (enviroiq)**: Dark charcoal theme — `#0B0D0F` background, white foreground
+- **Marketing site**: White/light theme — white background, charcoal foreground
+- Primary green `#22C55E` is used on both as the accent/CTA colour
+
+### Taglines
+- "Real Time ESG Intelligence"
+- "Data. Decisions. Impact."
+- "Know Now. Act Now."
+
 ## TypeScript & Composite Projects
 
 Every package extends `tsconfig.base.json` with `composite: true`. Root `tsconfig.json` lists all packages as references. Always typecheck from root: `pnpm run typecheck`.
