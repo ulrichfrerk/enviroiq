@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { fmtCo2e } from "@/lib/utils";
 import { read as xlsxRead, utils as xlsxUtils } from "xlsx";
 import { useAuth } from "@/hooks/use-auth";
 import {
@@ -1144,7 +1145,7 @@ export default function Fleet() {
                           {v.totalKm.toLocaleString()}
                         </td>
                         <td className="px-4 py-3 text-right font-semibold text-foreground">
-                          {v.totalCo2eKg.toLocaleString(undefined, { maximumFractionDigits: 0 })} kg
+                          {fmtCo2e(v.totalCo2eKg)}
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2">

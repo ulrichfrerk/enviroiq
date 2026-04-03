@@ -6,7 +6,8 @@ import {
   ArrowRight, Activity, Eye, FileCheck, LayoutDashboard, Zap, Truck,
   Building2, Leaf, ShieldCheck, Users, BookOpen, Scale, BarChart3,
   Fingerprint, Globe, Sparkles, Lock, Database, ChevronRight, TrendingDown,
-  ClipboardList, PieChart, FileText, Bolt
+  ClipboardList, PieChart, FileText, Bolt, Recycle, Droplets, HardHat,
+  FolderOpen, Package, CheckSquare, Award
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
@@ -607,6 +608,170 @@ export default function Home() {
                 </div>
               ))}
             </div>
+          </div>
+        </section>
+
+        {/* ── NZ GOVERNMENT PROCUREMENT ────────────────────────────────────── */}
+        <section id="procurement" className="py-32 bg-slate-950 text-white relative overflow-hidden">
+          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(34,197,94,0.12),transparent_60%)]" />
+          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_bottom_left,rgba(59,130,246,0.08),transparent_60%)]" />
+          <div className="container mx-auto px-6 relative z-10">
+
+            <motion.div
+              initial="hidden"
+              whileInView="show"
+              viewport={{ once: true }}
+              variants={staggerContainer}
+              className="text-center mb-6"
+            >
+              <motion.div variants={fadeIn} className="flex justify-center mb-6">
+                <span className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-sm font-semibold font-mono">
+                  <Award className="w-3.5 h-3.5" />
+                  NZ GOVERNMENT PROCUREMENT
+                </span>
+              </motion.div>
+              <motion.h2 variants={fadeIn} className="text-4xl md:text-5xl font-bold mb-6 leading-tight">
+                Win government contracts.<br />
+                <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-cyan-400">
+                  Prove your credentials in minutes.
+                </span>
+              </motion.h2>
+              <motion.p variants={fadeIn} className="text-xl text-slate-400 max-w-3xl mx-auto leading-relaxed">
+                EnviroIQ includes purpose-built modules for NZ government and local council procurement. Track every sustainability proof-point demanded in modern tender specifications — from Scope 1 emissions to subcontractor H&S inductions.
+              </motion.p>
+            </motion.div>
+
+            {/* Tender Pack CTA bar */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+              className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-20 p-6 rounded-2xl bg-emerald-500/8 border border-emerald-500/20"
+            >
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-emerald-500/20">
+                  <FileText className="w-5 h-5 text-emerald-400" />
+                </div>
+                <div>
+                  <div className="font-bold text-white">Tender Evidence Pack</div>
+                  <div className="text-sm text-slate-400">One-click export: print-ready PDF covering all 6 NZ procurement proof points</div>
+                </div>
+              </div>
+              <div className="sm:ml-auto flex items-center gap-2 text-emerald-400 font-semibold text-sm">
+                <CheckSquare className="w-4 h-4" />
+                Generated on demand · Board-ready · Audit-traceable
+              </div>
+            </motion.div>
+
+            {/* 6 proof-point cards */}
+            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-16">
+              {[
+                {
+                  icon: Leaf,
+                  color: "emerald",
+                  label: "Proof Point 1",
+                  title: "Carbon & Emissions",
+                  desc: "Scope 1 fleet CO₂e and Scope 2 energy CO₂e tracked against per-project targets. Real-time NZ grid intensity. GHG Protocol aligned, NZ MfE 2024 emission factors.",
+                  tags: ["Fleet CO₂e", "Energy CO₂e", "Reduction targets"],
+                },
+                {
+                  icon: Recycle,
+                  color: "teal",
+                  label: "Proof Point 2",
+                  title: "Waste & Environmental",
+                  desc: "Waste generated vs diverted, monthly water consumption tracking, and a full environmental incident register. Site-level breakdown for multi-project contractors.",
+                  tags: ["Waste diversion %", "Water use", "Incident register"],
+                },
+                {
+                  icon: HardHat,
+                  color: "amber",
+                  label: "Proof Point 3",
+                  title: "Health & Safety",
+                  desc: "LTIFR trends, H&S training hours, near-miss and incident logging. First aid and HSR records with date tracking. Meets WorkSafe NZ reporting expectations.",
+                  tags: ["LTIFR", "Training hours", "Incident log"],
+                },
+                {
+                  icon: Users,
+                  color: "blue",
+                  label: "Proof Point 4",
+                  title: "Workforce & Social",
+                  desc: "Gender diversity, living wage alignment, local spend %, apprentice and trainee headcount. Social KPIs aligned to NZ government supplier diversity expectations.",
+                  tags: ["Diversity %", "Local spend", "Living wage"],
+                },
+                {
+                  icon: Scale,
+                  color: "purple",
+                  label: "Proof Point 5",
+                  title: "Governance",
+                  desc: "Board composition, ESG frameworks adopted (ISO 14001, Toitū CEMARS, B Corp), policy registers, and a composite 0–100 governance maturity score.",
+                  tags: ["ISO 14001", "Toitū CEMARS", "Policy register"],
+                },
+                {
+                  icon: Package,
+                  color: "rose",
+                  label: "Proof Point 6",
+                  title: "Supply Chain",
+                  desc: "Subcontractor H&S compliance tracker — induction dates, training records, compliance status, and expiry alerts. Evidence-ready for principal contractor obligations.",
+                  tags: ["Induction records", "Compliance %", "Expiry alerts"],
+                },
+              ].map((card, i) => {
+                const colorMap: Record<string, { bg: string; border: string; tag: string; icon: string; label: string }> = {
+                  emerald: { bg: "bg-emerald-500/10", border: "border-emerald-500/25 hover:border-emerald-400/50", tag: "bg-emerald-500/15 text-emerald-300", icon: "text-emerald-400", label: "text-emerald-500/70" },
+                  teal:    { bg: "bg-teal-500/10",    border: "border-teal-500/25 hover:border-teal-400/50",    tag: "bg-teal-500/15 text-teal-300",    icon: "text-teal-400",    label: "text-teal-500/70" },
+                  amber:   { bg: "bg-amber-500/10",   border: "border-amber-500/25 hover:border-amber-400/50",   tag: "bg-amber-500/15 text-amber-300",   icon: "text-amber-400",   label: "text-amber-500/70" },
+                  blue:    { bg: "bg-blue-500/10",    border: "border-blue-500/25 hover:border-blue-400/50",    tag: "bg-blue-500/15 text-blue-300",    icon: "text-blue-400",    label: "text-blue-500/70" },
+                  purple:  { bg: "bg-purple-500/10",  border: "border-purple-500/25 hover:border-purple-400/50",  tag: "bg-purple-500/15 text-purple-300",  icon: "text-purple-400",  label: "text-purple-500/70" },
+                  rose:    { bg: "bg-rose-500/10",    border: "border-rose-500/25 hover:border-rose-400/50",    tag: "bg-rose-500/15 text-rose-300",    icon: "text-rose-400",    label: "text-rose-500/70" },
+                };
+                const c = colorMap[card.color];
+                return (
+                  <motion.div
+                    key={i}
+                    initial={{ opacity: 0, y: 24 }}
+                    whileInView={{ opacity: 1, y: 0 }}
+                    viewport={{ once: true }}
+                    transition={{ delay: i * 0.08 }}
+                    className={`rounded-2xl border ${c.border} bg-slate-900/60 backdrop-blur-sm p-7 flex flex-col gap-5 transition-all group`}
+                  >
+                    <div className="flex items-start justify-between">
+                      <div className={`p-3 rounded-xl ${c.bg}`}>
+                        <card.icon className={`w-6 h-6 ${c.icon}`} />
+                      </div>
+                      <span className={`text-xs font-mono font-bold uppercase tracking-widest ${c.label}`}>{card.label}</span>
+                    </div>
+                    <div>
+                      <h4 className="text-lg font-bold text-white mb-2">{card.title}</h4>
+                      <p className="text-sm text-slate-400 leading-relaxed">{card.desc}</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2 mt-auto">
+                      {card.tags.map((tag, j) => (
+                        <span key={j} className={`text-xs px-2.5 py-1 rounded-full font-medium ${c.tag}`}>{tag}</span>
+                      ))}
+                    </div>
+                  </motion.div>
+                );
+              })}
+            </div>
+
+            {/* Bottom quote/stat row */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              whileInView={{ opacity: 1 }}
+              viewport={{ once: true }}
+              className="grid sm:grid-cols-3 gap-px bg-slate-800/60 rounded-2xl overflow-hidden border border-slate-800"
+            >
+              {[
+                { stat: "6", label: "Proof points", sub: "Covering every NZ govt tender sustainability criterion" },
+                { stat: "1-click", label: "Tender Evidence Pack", sub: "Print-ready PDF, auto-generated from live data" },
+                { stat: "100%", label: "Audit traceable", sub: "Every data point is timestamped, attributed, and immutable" },
+              ].map((s, i) => (
+                <div key={i} className="px-8 py-7 bg-slate-900/80">
+                  <div className="text-3xl font-bold text-emerald-400 mb-1 font-mono">{s.stat}</div>
+                  <div className="font-semibold text-white text-sm mb-1">{s.label}</div>
+                  <div className="text-xs text-slate-500 leading-relaxed">{s.sub}</div>
+                </div>
+              ))}
+            </motion.div>
           </div>
         </section>
 

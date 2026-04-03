@@ -1,9 +1,9 @@
 import { Router } from "express";
-import { db, organisationsTable, usersTable, vehiclesTable, auditLogsTable, fleetEventsTable } from "@workspace/db";
+import { db, organisationsTable, usersTable, vehiclesTable, auditLogsTable, fleetEventsTable, energyReadingsTable } from "@workspace/db";
 import { count, eq, sql } from "drizzle-orm";
 import { requireRole } from "../lib/auth.js";
 import { sqlRow, sqlRows, numCol, intCol, strCol } from "../lib/sql-result.js";
-import { calcFleetCo2e } from "../lib/emissions.js";
+import { calcFleetCo2e, calcEnergyCo2e, resolveElectricityFactor } from "../lib/emissions.js";
 import { logAudit } from "../lib/audit.js";
 
 const router = Router();
@@ -114,17 +114,52 @@ router.post("/organisations/:orgId/recalculate-emissions", requireRole("super_ad
       }));
     }
 
+    // Also recalculate energy readings using current factor logic
+    const energyReadings = await db.query.energyReadingsTable.findMany({
+      where: eq(energyReadingsTable.organisationId, orgId),
+    });
+
+    let energyUpdated = 0;
+    let energySkipped = 0;
+
+    const EBATCH = 100;
+    for (let i = 0; i < energyReadings.length; i += EBATCH) {
+      const batch = energyReadings.slice(i, i + EBATCH);
+      await Promise.all(batch.map(async (reading) => {
+        try {
+          const { factorKgCo2PerKwh, method, note } = resolveElectricityFactor({
+            periodStart: reading.periodStart,
+            supplierRenewablePct: reading.supplierRenewablePct !== null ? Number(reading.supplierRenewablePct) : undefined,
+          });
+          const newCo2eKg = calcEnergyCo2e({
+            utilityType: reading.utilityType,
+            usageKwh: reading.usageKwh !== null ? Number(reading.usageKwh) : undefined,
+            usageMj: reading.usageMj !== null ? Number(reading.usageMj) : undefined,
+            electricityFactorKgCo2PerKwh: factorKgCo2PerKwh,
+          });
+          const oldVal = reading.co2eKg !== null ? Number(reading.co2eKg) : 0;
+          if (Math.abs(newCo2eKg - oldVal) < 0.001) { energySkipped++; return; }
+          await db.update(energyReadingsTable)
+            .set({ co2eKg: newCo2eKg, gridIntensityKgCo2PerKwh: reading.utilityType === "electricity" ? factorKgCo2PerKwh : undefined, emissionMethod: reading.utilityType === "electricity" ? method : undefined, emissionNote: reading.utilityType === "electricity" ? note : undefined })
+            .where(eq(energyReadingsTable.id, reading.id));
+          energyUpdated++;
+        } catch {
+          errors++;
+        }
+      }));
+    }
+
     await logAudit({
       req,
       action: "admin.recalculate_emissions",
       resourceType: "organisation",
       resourceId: orgId,
       outcome: "success",
-      details: { updated, skipped, errors, totalEvents: events.length },
+      details: { updated, skipped, errors, totalEvents: events.length, energyUpdated, energySkipped, totalEnergyReadings: energyReadings.length },
       organisationId: orgId,
     });
 
-    res.json({ updated, skipped, errors, totalEvents: events.length });
+    res.json({ updated, skipped, errors, totalEvents: events.length, energyUpdated, energySkipped, totalEnergyReadings: energyReadings.length });
   } catch (err) {
     req.log.error({ err }, "Recalculate emissions failed");
     res.status(500).json({ error: "Internal Server Error", message: "Failed to recalculate emissions" });

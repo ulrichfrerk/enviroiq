@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { fmtCo2e } from "@/lib/utils";
 import { Link } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { useListFleetEvents } from "@workspace/api-client-react";
@@ -289,8 +290,8 @@ export default function Dashboard() {
       {/* Stat cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
         <StatCard
-          title="Total CO₂e (kg)"
-          value={summary.totalCo2eKg.toLocaleString()}
+          title="Total CO₂e"
+          value={fmtCo2e(summary.totalCo2eKg)}
           icon={CloudRain}
           trend={summary.periodOverPeriodChange || null}
           trendGood={(summary.periodOverPeriodChange ?? 0) < 0}
@@ -303,8 +304,8 @@ export default function Dashboard() {
           }
         />
         <StatCard
-          title="Fleet Emissions (kg)"
-          value={summary.fleetCo2eKg.toLocaleString()}
+          title="Fleet Emissions"
+          value={fmtCo2e(summary.fleetCo2eKg)}
           icon={Car}
           loading={loadingSummary}
           marginPct={summary.fleetMarginPct}
@@ -350,7 +351,7 @@ export default function Dashboard() {
                 <RechartsTooltip
                   contentStyle={{ backgroundColor: 'hsl(var(--card))', borderColor: 'hsl(var(--border))', borderRadius: '8px' }}
                   itemStyle={{ color: 'hsl(var(--foreground))' }}
-                  formatter={(val: number) => [`${val.toLocaleString()} kg`, '']}
+                  formatter={(val: number) => [fmtCo2e(val), '']}
                 />
               </PieChart>
             </ResponsiveContainer>
@@ -414,7 +415,7 @@ export default function Dashboard() {
                   <RechartsTooltip
                     contentStyle={{ backgroundColor: 'hsl(var(--card))', borderColor: 'hsl(var(--border))', borderRadius: '8px' }}
                     labelFormatter={(val: string) => { try { return activePeriod.ttFmt(val); } catch { return val; } }}
-                    formatter={(val: number) => [`${val.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg CO₂e`, "Emissions"]}
+                    formatter={(val: number) => [`${fmtCo2e(val)} CO₂e`, "Emissions"]}
                     cursor={{ stroke: 'hsl(var(--border))', strokeWidth: 1 }}
                   />
                   <Area
@@ -436,12 +437,12 @@ export default function Dashboard() {
             <div className="mt-4 pt-4 border-t border-border/40 flex flex-wrap gap-x-6 gap-y-1 text-xs text-muted-foreground">
               <span>
                 <span className="font-semibold text-foreground">
-                  {emissions.totalCo2eKg.toLocaleString(undefined, { maximumFractionDigits: 0 })} kg
+                  {fmtCo2e(emissions.totalCo2eKg)}
                 </span>{" "}total CO₂e
               </span>
               {emissions.breakdowns.map(b => b.co2eKg > 0 && (
                 <span key={b.label}>
-                  {b.label}: <span className="font-medium text-foreground/80">{b.co2eKg.toLocaleString(undefined, { maximumFractionDigits: 0 })} kg</span>
+                  {b.label}: <span className="font-medium text-foreground/80">{fmtCo2e(b.co2eKg)}</span>
                   <span className="ml-1">({b.percentage.toFixed(0)}%)</span>
                 </span>
               ))}
@@ -599,7 +600,7 @@ export default function Dashboard() {
                       {event.eventType.replace('_', ' ')}
                     </span>
                   </td>
-                  <td className="px-6 py-4 text-emerald-400 font-medium">+{event.co2eKg?.toFixed(2)} kg</td>
+                  <td className="px-6 py-4 text-emerald-400 font-medium">+{fmtCo2e(event.co2eKg)}</td>
                 </tr>
               ))}
               {(!fleetEvents?.items || fleetEvents.items.length === 0) && (

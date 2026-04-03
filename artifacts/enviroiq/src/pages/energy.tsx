@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { fmtCo2e } from "@/lib/utils";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
 import { useListEnergyReadings, useGetEnergyEmailAddress } from "@workspace/api-client-react";
@@ -389,7 +390,7 @@ export default function Energy() {
                     <span className="text-muted-foreground">{totalKwh.toLocaleString(undefined, { maximumFractionDigits: 0 })} kWh total</span>
                   )}
                   {totalCo2e > 0 && (
-                    <span className="text-muted-foreground">{totalCo2e.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg CO₂e total</span>
+                    <span className="text-muted-foreground">{fmtCo2e(totalCo2e)} CO₂e total</span>
                   )}
                   {reviewCount > 0 && <span className="text-amber-400">{reviewCount} need review</span>}
                   {errorCount > 0 && <span className="text-red-400">{errorCount} failed</span>}
@@ -475,7 +476,7 @@ export default function Energy() {
                               )}
                               {item.co2eKg != null && (
                                 <span className={item.co2eKg === 0 ? "text-emerald-400" : ""}>
-                                  {item.co2eKg.toLocaleString(undefined, { maximumFractionDigits: 2 })} kg CO₂e
+                                  {fmtCo2e(item.co2eKg)} CO₂e
                                 </span>
                               )}
                             </div>
