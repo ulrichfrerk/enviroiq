@@ -1,22 +1,65 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Link } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
-import { useGetOrganisationSummary, useListFleetEvents } from "@workspace/api-client-react";
+import { useListFleetEvents } from "@workspace/api-client-react";
 import { useQuery } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
-import { CloudRain, Car, Zap, Target, ArrowUpRight, ArrowDownRight, Loader2, TrendingDown, Beaker, ChevronRight, CheckCircle2, AlertTriangle } from "lucide-react";
+import { CloudRain, Car, Zap, Target, ArrowUpRight, ArrowDownRight, Loader2, TrendingDown, ChevronRight, CheckCircle2, AlertTriangle } from "lucide-react";
 import {
   ResponsiveContainer, PieChart, Pie, Cell, Tooltip as RechartsTooltip,
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
 } from "recharts";
 import { format, parseISO } from "date-fns";
 
-// Period selector options — period sent to API, groupBy derived server-side
+const LS_KEY = "enviroiq_dashboard_period";
+
+// Unified period options — single selector drives both stat cards and trend chart
 const PERIODS = [
-  { label: "7D",  value: "7d",  groupBy: "day",   xFmt: (d: string) => format(parseISO(d), "d MMM"),   ttFmt: (d: string) => format(parseISO(d), "d MMM yyyy") },
-  { label: "30D", value: "30d", groupBy: "day",   xFmt: (d: string) => format(parseISO(d), "d MMM"),   ttFmt: (d: string) => format(parseISO(d), "d MMM yyyy") },
-  { label: "3M",  value: "3m",  groupBy: "week",  xFmt: (d: string) => format(parseISO(d), "d MMM"),   ttFmt: (d: string) => `Week of ${format(parseISO(d), "d MMM yyyy")}` },
-  { label: "12M", value: "12m", groupBy: "month", xFmt: (d: string) => format(parseISO(d), "MMM"),     ttFmt: (d: string) => format(parseISO(d), "MMMM yyyy") },
+  {
+    label: "7D",
+    displayLabel: "Last 7 days",
+    value: "7d",
+    summaryPeriod: "7d",
+    groupBy: "day",
+    xFmt: (d: string) => format(parseISO(d), "d MMM"),
+    ttFmt: (d: string) => format(parseISO(d), "d MMM yyyy"),
+  },
+  {
+    label: "30D",
+    displayLabel: "Last 30 days",
+    value: "30d",
+    summaryPeriod: "30d",
+    groupBy: "day",
+    xFmt: (d: string) => format(parseISO(d), "d MMM"),
+    ttFmt: (d: string) => format(parseISO(d), "d MMM yyyy"),
+  },
+  {
+    label: "3M",
+    displayLabel: "Last 3 months",
+    value: "3m",
+    summaryPeriod: "3m",
+    groupBy: "week",
+    xFmt: (d: string) => format(parseISO(d), "d MMM"),
+    ttFmt: (d: string) => `Week of ${format(parseISO(d), "d MMM yyyy")}`,
+  },
+  {
+    label: "12M",
+    displayLabel: "Last 12 months",
+    value: "12m",
+    summaryPeriod: "12m",
+    groupBy: "month",
+    xFmt: (d: string) => format(parseISO(d), "MMM"),
+    ttFmt: (d: string) => format(parseISO(d), "MMMM yyyy"),
+  },
+  {
+    label: "All",
+    displayLabel: "All time",
+    value: "all",
+    summaryPeriod: "all",
+    groupBy: "month",
+    xFmt: (d: string) => format(parseISO(d), "MMM yy"),
+    ttFmt: (d: string) => format(parseISO(d), "MMMM yyyy"),
+  },
 ] as const;
 
 type PeriodValue = (typeof PERIODS)[number]["value"];
@@ -29,6 +72,36 @@ interface EmissionTotals {
   totalCo2eKg: number;
   timeSeries: TimeSeriesPoint[];
   breakdowns: { label: string; co2eKg: number; percentage: number }[];
+}
+
+interface EsgSummary {
+  organisationId: string;
+  period: string;
+  totalCo2eKg: number;
+  fleetCo2eKg: number;
+  energyCo2eKg: number;
+  totalEnergyKwh: number;
+  fleetDistanceKm: number;
+  activeVehicles: number;
+  sustainabilityScore: number;
+  goalsOnTrack: number;
+  goalsBehind: number;
+  periodOverPeriodChange: number;
+  lastUpdated: string;
+}
+
+function useSummary(orgId: string | undefined, period: PeriodValue) {
+  return useQuery<EsgSummary>({
+    queryKey: ["summary", orgId, period],
+    enabled: !!orgId,
+    staleTime: 5 * 60 * 1000,
+    queryFn: async () => {
+      const params = new URLSearchParams({ period });
+      const res = await fetch(`/api/organisations/${orgId}/summary?${params}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch summary");
+      return res.json() as Promise<EsgSummary>;
+    },
+  });
 }
 
 function useEmissionTotals(orgId: string | undefined, period: PeriodValue) {
@@ -65,11 +138,21 @@ export default function Dashboard() {
   const { session } = useAuth();
   const orgId = session?.organisationId;
 
-  const [trendPeriod, setTrendPeriod] = useState<PeriodValue>("12m");
-  const activePeriod = PERIODS.find(p => p.value === trendPeriod)!;
+  // Shared period — drives both stat cards (summary) and trend chart
+  const [period, setPeriod] = useState<PeriodValue>(() => {
+    const saved = typeof localStorage !== "undefined" ? localStorage.getItem(LS_KEY) : null;
+    return (saved as PeriodValue) || "all";
+  });
 
-  const { data: summary, isLoading: loadingSummary } = useGetOrganisationSummary(orgId!, undefined, { query: { enabled: !!orgId } });
-  const { data: emissions, isLoading: loadingEmissions } = useEmissionTotals(orgId, trendPeriod);
+  // Persist period choice to localStorage
+  useEffect(() => {
+    localStorage.setItem(LS_KEY, period);
+  }, [period]);
+
+  const activePeriod = PERIODS.find(p => p.value === period)!;
+
+  const { data: summary, isLoading: loadingSummary } = useSummary(orgId, period);
+  const { data: emissions, isLoading: loadingEmissions } = useEmissionTotals(orgId, period);
   const { data: fleetEvents } = useListFleetEvents(orgId!, { limit: 5 }, { query: { enabled: !!orgId } });
 
   const { data: maturity } = useQuery<MaturityResult>({
@@ -94,7 +177,7 @@ export default function Dashboard() {
     },
   });
 
-  if (loadingSummary) {
+  if (loadingSummary && !summary) {
     return <div className="flex items-center justify-center h-64"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
   }
 
@@ -108,12 +191,13 @@ export default function Dashboard() {
     { name: 'Other', value: Math.max(0, summary.totalCo2eKg - summary.fleetCo2eKg - summary.energyCo2eKg) }
   ].filter(d => d.value > 0);
 
-  const StatCard = ({ title, value, icon: Icon, trend, trendGood }: {
+  const StatCard = ({ title, value, icon: Icon, trend, trendGood, loading }: {
     title: string;
     value: string;
     icon: React.ComponentType<{ className?: string }>;
     trend?: number | null;
     trendGood?: boolean;
+    loading?: boolean;
   }) => (
     <Card className="p-6 bg-card border-border/50 shadow-lg shadow-black/5 hover:border-border transition-all">
       <div className="flex justify-between items-start mb-4">
@@ -128,7 +212,11 @@ export default function Dashboard() {
         )}
       </div>
       <h3 className="text-muted-foreground text-sm font-medium">{title}</h3>
-      <p className="text-3xl font-display font-bold text-foreground mt-1 tracking-tight">{value}</p>
+      {loading ? (
+        <div className="mt-2"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>
+      ) : (
+        <p className="text-3xl font-display font-bold text-foreground mt-1 tracking-tight">{value}</p>
+      )}
     </Card>
   );
 
@@ -137,7 +225,6 @@ export default function Dashboard() {
     if (!emissions?.timeSeries?.length) return undefined;
     const n = emissions.timeSeries.length;
     if (n <= 14) return undefined; // show all
-    // For dense series (30d/day = ~30 points), tick every 5–7 days
     const step = Math.ceil(n / 8);
     return emissions.timeSeries.filter((_, i) => i % step === 0).map(d => d.date);
   })();
@@ -146,6 +233,7 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-8 pb-10">
+      {/* Header */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight text-foreground">{session?.organisationName} Dashboard</h1>
@@ -157,17 +245,57 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* Period selector — controls both stat cards and trend chart */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <p className="text-sm text-muted-foreground">
+            Showing <span className="font-medium text-foreground">{activePeriod.displayLabel}</span>
+          </p>
+        </div>
+        <div className="flex rounded-lg border border-border/60 overflow-hidden text-xs font-medium self-start sm:self-auto">
+          {PERIODS.map(p => (
+            <button
+              key={p.value}
+              onClick={() => setPeriod(p.value)}
+              className={`px-3 py-2 transition-colors ${
+                period === p.value
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-secondary/60"
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Stat cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
         <StatCard
           title="Total CO₂e (kg)"
           value={summary.totalCo2eKg.toLocaleString()}
           icon={CloudRain}
-          trend={summary.periodOverPeriodChange}
-          trendGood={summary.periodOverPeriodChange! < 0}
+          trend={summary.periodOverPeriodChange || null}
+          trendGood={(summary.periodOverPeriodChange ?? 0) < 0}
+          loading={loadingSummary}
         />
-        <StatCard title="Fleet Emissions (kg)" value={summary.fleetCo2eKg.toLocaleString()} icon={Car} />
-        <StatCard title="Energy Usage (kWh)" value={summary.totalEnergyKwh.toLocaleString()} icon={Zap} />
-        <StatCard title="Goals On Track" value={`${summary.goalsOnTrack || 0}`} icon={Target} />
+        <StatCard
+          title="Fleet Emissions (kg)"
+          value={summary.fleetCo2eKg.toLocaleString()}
+          icon={Car}
+          loading={loadingSummary}
+        />
+        <StatCard
+          title="Energy Usage (kWh)"
+          value={summary.totalEnergyKwh.toLocaleString()}
+          icon={Zap}
+          loading={loadingSummary}
+        />
+        <StatCard
+          title="Goals On Track"
+          value={`${summary.goalsOnTrack || 0}`}
+          icon={Target}
+        />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -207,24 +335,9 @@ export default function Dashboard() {
         </Card>
 
         <Card className="p-6 col-span-1 lg:col-span-2 border-border/50">
-          {/* Header row with period toggle */}
           <div className="flex items-center justify-between mb-6">
             <h3 className="font-semibold text-lg">Emissions Trend</h3>
-            <div className="flex rounded-lg border border-border/60 overflow-hidden text-xs font-medium">
-              {PERIODS.map(p => (
-                <button
-                  key={p.value}
-                  onClick={() => setTrendPeriod(p.value)}
-                  className={`px-3 py-1.5 transition-colors ${
-                    trendPeriod === p.value
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:bg-secondary/60"
-                  }`}
-                >
-                  {p.label}
-                </button>
-              ))}
-            </div>
+            <span className="text-xs text-muted-foreground">{activePeriod.displayLabel}</span>
           </div>
 
           <div className="h-[280px]">

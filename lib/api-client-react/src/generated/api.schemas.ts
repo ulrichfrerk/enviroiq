@@ -889,11 +889,16 @@ export type GetOrganisationSummaryPeriod =
   (typeof GetOrganisationSummaryPeriod)[keyof typeof GetOrganisationSummaryPeriod];
 
 export const GetOrganisationSummaryPeriod = {
+  all: "all",
   day: "day",
   week: "week",
   month: "month",
   quarter: "quarter",
   year: "year",
+  "7d": "7d",
+  "30d": "30d",
+  "3m": "3m",
+  "12m": "12m",
 } as const;
 
 export type ListFleetEventsParams = {

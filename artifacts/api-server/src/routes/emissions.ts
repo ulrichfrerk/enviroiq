@@ -112,21 +112,24 @@ router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
 
 // GET /organisations/:orgId/emissions/totals
 // Query params:
-//   period  = "7d" | "30d" | "3m" | "12m"  (or legacy "day"|"week"|"month"|"quarter"|"year")
+//   period  = "all" | "7d" | "30d" | "3m" | "12m"  (or legacy "day"|"week"|"month"|"quarter"|"year")
 //   groupBy = "day" | "week" | "month"      (default depends on period)
 //
 // Returns a fully-filled time series (every period in range, 0 for empty buckets)
 // using PostgreSQL generate_series so the chart never shows gaps.
+// "all" returns all recorded data grouped by month.
 router.get("/totals", requireAuth, requireOrgAccess, async (req, res) => {
   try {
     const orgId = req.params.orgId as string;
     const periodParam = (req.query.period as string) || "12m";
+    const isAll = periodParam === "all";
 
     const now = new Date();
     const fromDate = new Date(now);
 
     // Map period string → lookback
     switch (periodParam) {
+      case "all":                     fromDate.setFullYear(2018, 0, 1); break; // epoch-ish; covers all realistic data
       case "7d":      case "day":     fromDate.setDate(now.getDate() - 7); break;
       case "30d":     case "week":    fromDate.setDate(now.getDate() - 30); break;
       case "3m":      case "quarter": fromDate.setMonth(now.getMonth() - 3); break;
@@ -138,12 +141,12 @@ router.get("/totals", requireAuth, requireOrgAccess, async (req, res) => {
     // Determine groupBy: explicit param wins, otherwise default by period
     let groupByParam = (req.query.groupBy as string) || "";
     if (!["day", "week", "month"].includes(groupByParam)) {
-      if (periodParam === "7d" || periodParam === "30d" || periodParam === "day" || periodParam === "week") {
+      if (!isAll && (periodParam === "7d" || periodParam === "30d" || periodParam === "day" || periodParam === "week")) {
         groupByParam = "day";
-      } else if (periodParam === "3m" || periodParam === "quarter") {
+      } else if (!isAll && (periodParam === "3m" || periodParam === "quarter")) {
         groupByParam = "week";
       } else {
-        groupByParam = "month";
+        groupByParam = "month"; // all-time and 12m both group by month
       }
     }
 

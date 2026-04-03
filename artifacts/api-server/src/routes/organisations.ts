@@ -245,28 +245,44 @@ router.post("/:orgId/webhook-credentials/rotate", requireAuth, requireOrgAdmin, 
 });
 
 // GET /organisations/:orgId/summary
+// Query params:
+//   period = "all" | "7d" | "30d" | "3m" | "12m"  (or legacy "day"|"week"|"month"|"quarter"|"year")
+//   "all" removes all date filters and returns all-time totals.
+//   Default: "all"
 router.get("/:orgId/summary", requireAuth, requireOrgAccess, async (req, res) => {
   try {
     const orgId = req.params.orgId as string;
-    const period = (req.query.period as string) || "month";
+    const period = (req.query.period as string) || "all";
 
     const now = new Date();
-    let fromDate = new Date();
-    switch (period) {
-      case "day": fromDate.setDate(now.getDate() - 1); break;
-      case "week": fromDate.setDate(now.getDate() - 7); break;
-      case "month": fromDate.setMonth(now.getMonth() - 1); break;
-      case "quarter": fromDate.setMonth(now.getMonth() - 3); break;
-      case "year": fromDate.setFullYear(now.getFullYear() - 1); break;
+    // null = no date filter (all-time)
+    let fromDate: Date | null = null;
+
+    if (period !== "all") {
+      fromDate = new Date(now);
+      switch (period) {
+        case "7d":  case "day":     fromDate.setDate(now.getDate() - 7);            break;
+        case "30d": case "week":    fromDate.setDate(now.getDate() - 30);           break;
+        case "month":               fromDate.setMonth(now.getMonth() - 1);          break;
+        case "3m":  case "quarter": fromDate.setMonth(now.getMonth() - 3);          break;
+        case "12m": case "year":    fromDate.setFullYear(now.getFullYear() - 1);    break;
+        default:                    fromDate.setFullYear(now.getFullYear() - 1);    break;
+      }
     }
+
+    const fleetDateClause = fromDate
+      ? sql`AND recorded_at >= ${fromDate} AND recorded_at <= ${now}`
+      : sql``;
+    const energyDateClause = fromDate
+      ? sql`AND period_start >= ${fromDate} AND period_end <= ${now}`
+      : sql``;
 
     // Get fleet emission totals
     const fleetResult = await db.execute(sql`
       SELECT COALESCE(SUM(co2e_kg), 0) as total_co2e, COALESCE(SUM(distance_km), 0) as total_distance
       FROM fleet_events
       WHERE organisation_id = ${orgId}
-        AND recorded_at >= ${fromDate}
-        AND recorded_at <= ${now}
+        ${fleetDateClause}
     `);
 
     // Get energy emission totals
@@ -274,8 +290,7 @@ router.get("/:orgId/summary", requireAuth, requireOrgAccess, async (req, res) =>
       SELECT COALESCE(SUM(co2e_kg), 0) as total_co2e, COALESCE(SUM(usage_kwh), 0) as total_kwh
       FROM energy_readings
       WHERE organisation_id = ${orgId}
-        AND period_start >= ${fromDate}
-        AND period_end <= ${now}
+        ${energyDateClause}
     `);
 
     // Get active vehicles
