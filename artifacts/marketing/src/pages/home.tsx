@@ -2,17 +2,17 @@ import { motion } from "framer-motion";
 import { Navbar } from "@/components/navbar";
 import { Footer } from "@/components/footer";
 import { Button } from "@/components/ui/button";
-import { ArrowRight, Activity, Eye, FileCheck, LayoutDashboard, Zap, Droplet, Truck, Building2, Server, Leaf } from "lucide-react";
+import {
+  ArrowRight, Activity, Eye, FileCheck, LayoutDashboard, Zap, Truck,
+  Building2, Leaf, ShieldCheck, Users, BookOpen, Scale, BarChart3,
+  Fingerprint, Globe, Sparkles, Lock, Database, ChevronRight, TrendingDown,
+  ClipboardList, PieChart, FileText, Bolt
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
 const staggerContainer = {
   hidden: { opacity: 0 },
-  show: {
-    opacity: 1,
-    transition: {
-      staggerChildren: 0.1
-    }
-  }
+  show: { opacity: 1, transition: { staggerChildren: 0.08 } }
 };
 
 const fadeIn = {
@@ -26,7 +26,7 @@ export default function Home() {
       <Navbar />
 
       <main>
-        {/* HERO SECTION */}
+        {/* ── HERO ─────────────────────────────────────────────────────────── */}
         <section className="relative pt-32 pb-20 md:pt-48 md:pb-32 overflow-hidden">
           <div className="absolute inset-0 z-0">
             <div className="absolute inset-0 bg-gradient-to-b from-primary/5 via-background to-background" />
@@ -34,33 +34,28 @@ export default function Home() {
           </div>
 
           <div className="container mx-auto px-6 relative z-10">
-            <motion.div
-              variants={staggerContainer}
-              initial="hidden"
-              animate="show"
-              className="max-w-4xl"
-            >
+            <motion.div variants={staggerContainer} initial="hidden" animate="show" className="max-w-4xl">
               <motion.div variants={fadeIn} className="mb-6 flex items-center gap-3">
                 <Badge variant="outline" className="border-primary/30 text-primary bg-primary/8 px-3 py-1">
                   <Activity className="w-3 h-3 mr-2" />
-                  The Operational ESG Layer
+                  Full E + S + G Coverage
                 </Badge>
-                <span className="text-sm font-mono text-muted-foreground">STATUS: LIVE</span>
+                <span className="text-sm font-mono text-muted-foreground">PLATFORM: LIVE</span>
               </motion.div>
 
               <motion.h1 variants={fadeIn} className="text-5xl md:text-7xl font-bold tracking-tighter mb-8 leading-[1.1]">
-                EnviroIQ: <br />
+                EnviroIQ:<br />
                 <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary to-emerald-500">
-                  Real Time ESG Intelligence
+                  Real-Time ESG Intelligence
                 </span>
               </motion.h1>
 
               <motion.p variants={fadeIn} className="text-xl md:text-2xl text-muted-foreground mb-6 max-w-3xl leading-relaxed">
-                From retrospective reporting to live operational control.
+                The complete ESG platform for New Zealand organisations — covering Environment, Social, and Governance in one unified system.
               </motion.p>
 
               <motion.p variants={fadeIn} className="text-lg text-muted-foreground/80 mb-10 max-w-2xl leading-relaxed">
-                Turn your energy, fleet, water, and infrastructure data into real time sustainability performance — not month-end reports.
+                Fleet emissions, energy tracking, workforce reporting, board-ready PDF packs, NZ real-time grid data, AI-generated narratives, and full audit logging — all in one platform.
               </motion.p>
 
               <motion.div variants={fadeIn} className="flex flex-col sm:flex-row gap-4">
@@ -71,16 +66,35 @@ export default function Home() {
                   </a>
                 </Button>
                 <Button size="lg" variant="outline" className="h-14 px-8 text-lg border-border hover:bg-muted" asChild>
-                  <a href="#how-it-works">See How it Works</a>
+                  <a href="#features">Explore Features</a>
                 </Button>
               </motion.div>
+            </motion.div>
+
+            {/* Pillar badges */}
+            <motion.div
+              initial={{ opacity: 0, y: 30 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.8, delay: 0.5 }}
+              className="mt-16 flex flex-wrap gap-4"
+            >
+              {[
+                { label: "Environmental", sub: "Fleet · Energy · Grid Intensity", color: "bg-emerald-50 border-emerald-200 text-emerald-800" },
+                { label: "Social", sub: "Workforce · H&S · Training", color: "bg-blue-50 border-blue-200 text-blue-800" },
+                { label: "Governance", sub: "Board · Policy · Frameworks", color: "bg-purple-50 border-purple-200 text-purple-800" },
+              ].map((p, i) => (
+                <div key={i} className={`px-5 py-3 rounded-xl border text-sm font-semibold ${p.color}`}>
+                  {p.label}
+                  <span className="block font-normal opacity-75 text-xs mt-0.5">{p.sub}</span>
+                </div>
+              ))}
             </motion.div>
 
             <motion.div
               initial={{ opacity: 0, y: 40 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 1, delay: 0.4 }}
-              className="mt-20 relative rounded-2xl border border-border bg-card overflow-hidden shadow-xl"
+              className="mt-16 relative rounded-2xl border border-border bg-card overflow-hidden shadow-xl"
             >
               <img
                 src={`${import.meta.env.BASE_URL}images/hero-data.png`}
@@ -92,26 +106,24 @@ export default function Home() {
           </div>
         </section>
 
-        {/* THE PROBLEM SECTION */}
-        <section id="problem" className="py-24 bg-muted/50 border-y border-border relative">
+        {/* ── THE PROBLEM ──────────────────────────────────────────────────── */}
+        <section id="problem" className="py-24 bg-muted/50 border-y border-border">
           <div className="container mx-auto px-6">
             <div className="grid md:grid-cols-2 gap-16 items-center">
               <motion.div
-                initial="hidden"
-                whileInView="show"
-                viewport={{ once: true, margin: "-100px" }}
+                initial="hidden" whileInView="show" viewport={{ once: true, margin: "-100px" }}
                 variants={staggerContainer}
               >
                 <motion.h2 variants={fadeIn} className="text-4xl font-bold mb-6">
                   ESG today is <span className="text-destructive">broken.</span>
                 </motion.h2>
-
                 <ul className="space-y-6 mb-10">
                   {[
-                    "Reports are 30 to 90 days behind reality",
-                    "Data is fragmented across systems",
+                    "Reports are 30–90 days behind reality",
+                    "Social and Governance data sits in spreadsheets",
                     "Decisions are made on averages, not truth",
-                    "Compliance is manual, expensive, and reactive"
+                    "Compliance is manual, expensive, and reactive",
+                    "Board packs take weeks to compile"
                   ].map((item, i) => (
                     <motion.li variants={fadeIn} key={i} className="flex items-start gap-4">
                       <div className="w-1.5 h-1.5 rounded-full bg-destructive mt-2.5 shrink-0" />
@@ -119,7 +131,6 @@ export default function Home() {
                     </motion.li>
                   ))}
                 </ul>
-
                 <motion.div variants={fadeIn} className="p-6 rounded-xl bg-destructive/8 border border-destructive/20 inline-block">
                   <p className="text-xl font-medium text-destructive font-mono">
                     "You can't optimise what you can't see in real time."
@@ -132,113 +143,338 @@ export default function Home() {
                 whileInView={{ opacity: 1, scale: 1 }}
                 viewport={{ once: true }}
                 transition={{ duration: 0.8 }}
-                className="relative h-full min-h-[400px] rounded-2xl border border-border bg-white shadow-md flex flex-col justify-center p-10"
+                className="relative rounded-2xl border border-border bg-white shadow-md flex flex-col justify-center p-10"
               >
                 <div className="space-y-8">
-                  <div className="flex items-center gap-4 opacity-40">
-                    <div className="w-12 h-12 rounded-full border border-dashed border-gray-300 flex items-center justify-center">
-                      <span className="text-xs text-muted-foreground">Q1</span>
+                  {[
+                    { label: "Data Collection", q: "Q1", op: "opacity-40" },
+                    { label: "Spreadsheet Aggregation", q: "Q2", op: "opacity-60" },
+                    { label: "Decisions Made (Too Late)", q: "Q3", op: "text-destructive" }
+                  ].map((item, i) => (
+                    <div key={i} className={`flex items-center gap-4 ${item.op}`}>
+                      <div className={`w-12 h-12 rounded-full border flex items-center justify-center ${item.op === "text-destructive" ? "border-destructive bg-destructive/10 text-destructive" : "border-dashed border-gray-300"}`}>
+                        <span className="text-xs font-bold">{item.q}</span>
+                      </div>
+                      <div className={`h-px flex-1 ${item.op === "text-destructive" ? "bg-destructive" : "bg-gray-200"}`} />
+                      <div className={`text-sm font-mono text-center ${item.op === "text-destructive" ? "font-bold text-destructive" : "text-muted-foreground"}`}>{item.label}</div>
                     </div>
-                    <div className="h-px flex-1 bg-gray-200" />
-                    <div className="text-sm font-mono text-center text-muted-foreground">Data Collection</div>
-                  </div>
-                  <div className="flex items-center gap-4 opacity-60">
-                    <div className="w-12 h-12 rounded-full border border-dashed border-gray-300 flex items-center justify-center">
-                      <span className="text-xs text-muted-foreground">Q2</span>
-                    </div>
-                    <div className="h-px flex-1 bg-gray-200" />
-                    <div className="text-sm font-mono text-center text-muted-foreground">Spreadsheet Aggregation</div>
-                  </div>
-                  <div className="flex items-center gap-4 text-destructive">
-                    <div className="w-12 h-12 rounded-full border border-destructive bg-destructive/10 flex items-center justify-center">
-                      <span className="text-xs font-bold">Q3</span>
-                    </div>
-                    <div className="h-px flex-1 bg-destructive" />
-                    <div className="text-sm font-mono font-bold text-center">Decisions Made (Too Late)</div>
-                  </div>
+                  ))}
                 </div>
               </motion.div>
             </div>
           </div>
         </section>
 
-        {/* DIFFERENTIATION SECTION */}
-        <section id="solution" className="py-32 relative overflow-hidden">
-          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(34,197,94,0.06)_0%,transparent_70%)]" />
-
-          <div className="container mx-auto px-6 relative z-10 text-center">
-            <motion.div
-              initial="hidden"
-              whileInView="show"
-              viewport={{ once: true }}
-              variants={staggerContainer}
-              className="max-w-4xl mx-auto"
-            >
-              <motion.h2 variants={fadeIn} className="text-sm font-mono text-primary mb-4 tracking-wider">PHASE THREE OF ESG</motion.h2>
-              <motion.h3 variants={fadeIn} className="text-4xl md:text-5xl font-bold mb-8 text-foreground">
-                EnviroIQ introduces the <br className="hidden md:block" />
-                <span className="text-transparent bg-clip-text bg-gradient-to-r from-foreground to-muted-foreground">Operational ESG Layer</span>
-              </motion.h3>
-
-              <motion.p variants={fadeIn} className="text-2xl text-muted-foreground mb-16">
-                Instead of asking <span className="italic text-foreground/50">"What happened last quarter?"</span> — you now ask:
+        {/* ── FULL FEATURE GRID ─────────────────────────────────────────────── */}
+        <section id="features" className="py-32 bg-background">
+          <div className="container mx-auto px-6">
+            <div className="text-center mb-20">
+              <motion.p initial={{ opacity: 0 }} whileInView={{ opacity: 1 }} viewport={{ once: true }} className="text-sm font-mono text-primary mb-4 tracking-wider">PLATFORM CAPABILITIES</motion.p>
+              <motion.h2 initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }} className="text-4xl md:text-5xl font-bold mb-6">
+                Everything. One platform.
+              </motion.h2>
+              <motion.p initial={{ opacity: 0 }} whileInView={{ opacity: 1 }} viewport={{ once: true }} className="text-xl text-muted-foreground max-w-2xl mx-auto">
+                Built specifically for New Zealand organisations who need a complete, audit-ready ESG system today.
               </motion.p>
+            </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 text-left mb-16">
+            {/* ── Environmental ── */}
+            <div className="mb-16">
+              <div className="flex items-center gap-3 mb-8">
+                <div className="w-8 h-8 rounded-lg bg-emerald-100 flex items-center justify-center">
+                  <Leaf className="w-5 h-5 text-emerald-700" />
+                </div>
+                <h3 className="text-2xl font-bold text-foreground">Environmental</h3>
+                <div className="h-px flex-1 bg-border" />
+              </div>
+              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
                 {[
-                  { q: "What's happening right now?", icon: Activity },
-                  { q: "Where are we wasting energy?", icon: Zap },
-                  { q: "Which assets are underperforming?", icon: Building2 },
-                  { q: "What do we fix today?", icon: Eye }
-                ].map((item, i) => (
-                  <motion.div variants={fadeIn} key={i} className="p-6 rounded-2xl bg-white border border-border hover:border-primary/40 transition-colors flex items-center gap-4 shadow-sm">
-                    <div className="p-3 rounded-lg bg-primary/10 text-primary shrink-0">
-                      <item.icon className="w-6 h-6" />
+                  {
+                    icon: Truck,
+                    title: "Fleet & Scope 1 Emissions",
+                    desc: "Automatic per-vehicle CO₂e calculations using NZ MfE 2024 emission factors. Supports diesel, petrol, hybrid, PHEV, and EV. Fuelsaver plate lookup for accurate vehicle class identification.",
+                    badge: "NZ MfE 2024"
+                  },
+                  {
+                    icon: Bolt,
+                    title: "Energy & Scope 2 Emissions",
+                    desc: "Track electricity and gas consumption with live NZ grid intensity data from the Electricity Authority em6 API. Automatic Scope 2 calculations using real-time carbon intensity.",
+                    badge: "em6 Real-Time"
+                  },
+                  {
+                    icon: BarChart3,
+                    title: "Year-on-Year Trend Analysis",
+                    desc: "24-month rolling trend charts with Q1/Q2/Q3/Q4/H1/H2 period selection. Stacked bar charts comparing fleet vs energy. Automatic partial-month exclusion for clean data.",
+                    badge: "24-Month History"
+                  },
+                  {
+                    icon: TrendingDown,
+                    title: "Emission Targets & Goals",
+                    desc: "Set reduction targets per emissions category. Track on-track, at-risk, and behind-schedule goals. Goals appear in the board PDF and executive summary.",
+                    badge: "Target Tracking"
+                  },
+                  {
+                    icon: Globe,
+                    title: "Embeddable Public Widget",
+                    desc: "Embed a real-time sustainability dashboard directly on your company website. Show customers your live ESG score and emissions data — no login required.",
+                    badge: "Public API"
+                  },
+                  {
+                    icon: PieChart,
+                    title: "ESG Maturity Score",
+                    desc: "Composite 0–100 sustainability score from data completeness, goal progress, and emissions intensity. Colour-coded rating from Critical Risk to Excellent.",
+                    badge: "Live Score"
+                  },
+                ].map((f, i) => (
+                  <motion.div
+                    key={i}
+                    initial={{ opacity: 0, y: 20 }}
+                    whileInView={{ opacity: 1, y: 0 }}
+                    viewport={{ once: true }}
+                    transition={{ delay: i * 0.07 }}
+                    className="p-6 rounded-2xl bg-emerald-50 border border-emerald-100 hover:border-emerald-300 hover:shadow-sm transition-all"
+                  >
+                    <div className="flex items-start justify-between mb-4">
+                      <div className="p-2.5 rounded-xl bg-emerald-100">
+                        <f.icon className="w-5 h-5 text-emerald-700" />
+                      </div>
+                      <span className="text-[10px] font-mono font-bold text-emerald-700 bg-emerald-100 px-2 py-1 rounded-full">{f.badge}</span>
                     </div>
-                    <span className="text-xl font-medium text-foreground">{item.q}</span>
+                    <h4 className="font-bold text-foreground mb-2">{f.title}</h4>
+                    <p className="text-sm text-muted-foreground leading-relaxed">{f.desc}</p>
                   </motion.div>
                 ))}
               </div>
+            </div>
 
-              <motion.div
-                initial={{ opacity: 0, y: 40 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true }}
-                transition={{ duration: 1 }}
-                className="relative rounded-2xl border border-border overflow-hidden shadow-xl"
-              >
-                <img
-                  src={`${import.meta.env.BASE_URL}images/dashboard-mockup.png`}
-                  alt="EnviroIQ Dashboard UI Mockup"
-                  className="w-full h-auto object-cover"
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-background via-transparent to-transparent" />
-              </motion.div>
-            </motion.div>
+            {/* ── Social ── */}
+            <div className="mb-16">
+              <div className="flex items-center gap-3 mb-8">
+                <div className="w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center">
+                  <Users className="w-5 h-5 text-blue-700" />
+                </div>
+                <h3 className="text-2xl font-bold text-foreground">Social</h3>
+                <div className="h-px flex-1 bg-border" />
+              </div>
+              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
+                {[
+                  {
+                    icon: Users,
+                    title: "Workforce Diversity Snapshots",
+                    desc: "Track headcount, gender diversity ratios, part-time vs full-time split, Māori and Pasifika representation, and employee engagement scores over time.",
+                    badge: "Annual Snapshots"
+                  },
+                  {
+                    icon: ShieldCheck,
+                    title: "Health & Safety Incidents",
+                    desc: "Log TRIFR, near-misses, lost time injuries, and fatalities. Full incident register with severity classification, investigation notes, and trend tracking.",
+                    badge: "H&S Register"
+                  },
+                  {
+                    icon: BookOpen,
+                    title: "Training & Development",
+                    desc: "Record mandatory training completions, hours per employee, and certification status. Track training investment and coverage rates across the workforce.",
+                    badge: "Training Records"
+                  },
+                  {
+                    icon: ClipboardList,
+                    title: "Social Summary Dashboard",
+                    desc: "Board-ready social metrics at a glance — headcount trends, incident rates, training coverage, and key social KPIs with historical comparisons.",
+                    badge: "Board-Ready"
+                  },
+                  {
+                    icon: Activity,
+                    title: "Trend Reporting",
+                    desc: "Year-on-year comparisons for TRIFR, workforce diversity, and training investment. Social data included in the board PDF pack executive summary.",
+                    badge: "YoY Analysis"
+                  },
+                  {
+                    icon: Sparkles,
+                    title: "AI Mission Statement",
+                    desc: "AI-powered ESG mission statement generator. Creates a concise, professional sustainability statement from your actual ESG data — unique to your organisation.",
+                    badge: "AI-Assisted"
+                  },
+                ].map((f, i) => (
+                  <motion.div
+                    key={i}
+                    initial={{ opacity: 0, y: 20 }}
+                    whileInView={{ opacity: 1, y: 0 }}
+                    viewport={{ once: true }}
+                    transition={{ delay: i * 0.07 }}
+                    className="p-6 rounded-2xl bg-blue-50 border border-blue-100 hover:border-blue-300 hover:shadow-sm transition-all"
+                  >
+                    <div className="flex items-start justify-between mb-4">
+                      <div className="p-2.5 rounded-xl bg-blue-100">
+                        <f.icon className="w-5 h-5 text-blue-700" />
+                      </div>
+                      <span className="text-[10px] font-mono font-bold text-blue-700 bg-blue-100 px-2 py-1 rounded-full">{f.badge}</span>
+                    </div>
+                    <h4 className="font-bold text-foreground mb-2">{f.title}</h4>
+                    <p className="text-sm text-muted-foreground leading-relaxed">{f.desc}</p>
+                  </motion.div>
+                ))}
+              </div>
+            </div>
+
+            {/* ── Governance ── */}
+            <div>
+              <div className="flex items-center gap-3 mb-8">
+                <div className="w-8 h-8 rounded-lg bg-purple-100 flex items-center justify-center">
+                  <Scale className="w-5 h-5 text-purple-700" />
+                </div>
+                <h3 className="text-2xl font-bold text-foreground">Governance</h3>
+                <div className="h-px flex-1 bg-border" />
+              </div>
+              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
+                {[
+                  {
+                    icon: Scale,
+                    title: "Board Composition Tracking",
+                    desc: "Record board size, gender diversity, independent directors, Māori representation, and average tenure. Track governance composition year over year.",
+                    badge: "Board Data"
+                  },
+                  {
+                    icon: FileCheck,
+                    title: "Policy & Framework Alignment",
+                    desc: "Manage your policy checklist across ESG, climate, H&S, privacy, supply chain, whistleblower, and more. Progress bar shows overall policy coverage with per-policy dates.",
+                    badge: "Policy Checklist"
+                  },
+                  {
+                    icon: Database,
+                    title: "Framework Alignment",
+                    desc: "Track alignment to NZ Climate Disclosure, GRI Standards, UN SDGs, TCFD, Toitū CEMARS, and GHG Protocol. Visual indicators for each framework's status.",
+                    badge: "NZ Standards"
+                  },
+                  {
+                    icon: FileText,
+                    title: "Board PDF Pack",
+                    desc: "Professional 5-page board report with dark navy cover, executive dashboard, AI-generated narrative, Scope 1 fleet analysis, Scope 2 energy breakdown, and methodology. Generated on demand.",
+                    badge: "5-Page PDF"
+                  },
+                  {
+                    icon: Lock,
+                    title: "Full Audit Logging",
+                    desc: "Immutable audit trail for every data change, login, and report download. Role-based access control with Super Admin, Admin, Manager, and Viewer roles per organisation.",
+                    badge: "RBAC + Audit"
+                  },
+                  {
+                    icon: Fingerprint,
+                    title: "Passkey / WebAuthn Auth",
+                    desc: "Passwordless authentication via device biometrics (Face ID, Touch ID, Windows Hello). No passwords to steal, no resets to manage — enterprise-grade security by default.",
+                    badge: "Passwordless"
+                  },
+                ].map((f, i) => (
+                  <motion.div
+                    key={i}
+                    initial={{ opacity: 0, y: 20 }}
+                    whileInView={{ opacity: 1, y: 0 }}
+                    viewport={{ once: true }}
+                    transition={{ delay: i * 0.07 }}
+                    className="p-6 rounded-2xl bg-purple-50 border border-purple-100 hover:border-purple-300 hover:shadow-sm transition-all"
+                  >
+                    <div className="flex items-start justify-between mb-4">
+                      <div className="p-2.5 rounded-xl bg-purple-100">
+                        <f.icon className="w-5 h-5 text-purple-700" />
+                      </div>
+                      <span className="text-[10px] font-mono font-bold text-purple-700 bg-purple-100 px-2 py-1 rounded-full">{f.badge}</span>
+                    </div>
+                    <h4 className="font-bold text-foreground mb-2">{f.title}</h4>
+                    <p className="text-sm text-muted-foreground leading-relaxed">{f.desc}</p>
+                  </motion.div>
+                ))}
+              </div>
+            </div>
           </div>
         </section>
 
-        {/* HOW IT WORKS / PIPELINE */}
+        {/* ── BOARD PDF HIGHLIGHT ──────────────────────────────────────────── */}
+        <section className="py-24 bg-[#0f172a] text-white relative overflow-hidden">
+          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(34,197,94,0.12)_0%,transparent_60%)]" />
+          <div className="container mx-auto px-6 relative z-10">
+            <div className="grid md:grid-cols-2 gap-16 items-center">
+              <motion.div
+                initial="hidden" whileInView="show" viewport={{ once: true }}
+                variants={staggerContainer}
+              >
+                <motion.div variants={fadeIn} className="inline-flex items-center gap-2 bg-white/10 border border-white/20 rounded-full px-4 py-1.5 text-sm font-mono text-green-400 mb-6">
+                  <FileText className="w-3.5 h-3.5" />
+                  Board-Ready PDF Reports
+                </motion.div>
+                <motion.h2 variants={fadeIn} className="text-4xl font-bold mb-6 leading-tight">
+                  Professional board packs.<br />
+                  <span className="text-green-400">Generated in seconds.</span>
+                </motion.h2>
+                <motion.p variants={fadeIn} className="text-lg text-slate-400 mb-8 leading-relaxed">
+                  Stop spending weeks compiling board reports. EnviroIQ generates a complete 5-page ESG board pack on demand — with AI-written executive narrative, score interpretation, and full methodology.
+                </motion.p>
+                <motion.ul variants={staggerContainer} className="space-y-4">
+                  {[
+                    "Dark navy cover page with company name and report period",
+                    "Executive dashboard — KPI cards, scope split, YoY comparison",
+                    "AI-generated narrative — strengths, risks, recommended actions",
+                    "Scope 1 fleet analysis with top emitter bar charts",
+                    "Scope 2 energy breakdown and monthly data table",
+                    "NZ MfE methodology and GHG Protocol framework alignment",
+                  ].map((item, i) => (
+                    <motion.li key={i} variants={fadeIn} className="flex items-center gap-3 text-slate-300">
+                      <ChevronRight className="w-4 h-4 text-green-400 shrink-0" />
+                      {item}
+                    </motion.li>
+                  ))}
+                </motion.ul>
+              </motion.div>
+
+              <motion.div
+                initial={{ opacity: 0, x: 30 }}
+                whileInView={{ opacity: 1, x: 0 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.8 }}
+                className="space-y-4"
+              >
+                {/* Simulated PDF pages */}
+                {[
+                  { label: "Cover Page", bg: "bg-[#0f172a] border-slate-700", text: "text-white", preview: "ESG Board Pack · Dark navy with company branding" },
+                  { label: "Executive Dashboard", bg: "bg-white border-slate-200", text: "text-slate-800", preview: "KPI tiles · Scope split · YoY comparison" },
+                  { label: "AI Executive Summary", bg: "bg-white border-slate-200", text: "text-slate-800", preview: "Strengths · Risks · Recommended Actions" },
+                  { label: "Fleet & Energy Analysis", bg: "bg-white border-slate-200", text: "text-slate-800", preview: "Progress bars · Emitter charts · Monthly table" },
+                  { label: "Methodology", bg: "bg-white border-slate-200", text: "text-slate-800", preview: "NZ MfE 2024 · GHG Protocol · Toitū CEMARS" },
+                ].map((page, i) => (
+                  <div key={i} className={`rounded-lg border p-4 ${page.bg} flex items-center justify-between`} style={{ transform: `translateX(${i * 4}px)`, opacity: 1 - i * 0.08 }}>
+                    <div>
+                      <div className={`text-xs font-mono font-bold mb-0.5 ${i === 0 ? "text-green-400" : "text-slate-500"}`}>PAGE {i + 1}</div>
+                      <div className={`font-semibold text-sm ${page.text}`}>{page.label}</div>
+                      <div className="text-xs text-slate-400 mt-0.5">{page.preview}</div>
+                    </div>
+                    <div className={`text-xs font-mono px-2 py-1 rounded ${i === 0 ? "bg-green-400/20 text-green-400" : "bg-slate-100 text-slate-500"}`}>
+                      {i + 1} of 5
+                    </div>
+                  </div>
+                ))}
+              </motion.div>
+            </div>
+          </div>
+        </section>
+
+        {/* ── HOW IT WORKS ─────────────────────────────────────────────────── */}
         <section id="how-it-works" className="py-24 bg-muted/50 border-y border-border">
           <div className="container mx-auto px-6">
             <div className="text-center mb-16">
               <h2 className="text-3xl md:text-4xl font-bold mb-4 text-foreground">Connects directly into live systems</h2>
               <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
-                No more chasing spreadsheets. We pull raw telemetry data and convert it instantly.
+                No more chasing spreadsheets. Real-time data flows directly into your ESG record.
               </p>
             </div>
 
-            <div className="flex flex-col lg:flex-row items-center justify-between gap-12 relative">
-              {/* Left side inputs */}
+            <div className="flex flex-col lg:flex-row items-center justify-between gap-12">
               <div className="flex-1 space-y-3 w-full">
                 {[
-                  "Energy meters & EM6 data",
-                  "Vehicle GPS & fleet systems",
-                  "Fuel usage & telematics",
+                  "NZ em6 real-time grid intensity API",
+                  "Fuelsaver NZ plate lookup system",
+                  "Fleet GPS & vehicle telematics",
+                  "Energy meters & utility bills",
+                  "HR systems & payroll data",
+                  "H&S incident register",
                   "Solar & generation systems",
-                  "Building & HVAC systems",
-                  "Water & waste tracking",
-                  "Procurement & supplier data"
                 ].map((item, i) => (
                   <div key={i} className="px-5 py-3.5 rounded-xl bg-white border border-border text-sm font-mono text-muted-foreground flex items-center shadow-sm">
                     <div className="w-2 h-2 rounded-full bg-primary/60 mr-4 shrink-0" />
@@ -247,7 +483,6 @@ export default function Home() {
                 ))}
               </div>
 
-              {/* Center Node */}
               <div className="shrink-0 relative">
                 <div className="w-32 h-32 rounded-full bg-primary/10 border-4 border-primary flex items-center justify-center shadow-[0_0_40px_rgba(34,197,94,0.20)] z-10 relative">
                   <Leaf className="w-12 h-12 text-primary" />
@@ -256,14 +491,15 @@ export default function Home() {
                 <div className="hidden lg:block absolute top-1/2 -right-12 w-12 h-px bg-primary/40" />
               </div>
 
-              {/* Right side outputs */}
               <div className="flex-1 space-y-3 w-full">
                 {[
-                  "Live emissions (Scope 1, 2, relevant 3)",
-                  "Real time sustainability KPIs",
-                  "Operational alerts and insights",
-                  "Audit-ready ESG reporting",
-                  "Public-facing dashboards"
+                  "Scope 1 fleet CO₂e — live & auditable",
+                  "Scope 2 energy CO₂e — real-time grid intensity",
+                  "Social KPIs — workforce, H&S, training",
+                  "Governance score — board, policy, frameworks",
+                  "Composite ESG score — 0 to 100",
+                  "5-page AI board pack — on demand",
+                  "Embeddable public sustainability widget",
                 ].map((item, i) => (
                   <div key={i} className="px-5 py-3.5 rounded-xl bg-primary/5 border border-primary/20 text-sm font-mono text-foreground flex items-center shadow-sm">
                     <ArrowRight className="w-4 h-4 text-primary mr-4 shrink-0" />
@@ -275,8 +511,8 @@ export default function Home() {
           </div>
         </section>
 
-        {/* VALUE PILLARS */}
-        <section id="features" className="py-32 bg-background">
+        {/* ── VALUE PILLARS ────────────────────────────────────────────────── */}
+        <section className="py-32 bg-background">
           <div className="container mx-auto px-6">
             <div className="text-center mb-20">
               <h2 className="text-4xl md:text-5xl font-bold mb-6 text-foreground">Value Pillars</h2>
@@ -287,27 +523,27 @@ export default function Home() {
               {[
                 {
                   title: "See Everything",
-                  desc: "Single view across energy, fleet, water, waste, and infrastructure. No more fragmented data.",
+                  desc: "Single unified view across Environmental, Social, and Governance pillars. Fleet, energy, workforce, H&S, board — all in one platform, all in real time.",
                   icon: Eye,
-                  metric: "100% Visibility"
+                  metric: "Full E+S+G"
                 },
                 {
                   title: "Act in Real Time",
-                  desc: "Identify inefficiencies instantly. Reduce cost, emissions, and waste as it happens.",
+                  desc: "Live NZ grid intensity, Fuelsaver plate lookup, and per-vehicle emission tracking. Identify inefficiencies today — not next quarter.",
                   icon: Activity,
-                  metric: "< 1s Latency"
+                  metric: "Live Data"
                 },
                 {
                   title: "Prove It",
-                  desc: "Automatically generate compliant, audit-ready ESG reports. No more chasing spreadsheets.",
+                  desc: "Automatically generate compliant, audit-ready board packs. Full NZ MfE 2024 methodology, GHG Protocol alignment, and Toitū CEMARS readiness.",
                   icon: FileCheck,
                   metric: "Audit-Ready"
                 },
                 {
                   title: "Show It",
-                  desc: "Embed real time sustainability dashboards directly on your website. Turn ESG into a competitive advantage.",
+                  desc: "Embed your live ESG score on your website. Passkey auth, per-org branded portals, and public-facing dashboards turn ESG into a competitive advantage.",
                   icon: LayoutDashboard,
-                  metric: "Public API"
+                  metric: "Public Widget"
                 }
               ].map((pillar, i) => (
                 <motion.div
@@ -332,32 +568,34 @@ export default function Home() {
           </div>
         </section>
 
-        {/* USE CASES */}
+        {/* ── USE CASES ────────────────────────────────────────────────────── */}
         <section id="use-cases" className="py-32 bg-muted/50 border-y border-border">
           <div className="container mx-auto px-6">
-            <h2 className="text-4xl md:text-5xl font-bold mb-16 text-center text-foreground">Built for Heavy Operations</h2>
-
+            <h2 className="text-4xl md:text-5xl font-bold mb-4 text-center text-foreground">Built for Operations</h2>
+            <p className="text-xl text-muted-foreground text-center mb-16 max-w-2xl mx-auto">
+              EnviroIQ is purpose-built for New Zealand organisations with real-world operational emissions.
+            </p>
             <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
               {[
                 {
-                  title: "Infrastructure & Data Centres",
-                  desc: "Optimise cooling and power usage, track PUE and active efficiency, reduce operational cost.",
-                  icon: Server
-                },
-                {
-                  title: "Fleet & Transport",
-                  desc: "Reduce fuel consumption, eliminate idle time, improve route efficiency.",
+                  title: "Fleet & Trade Services",
+                  desc: "Full Scope 1 fleet tracking with Fuelsaver plate lookup. Per-vehicle CO₂e, top emitter analysis, and fuel import from CSV. Built for plumbing, electrical, and civil contractors.",
                   icon: Truck
                 },
                 {
                   title: "Commercial Buildings",
-                  desc: "Monitor HVAC performance, reduce energy waste, track water usage.",
+                  desc: "Monitor electricity and gas consumption with real-time NZ grid intensity. Board-ready energy reports with monthly breakdowns and Scope 2 methodology.",
                   icon: Building2
                 },
                 {
                   title: "Construction & Civil",
-                  desc: "Live site emissions tracking, equipment utilisation, compliance reporting.",
+                  desc: "Live site emissions tracking across fleet and plant. H&S incident register, workforce diversity, and governance checklists for NZX and government contract compliance.",
                   icon: Zap
+                },
+                {
+                  title: "Professional Services",
+                  desc: "Lightweight E+S+G reporting for office-based organisations. AI-generated mission statements, governance policy tracking, and board pack generation for AGM reporting.",
+                  icon: LayoutDashboard
                 }
               ].map((uc, i) => (
                 <div key={i} className="p-8 rounded-2xl border border-border bg-white shadow-sm hover:shadow-md hover:border-primary/30 transition-all flex flex-col">
@@ -365,66 +603,92 @@ export default function Home() {
                     <uc.icon className="w-7 h-7 text-primary" />
                   </div>
                   <h3 className="text-xl font-bold mb-3 text-foreground">{uc.title}</h3>
-                  <p className="text-muted-foreground flex-1">{uc.desc}</p>
+                  <p className="text-muted-foreground flex-1 text-sm leading-relaxed">{uc.desc}</p>
                 </div>
               ))}
             </div>
           </div>
         </section>
 
-        {/* NARRATIVE SECTION */}
-        <section className="py-32 relative overflow-hidden bg-background">
+        {/* ── SECURITY & MULTI-TENANCY ─────────────────────────────────────── */}
+        <section className="py-24 bg-background">
+          <div className="container mx-auto px-6">
+            <div className="text-center mb-16">
+              <h2 className="text-3xl md:text-4xl font-bold mb-4">Enterprise-grade security. Multi-tenant by design.</h2>
+              <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
+                Each organisation is fully isolated. Every action is logged. Built for boards, auditors, and regulators.
+              </p>
+            </div>
+            <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
+              {[
+                { icon: Fingerprint, title: "Passkey / WebAuthn", desc: "Passwordless login via Face ID, Touch ID, or Windows Hello. No passwords to phish." },
+                { icon: Lock, title: "Role-Based Access", desc: "Super Admin, Admin, Manager, Viewer roles per organisation with granular permissions." },
+                { icon: Database, title: "Full Audit Log", desc: "Every login, data change, and report download is recorded in an immutable audit trail." },
+                { icon: ShieldCheck, title: "Per-Org Isolation", desc: "Multi-tenant architecture. Each organisation's data is fully isolated. Branded portals available." },
+              ].map((item, i) => (
+                <motion.div
+                  key={i}
+                  initial={{ opacity: 0, y: 20 }}
+                  whileInView={{ opacity: 1, y: 0 }}
+                  viewport={{ once: true }}
+                  transition={{ delay: i * 0.1 }}
+                  className="p-7 rounded-2xl border border-border bg-white shadow-sm text-center"
+                >
+                  <div className="p-3 rounded-xl bg-slate-100 w-fit mx-auto mb-4">
+                    <item.icon className="w-6 h-6 text-slate-700" />
+                  </div>
+                  <h4 className="font-bold text-foreground mb-2">{item.title}</h4>
+                  <p className="text-sm text-muted-foreground leading-relaxed">{item.desc}</p>
+                </motion.div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        {/* ── PHASE NARRATIVE ──────────────────────────────────────────────── */}
+        <section className="py-32 relative overflow-hidden bg-muted/50 border-y border-border">
           <div className="container mx-auto px-6 max-w-5xl">
-            <motion.div
-              initial="hidden"
-              whileInView="show"
-              viewport={{ once: true }}
-              variants={staggerContainer}
-              className="text-center mb-20"
-            >
+            <motion.div initial="hidden" whileInView="show" viewport={{ once: true }} variants={staggerContainer} className="text-center mb-20">
               <motion.h2 variants={fadeIn} className="text-3xl md:text-4xl font-bold mb-6 text-foreground">
-                "Traditional ESG platforms measure performance. <br/>
+                "Traditional ESG platforms measure performance. <br />
                 <span className="text-primary">EnviroIQ improves it.</span>"
               </motion.h2>
             </motion.div>
 
             <div className="space-y-6 relative before:absolute before:inset-y-0 before:left-[28px] md:before:left-1/2 before:w-px before:bg-border">
               {[
-                { phase: "Phase 1", title: "Manual Reporting", desc: "Spreadsheets, consultants, lagging data", current: false },
-                { phase: "Phase 2", title: "Digital Reporting Platforms", desc: "Better structure, same lag", current: false },
-                { phase: "Phase 3", title: "Operational ESG (EnviroIQ)", desc: "Live data, real time decisions, continuous optimisation", current: true }
+                { phase: "Phase 1", title: "Manual Reporting", desc: "Spreadsheets, consultants, lagging data — annual ESG reports that arrive too late to act on", current: false },
+                { phase: "Phase 2", title: "Digital Reporting Platforms", desc: "Better structure, same lag — data is still collected after the fact and manually entered", current: false },
+                { phase: "Phase 3", title: "Operational ESG (EnviroIQ)", desc: "Live data, real-time decisions, AI-generated narratives, and continuous optimisation across E, S, and G", current: true }
               ].map((phase, i) => (
                 <motion.div
                   initial={{ opacity: 0, x: i % 2 === 0 ? -20 : 20 }}
                   whileInView={{ opacity: 1, x: 0 }}
                   viewport={{ once: true }}
                   key={i}
-                  className={`relative flex items-center md:justify-between flex-col md:flex-row gap-8 ${phase.current ? 'text-primary' : 'text-muted-foreground'}`}
+                  className={`relative flex items-center md:justify-between flex-col md:flex-row gap-8 ${phase.current ? "text-primary" : "text-muted-foreground"}`}
                 >
-                  <div className={`w-full md:w-5/12 ${i % 2 === 0 ? 'md:text-right' : 'md:order-3'}`}>
-                    <div className={`p-6 rounded-2xl border ${phase.current ? 'border-primary/40 bg-primary/5 shadow-sm' : 'border-border bg-white shadow-sm'}`}>
+                  <div className={`w-full md:w-5/12 ${i % 2 === 0 ? "md:text-right" : "md:order-3"}`}>
+                    <div className={`p-6 rounded-2xl border ${phase.current ? "border-primary/40 bg-primary/5 shadow-sm" : "border-border bg-white shadow-sm"}`}>
                       <div className="font-mono text-sm mb-2 opacity-70">{phase.phase}</div>
-                      <h4 className={`text-xl font-bold mb-2 ${phase.current ? 'text-primary' : 'text-foreground'}`}>{phase.title}</h4>
+                      <h4 className={`text-xl font-bold mb-2 ${phase.current ? "text-primary" : "text-foreground"}`}>{phase.title}</h4>
                       <p className="opacity-80">{phase.desc}</p>
                     </div>
                   </div>
-
-                  <div className={`absolute left-0 md:static w-14 h-14 rounded-full border-4 flex items-center justify-center z-10 md:order-2 bg-background ${phase.current ? 'border-primary text-primary' : 'border-border text-muted-foreground'}`}>
+                  <div className={`absolute left-0 md:static w-14 h-14 rounded-full border-4 flex items-center justify-center z-10 md:order-2 bg-background ${phase.current ? "border-primary text-primary" : "border-border text-muted-foreground"}`}>
                     <span className="font-mono font-bold">{i + 1}</span>
                   </div>
-
-                  <div className={`hidden md:block w-5/12 ${i % 2 === 0 ? 'order-3' : 'order-1'}`} />
+                  <div className={`hidden md:block w-5/12 ${i % 2 === 0 ? "order-3" : "order-1"}`} />
                 </motion.div>
               ))}
             </div>
-
             <div className="mt-20 text-center">
               <h3 className="text-2xl font-mono text-primary font-bold">EnviroIQ is phase three.</h3>
             </div>
           </div>
         </section>
 
-        {/* CLOSING CTA */}
+        {/* ── CLOSING CTA ──────────────────────────────────────────────────── */}
         <section className="py-32 bg-primary text-primary-foreground relative overflow-hidden">
           <div className="absolute inset-0 opacity-10 bg-[url('https://grainy-gradients.vercel.app/noise.svg')]" />
           <div className="container mx-auto px-6 relative z-10 text-center">
@@ -432,13 +696,13 @@ export default function Home() {
               If your ESG data is a month old, your decisions are already wrong.
             </h2>
             <div className="flex flex-wrap justify-center gap-4 text-xl font-medium opacity-90 mb-12">
-              <span>Real time ESG.</span>
+              <span>Full E + S + G.</span>
               <span className="opacity-50">•</span>
-              <span>Real world impact.</span>
+              <span>Real-time Intelligence.</span>
               <span className="opacity-50">•</span>
-              <span>Measure less. Control more.</span>
+              <span>Board-Ready in Seconds.</span>
               <span className="opacity-50">•</span>
-              <span>Know now. Act now.</span>
+              <span>Built for New Zealand.</span>
             </div>
             <Button size="lg" className="bg-white text-primary hover:bg-white/90 h-16 px-10 text-xl shadow-2xl font-semibold" asChild>
               <a href="mailto:hello@enviroiq.net">

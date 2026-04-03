@@ -1,0 +1,46 @@
+Yes. I looked into the current NZ government procurement framework and the practical construction guidance that sits behind it.
+
+The key point is this: for a plumbing firm bidding into government construction work such as prisons or other public facilities, the requirement is usually not “publish a formal ESG report under law.” Instead, the requirement is that your tender response can prove responsible business practice, emissions awareness, health and safety compliance, and measurable contract outcomes in the way the agency asks for. In larger procurements, especially construction-related ones, those requirements are now much more explicit.  ￼
+
+What the Rules now push agencies to do is seek public value, not just lowest price. Under the current 5th edition of the Government Procurement Rules, agencies must seek economic benefits to New Zealand for procurements above $100,000 for goods/services/refurbishment works and $9 million for new construction works. Those economic benefits can include sustainability or environmental benefit, and also positive social and cultural outcomes. The Rules also require agencies to set clear expectations in the procurement, apply at least a 10 percent weighting for economic benefits in those higher-value procurements, include those commitments in the contract, and monitor/report delivery.  ￼
+
+For your use case, that means your software should be able to support at least six recurring tender proof points.
+
+First, it should support an emissions baseline and reduction story. Government construction guidance says agencies are encouraged to procure low-emissions and low-waste works, and that for some contracts there is a mandatory requirement to report performance in this area. The construction carbon guidance also puts emphasis on whole-of-life embodied carbon and operational carbon, especially from the planning and design phases onward.  ￼
+
+Second, it should support contract-level reporting, not just annual sustainability summaries. The procurement framework is moving toward measurable commitments written into the contract and then monitored. So if you say you will reduce site waste, lower vehicle emissions, use lower-carbon materials, or improve trade scheduling to reduce rework and truck movements, your system should be able to track those commitments as KPIs and produce auditable reports by project, site, contract, and period.  ￼
+
+Third, it should cover the “S” and “G” parts, because those do appear in tenders even when the customer informally calls it “ESG” or “sustainability.” The Rules direct agencies to engage businesses with responsible business practices, meaning integrity, transparency, accountability, respect for labour and human rights, and compliance with NZ employment standards and health and safety requirements. The Supplier Code of Conduct also expects suppliers to address ethical behaviour, labour and human rights, health and safety, environmental sustainability, and corporate social responsibility.  ￼
+
+Fourth, for construction, your system should be able to prove health and safety compliance across your own business and your domestic supply chain. Construction is treated as a priority area. The official health and safety procurement guidance says suppliers in construction designated contract areas must ensure and demonstrate that they, and their domestic supply chain, comply with health and safety requirements. It also gives examples of the kinds of tender questions agencies may ask: H&S training, incident and near-miss recording, equipment provision, subcontractor arrangements, audit processes, and reporting/monitoring.  ￼
+
+Fifth, for larger public construction jobs, it should support skills, training, and workforce outcomes. The construction procurement standards say agencies must create a specific skills and training development plan for significant construction contracts over NZD 50 million, ask suppliers what more they will do to improve or build skills, including health and safety, and monitor/report the commitments made. Separate guidance also ties this to targeted employment opportunities and workforce diversity, including Māori, Pacific peoples, women, young people, and disabled people.  ￼
+
+Sixth, it should let you show evidence easily inside a tender response. Government guidance on the Supplier Code says suppliers may demonstrate environmentally responsible business practices in several ways, including publishing them on their website, promoting them, or providing them when requested in tender documentation. That means your platform should be able to export a tender-ready pack: policies, baseline data, emissions dashboards, reduction plans, training metrics, H&S metrics, subcontractor compliance evidence, and board/leadership accountability statements.  ￼
+
+For prison builds specifically, I did not find a public tender schedule spelling out one universal “prison ESG checklist” for all bids. In practice, the exact wording will vary by agency and by procurement pack. But the Department of Corrections’ procurement policy says it will require suppliers to act in line with the Supplier Code of Conduct, and the wider central government framework is clear that agencies are expected to buy from suppliers with responsible practices and to seek social, environmental, and cultural outcomes where relevant.  ￼
+
+So, if you are designing software for this market, the safest answer is that it should be able to produce evidence in these categories:
+	1.	Emissions
+Scope 1 and Scope 2 baseline at minimum, and ideally major Scope 3 categories relevant to plumbing and construction operations such as fleet, freight, waste, materials, and subcontractors. Also reduction targets and project-by-project performance.  ￼
+	2.	Waste and environmental performance
+Construction waste, recycling/diversion, material choices, fuel use, water use where relevant, and environmental incident tracking. This aligns with the government’s low-emissions and low-waste procurement direction.  ￼
+	3.	Health and safety
+TRIFR/LTIFR if you use them, incident logs, near misses, toolbox talks, training records, certifications, subcontractor H&S compliance, corrective actions, and evidence of consultation/co-ordination across the supply chain.  ￼
+	4.	Workforce and social outcomes
+Apprenticeships, training hours, targeted employment, Māori and Pasifika participation where applicable, diversity indicators, local workforce outcomes, and fair employment evidence.  ￼
+	5.	Governance
+Policies, accountabilities, who owns sustainability/H&S, supplier code compliance, risk registers, review cadence, and board or leadership oversight.  ￼
+	6.	Tender-ready reporting
+Exportable dashboards and evidence packs by contract, site, quarter, and financial year, because agencies increasingly want proof that commitments can be monitored and reported during delivery, not just promised in the bid.  ￼
+
+My practical read is this: for a plumbing firm selling into NZ government construction, your software does not need to be a generic fluffy ESG brochure tool. It needs to be a compliance and proof engine for tenders and contract delivery. The strongest market fit would be:
+	•	near real-time emissions and waste tracking
+	•	project and fleet reporting
+	•	subcontractor compliance capture
+	•	H&S and workforce outcomes
+	•	tender-pack exports aligned to NZ government procurement language
+
+That is the real buying outcome.
+
+I can turn this into a one-page requirements framework for your software, with headings like “must-have tender evidence”, “nice-to-have”, and “data sources to integrate first.”
