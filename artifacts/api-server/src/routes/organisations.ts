@@ -67,7 +67,7 @@ router.get("/", requireRole("super_admin"), async (req, res) => {
 // POST /organisations
 router.post("/", requireRole("super_admin"), async (req, res) => {
   try {
-    const { name, industry, country, adminEmail, adminName } = req.body;
+    const { name, industry, country, adminEmail, adminName, onboardingBrief } = req.body;
     if (!name || !adminEmail || !adminName) {
       res.status(400).json({ error: "Bad Request", message: "name, adminEmail, adminName required" });
       return;
@@ -116,6 +116,13 @@ router.post("/", requireRole("super_admin"), async (req, res) => {
     const appBase = process.env.APP_BASE_URL || `https://${process.env.REPLIT_DOMAINS?.split(",")[0]?.trim()}/app`;
     const magicUrl = `${appBase}/auth/verify?token=${token}`;
 
+    // Save onboarding brief if provided (from AI-guided setup wizard)
+    if (onboardingBrief) {
+      try {
+        await db.execute(sql`UPDATE organisations SET onboarding_brief = ${onboardingBrief} WHERE id = ${orgId}`);
+      } catch { /* non-critical — org already created */ }
+    }
+
     try {
       await sendInviteEmail(adminEmail, adminName, name, magicUrl);
       req.log.info({ to: adminEmail, orgName: name }, "Invite email sent");
@@ -123,7 +130,7 @@ router.post("/", requireRole("super_admin"), async (req, res) => {
       req.log.error({ emailErr, to: adminEmail }, "Failed to send invite email — org created but no email sent");
     }
 
-    await logAudit({ req, action: "organisation.create", resourceType: "organisation", resourceId: orgId, details: { name } });
+    await logAudit({ req, action: "organisation.create", resourceType: "organisation", resourceId: orgId, details: { name, hasOnboardingBrief: !!onboardingBrief } });
 
     res.status(201).json({ ...org, userCount: 1, vehicleCount: 0 });
   } catch (err) {

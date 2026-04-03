@@ -30,6 +30,7 @@ import Projects from "@/pages/projects";
 import Waste from "@/pages/waste";
 import Subcontractors from "@/pages/subcontractors";
 import Advisor from "@/pages/advisor";
+import OnboardingWizard from "@/pages/onboarding-wizard";
 
 import { AppLayout } from "@/components/layout/app-layout";
 import { useAuth } from "@/hooks/use-auth";
@@ -86,6 +87,7 @@ function Router() {
       <Route path="/waste"><ProtectedRoute component={Waste} /></Route>
       <Route path="/subcontractors"><ProtectedRoute component={Subcontractors} /></Route>
       <Route path="/advisor"><ProtectedRoute component={Advisor} /></Route>
+      <Route path="/onboard-org"><ProtectedRoute component={OnboardingWizard} /></Route>
       <Route path="/:slug" component={OrgLogin} />
       <Route component={NotFound} />
     </Switch>

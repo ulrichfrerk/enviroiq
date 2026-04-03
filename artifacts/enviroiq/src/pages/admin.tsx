@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import {
   Building2, Users, Car, CloudRain, Plus, Loader2,
   CheckCircle, XCircle, Pencil, Trash2, Power, PowerOff,
-  ExternalLink, RefreshCw,
+  ExternalLink, RefreshCw, BrainCircuit,
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
@@ -143,6 +143,12 @@ export default function Admin() {
           <h1 className="text-3xl font-bold tracking-tight text-foreground">Super Admin Portal</h1>
           <p className="text-muted-foreground mt-1">Manage organisations and platform-wide settings.</p>
         </div>
+
+        <div className="flex gap-2">
+          {/* AI-guided setup wizard */}
+          <Button variant="outline" onClick={() => setLocation("/onboard-org")} className="gap-2">
+            <BrainCircuit className="w-4 h-4" /> AI-Guided Setup
+          </Button>
 
         {/* Create org dialog */}
         <Dialog open={createOpen} onOpenChange={setCreateOpen}>

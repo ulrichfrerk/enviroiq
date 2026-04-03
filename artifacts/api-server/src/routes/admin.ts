@@ -5,6 +5,7 @@ import { requireRole } from "../lib/auth.js";
 import { sqlRow, sqlRows, numCol, intCol, strCol } from "../lib/sql-result.js";
 import { calcFleetCo2e, calcEnergyCo2e, resolveElectricityFactor } from "../lib/emissions.js";
 import { logAudit } from "../lib/audit.js";
+import { openai } from "@workspace/integrations-openai-ai-server";
 
 const router = Router();
 
@@ -163,6 +164,130 @@ router.post("/organisations/:orgId/recalculate-emissions", requireRole("super_ad
   } catch (err) {
     req.log.error({ err }, "Recalculate emissions failed");
     res.status(500).json({ error: "Internal Server Error", message: "Failed to recalculate emissions" });
+  }
+});
+
+// ── POST /admin/onboarding/analyse ──────────────────────────────────────────
+// Fetches a business website and uses AI to generate an ESG setup guide.
+router.post("/onboarding/analyse", requireRole("super_admin"), async (req, res) => {
+  const { websiteUrl } = req.body as { websiteUrl?: string };
+  if (!websiteUrl) {
+    res.status(400).json({ error: "websiteUrl is required" });
+    return;
+  }
+
+  let url = websiteUrl.trim();
+  if (!url.startsWith("http://") && !url.startsWith("https://")) url = `https://${url}`;
+
+  try {
+    // Fetch website with timeout
+    let siteText = "";
+    let siteDomain = "";
+    try {
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 10000);
+      const pageRes = await fetch(url, {
+        signal: controller.signal,
+        headers: { "User-Agent": "EnviroIQ-Onboarding-Bot/1.0" },
+      });
+      clearTimeout(tid);
+      siteDomain = new URL(url).hostname;
+      const html = await pageRes.text();
+      // Strip HTML tags and collapse whitespace
+      siteText = html
+        .replace(/<script[\s\S]*?<\/script>/gi, " ")
+        .replace(/<style[\s\S]*?<\/style>/gi, " ")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/&nbsp;/g, " ")
+        .replace(/&amp;/g, "&")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/\s{2,}/g, " ")
+        .trim()
+        .slice(0, 4000);
+    } catch {
+      siteText = "(Unable to fetch website content — URL may be unreachable)";
+      siteDomain = url;
+    }
+
+    const prompt = `You are an ESG onboarding consultant for EnviroIQ, a New Zealand sustainability platform.
+
+A new business customer is being set up. Here is their website content:
+
+DOMAIN: ${siteDomain}
+WEBSITE CONTENT (first 4000 chars):
+${siteText}
+
+Based on this information, generate a tailored ESG onboarding guide as JSON (no markdown, pure JSON):
+
+{
+  "businessName": "inferred business name",
+  "industry": "specific industry category (e.g. 'Road Freight & Logistics', 'Construction', 'Retail', 'Healthcare', etc.)",
+  "businessSummary": "2-3 sentence description of what this business does",
+  "size": "micro" | "small" | "medium" | "large",
+  "sizeReasoning": "1 sentence why you estimated this size",
+  "primaryActivities": ["list", "of", "main", "business", "activities"],
+  "esgWeighting": {
+    "environmental": 0-100,
+    "social": 0-100,
+    "governance": 0-100,
+    "reasoning": "1 sentence explaining the weighting"
+  },
+  "modules": [
+    {
+      "key": "fleet" | "energy" | "social" | "governance" | "waste" | "projects" | "subcontractors",
+      "name": "module display name",
+      "priority": "essential" | "recommended" | "optional",
+      "reason": "1-2 sentences: why this module matters for this specific business, referencing their activities"
+    }
+  ],
+  "reportingObligations": [
+    {
+      "name": "obligation name (e.g. 'NZ ETS', 'H&S Act 2015', 'XRB NZ CS', 'Toitū carbonreduce')",
+      "applies": true | false,
+      "urgency": "immediate" | "this_year" | "voluntary",
+      "description": "1-2 sentences: does this apply and why"
+    }
+  ],
+  "setupOrder": [
+    {
+      "step": 1,
+      "module": "key from modules list",
+      "title": "action title",
+      "description": "what to do and why it should be done first",
+      "estimatedTime": "e.g. '1-2 hours'"
+    }
+  ],
+  "nzProcurementAdvantage": "1-2 sentences: how EnviroIQ data will help them win NZ government or council contracts",
+  "firstYearGoal": "1 sentence: the single most important ESG goal for their first year"
+}
+
+Rules:
+- modules: include ALL 7 modules; mark each as essential/recommended/optional for THIS business
+- reportingObligations: include NZ ETS, H&S Act 2015, XRB NZ CS disclosures, Toitū carbonreduce; plus any sector-specific ones
+- setupOrder: order the essential + recommended modules by business priority (highest ROI first)
+- Be specific to the business — reference their activities, industry, and likely fleet/energy use
+- If the website is unavailable, make reasonable inferences from the domain name`;
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-5.2",
+      messages: [{ role: "user", content: prompt }],
+      max_completion_tokens: 2500,
+    });
+
+    const raw = completion.choices[0].message.content ?? "{}";
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      const match = raw.match(/\{[\s\S]*\}/);
+      parsed = match ? JSON.parse(match[0]) : { error: "Failed to parse AI response", raw };
+    }
+
+    res.json({ analysis: parsed, websiteUrl: url });
+  } catch (err) {
+    req.log.error({ err }, "Onboarding analyse failed");
+    res.status(500).json({ error: "Internal Server Error", message: "Failed to analyse business" });
   }
 });
 
