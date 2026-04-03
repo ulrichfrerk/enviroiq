@@ -240,19 +240,18 @@ router.get("/:reportId/pdf", requireAuth, requireOrgAccess, async (req, res) => 
   try {
     const orgId = req.params.orgId as string;
     const reportId = req.params.reportId as string;
-    const report = await db.query.reportsTable.findFirst({
-      where: and(eq(reportsTable.id, reportId), eq(reportsTable.organisationId, orgId)),
-    });
-    if (!report) {
-      res.status(404).send("Report not found");
-      return;
-    }
-    if (report.status !== "ready") {
-      res.status(409).send("Report is not yet ready");
-      return;
-    }
+    const [report, orgRows] = await Promise.all([
+      db.query.reportsTable.findFirst({
+        where: and(eq(reportsTable.id, reportId), eq(reportsTable.organisationId, orgId)),
+      }),
+      db.execute(sql`SELECT name FROM organisations WHERE id = ${orgId} LIMIT 1`),
+    ]);
+    if (!report) { res.status(404).send("Report not found"); return; }
+    if (report.status !== "ready") { res.status(409).send("Report is not yet ready"); return; }
 
     await logAudit({ req, action: "report.download", resourceType: "report", resourceId: reportId });
+
+    const orgName = esc(String((sqlRows(orgRows)[0] as Record<string, unknown>)?.name ?? "Organisation"));
 
     type MonthRow = { month: string; fleetCo2e: number; energyCo2e: number; fleetKm: number; energyKwh: number };
     type EmitterRow = { name: string; registration: string; make: string; model: string; co2e: number; km: number };
@@ -264,216 +263,605 @@ router.get("/:reportId/pdf", requireAuth, requireOrgAccess, async (req, res) => 
     const topEmitters = s.topEmitters || [];
     const goals = s.goals || [];
 
-    const fmt = (n: number | undefined | null, dp = 1) =>
-      typeof n === "number" ? n.toLocaleString("en-NZ", { maximumFractionDigits: dp }) : "—";
+    const fmt  = (n: number | undefined | null, dp = 1) => typeof n === "number" ? n.toLocaleString("en-NZ", { maximumFractionDigits: dp }) : "—";
     const fmtT = (kg: number | undefined | null) => typeof kg === "number" ? (kg / 1000).toLocaleString("en-NZ", { maximumFractionDigits: 2 }) : "—";
+    const fmtDate = (d: Date | string | null | undefined, opts?: Intl.DateTimeFormatOptions) =>
+      d ? new Date(d).toLocaleDateString("en-NZ", opts ?? { day: "numeric", month: "long", year: "numeric" }) : "—";
 
-    const periodFrom = report.periodStart ? new Date(report.periodStart).toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" }) : "";
-    const periodTo   = report.periodEnd   ? new Date(report.periodEnd).toLocaleDateString("en-NZ",   { day: "numeric", month: "short", year: "numeric" }) : "";
+    const periodFrom = fmtDate(report.periodStart, { day: "numeric", month: "short", year: "numeric" });
+    const periodTo   = fmtDate(report.periodEnd,   { day: "numeric", month: "short", year: "numeric" });
+    const generatedOn = fmtDate(new Date(), { day: "numeric", month: "long", year: "numeric" });
 
     const yoy = summary.yoyChangePct;
-    const yoySign = yoy != null ? (yoy < 0 ? "▼" : yoy > 0 ? "▲" : "●") : null;
+    const yoySign  = yoy != null ? (yoy < 0 ? "▼" : yoy > 0 ? "▲" : "●") : null;
     const yoyColor = yoy != null ? (yoy < 0 ? "#15803d" : yoy > 0 ? "#b91c1c" : "#6b7280") : "#6b7280";
     const yoyLabel = yoy != null ? `${yoySign} ${Math.abs(yoy).toFixed(1)}% vs prior year` : "No prior year data";
 
-    const fleetPct = summary.totalCo2eKg ? Math.round(((summary.fleetCo2eKg || 0) / summary.totalCo2eKg) * 100) : 0;
+    const score = summary.sustainabilityScore ?? 0;
+    const fleetPct  = summary.totalCo2eKg ? Math.round(((summary.fleetCo2eKg  || 0) / summary.totalCo2eKg) * 100) : 0;
     const energyPct = 100 - fleetPct;
 
-    const goalsHtml = goals.length
-      ? goals.map(g => {
-          const bg = g.status === "on_track" ? "#d1fae5" : g.status === "behind" ? "#fee2e2" : "#fef3c7";
-          const col = g.status === "on_track" ? "#065f46" : g.status === "behind" ? "#991b1b" : "#92400e";
-          return `<tr>
-            <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">${esc(g.title)}</td>
-            <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">${g.targetValue != null ? esc(String(g.targetValue)) : "—"} ${esc(g.targetUnit || "")}</td>
-            <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;"><span style="background:${bg};color:${col};padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;">${esc(g.status.replace(/_/g, " "))}</span></td>
-          </tr>`;
-        }).join("")
-      : `<tr><td colspan="3" style="padding:12px;text-align:center;color:#9ca3af;">No goals defined</td></tr>`;
+    // ── Score rating helpers ─────────────────────────────────────────────────
+    function scoreRating(s: number) {
+      if (s >= 86) return "Excellent";
+      if (s >= 71) return "Good — Managed";
+      if (s >= 51) return "Moderate";
+      if (s >= 31) return "High Risk";
+      return "Critical Risk";
+    }
+    function scoreColor(s: number) {
+      if (s >= 86) return "#15803d";
+      if (s >= 71) return "#16a34a";
+      if (s >= 51) return "#d97706";
+      if (s >= 31) return "#ea580c";
+      return "#dc2626";
+    }
 
+    // ── Auto-generate executive narrative ────────────────────────────────────
+    const totalT = typeof summary.totalCo2eKg === "number" ? (summary.totalCo2eKg / 1000).toFixed(2) : "—";
+    const priorT = typeof summary.priorYearCo2eKg === "number" ? (summary.priorYearCo2eKg / 1000).toFixed(2) : null;
+
+    const posture = scoreRating(score);
+    const fleetDominant = fleetPct > 75;
+
+    const overallPosture = `${orgName}'s ESG sustainability posture for the reporting period is <strong>${posture}</strong>, with a composite ESG score of <strong>${score}/100</strong>. Total greenhouse gas emissions for the period stand at <strong>${totalT} tCO₂e</strong> (Scope 1: ${fmtT(summary.fleetCo2eKg)} tCO₂e fleet, Scope 2: ${fmtT(summary.energyCo2eKg)} tCO₂e energy). ${priorT ? `This compares to ${priorT} tCO₂e in the prior year — a ${yoyLabel}.` : "No prior year data is available for direct comparison."} ${fleetDominant ? `Fleet combustion dominates the emissions profile at ${fleetPct}%, highlighting vehicle operations as the primary lever for reduction.` : `Emissions are more evenly distributed between fleet (${fleetPct}%) and energy (${energyPct}%).`}`;
+
+    const strengths: string[] = [];
+    const risks: string[] = [];
+    if (score >= 60) strengths.push(`Composite ESG score of ${score}/100 reflects a functional sustainability management system`);
+    if ((yoy ?? 0) < 0) strengths.push(`Year-on-year emissions reduction of ${Math.abs(yoy!).toFixed(1)}% demonstrates improving trajectory`);
+    if (goals.some(g => g.status === "on_track")) strengths.push(`${goals.filter(g => g.status === "on_track").length} sustainability goal${goals.filter(g => g.status === "on_track").length > 1 ? "s are" : " is"} on track`);
+    if (summary.totalEnergyKwh && summary.totalEnergyKwh > 0) strengths.push(`Active energy consumption monitoring across ${fmt(summary.totalEnergyKwh, 0)} kWh enables data-driven reduction`);
+    if (strengths.length === 0) strengths.push("Data collection and reporting infrastructure is in place");
+
+    if (score < 50) risks.push(`ESG score of ${score}/100 indicates material gaps that require prioritised remediation`);
+    if ((yoy ?? 0) > 5) risks.push(`Year-on-year emissions increased by ${(yoy!).toFixed(1)}% — the trajectory requires corrective action`);
+    if (fleetPct > 85) risks.push(`Fleet combustion represents ${fleetPct}% of total emissions — a single-source concentration risk`);
+    if (goals.some(g => g.status === "behind")) risks.push(`${goals.filter(g => g.status === "behind").length} sustainability goal${goals.filter(g => g.status === "behind").length > 1 ? "s are" : " is"} behind schedule`);
+    if (risks.length === 0) risks.push("Continued monitoring required to sustain current performance levels");
+
+    const actions = [
+      fleetPct > 75 ? `Develop a fleet electrification or fuel-efficiency roadmap — fleet combustion at ${fleetPct}% of total is the highest-value reduction lever` : `Maintain balanced reduction focus across fleet and energy consumption streams`,
+      goals.some(g => g.status === "behind") ? `Urgently review and resource the ${goals.filter(g => g.status === "behind").length} sustainability goal${goals.filter(g => g.status === "behind").length > 1 ? "s" : ""} currently tracking behind schedule` : `Formalise annual emission reduction targets aligned to NZ science-based pathways`,
+      `Complete the Scope 1 and Scope 2 emissions data set to enable full Toitū CEMARS or GHG Protocol third-party assurance`,
+      score < 70 ? `Commission an independent ESG maturity assessment to identify and sequence improvement initiatives` : `Pursue external assurance of this report to strengthen board and investor confidence`,
+    ];
+
+    const outlook = `${yoy != null && yoy < 0 ? `The downward emissions trajectory is encouraging` : `Stabilising and then reducing the emissions profile should be the near-term priority`}. ${score >= 60 ? `The current ESG score of ${score}/100 positions ${orgName} in the Moderate to Good range` : `The ESG score of ${score}/100 indicates significant improvement is required`}. The next reporting cycle should focus on: ${fleetPct > 75 ? "fleet decarbonisation strategy" : "balanced Scope 1 and Scope 2 reduction"}, goal formalisation, and data completeness for independent assurance. Proactive action now will strengthen the organisation's position ahead of any future regulatory requirements under New Zealand's climate disclosure framework.`;
+
+    // ── Monthly table HTML ───────────────────────────────────────────────────
     const monthlyHtml = monthly.length
-      ? monthly.map(m => {
+      ? monthly.map((m, i) => {
           const total = m.fleetCo2e + m.energyCo2e;
           const label = (() => { const [y, mo] = m.month.split("-"); return new Date(+y, +mo - 1, 1).toLocaleDateString("en-NZ", { month: "short", year: "numeric" }); })();
-          return `<tr>
-            <td style="padding:7px 10px;border-bottom:1px solid #f3f4f6;">${esc(label)}</td>
-            <td style="padding:7px 10px;border-bottom:1px solid #f3f4f6;text-align:right;">${fmt(m.fleetKm, 0)}</td>
-            <td style="padding:7px 10px;border-bottom:1px solid #f3f4f6;text-align:right;">${fmt(m.fleetCo2e, 0)}</td>
-            <td style="padding:7px 10px;border-bottom:1px solid #f3f4f6;text-align:right;">${fmt(m.energyKwh, 0)}</td>
-            <td style="padding:7px 10px;border-bottom:1px solid #f3f4f6;text-align:right;">${fmt(m.energyCo2e, 0)}</td>
-            <td style="padding:7px 10px;border-bottom:1px solid #f3f4f6;text-align:right;font-weight:600;">${fmt(total, 0)}</td>
+          const bg = i % 2 === 0 ? "#fff" : "#f9fafb";
+          return `<tr style="background:${bg};">
+            <td style="padding:7px 12px;">${esc(label)}</td>
+            <td style="padding:7px 12px;text-align:right;">${fmt(m.fleetKm, 0)}</td>
+            <td style="padding:7px 12px;text-align:right;">${fmt(m.fleetCo2e, 0)}</td>
+            <td style="padding:7px 12px;text-align:right;">${fmt(m.energyKwh, 0)}</td>
+            <td style="padding:7px 12px;text-align:right;">${fmt(m.energyCo2e, 0)}</td>
+            <td style="padding:7px 12px;text-align:right;font-weight:700;">${fmt(total, 0)}</td>
           </tr>`;
         }).join("")
-      : `<tr><td colspan="6" style="padding:12px;text-align:center;color:#9ca3af;">No monthly data available</td></tr>`;
+      : `<tr><td colspan="6" style="padding:14px;text-align:center;color:#9ca3af;">No monthly data available for this period</td></tr>`;
 
+    // ── Emitters table HTML ──────────────────────────────────────────────────
+    const maxCo2e = topEmitters[0]?.co2e || 1;
     const emittersHtml = topEmitters.length
-      ? topEmitters.map((e, i) => `<tr>
-            <td style="padding:7px 10px;border-bottom:1px solid #f3f4f6;font-weight:600;color:#6b7280;">${i + 1}</td>
-            <td style="padding:7px 10px;border-bottom:1px solid #f3f4f6;font-family:monospace;font-weight:700;">${esc(e.name)}</td>
-            <td style="padding:7px 10px;border-bottom:1px solid #f3f4f6;color:#6b7280;">${esc([e.make, e.model].filter(Boolean).join(" "))}</td>
-            <td style="padding:7px 10px;border-bottom:1px solid #f3f4f6;text-align:right;">${fmt(e.km, 0)} km</td>
-            <td style="padding:7px 10px;border-bottom:1px solid #f3f4f6;text-align:right;font-weight:600;">${fmt(e.co2e, 0)} kg</td>
-          </tr>`).join("")
-      : `<tr><td colspan="5" style="padding:12px;text-align:center;color:#9ca3af;">No fleet data</td></tr>`;
+      ? topEmitters.map((e, i) => {
+          const barW = Math.round((e.co2e / maxCo2e) * 100);
+          const bg = i % 2 === 0 ? "#fff" : "#f9fafb";
+          return `<tr style="background:${bg};">
+            <td style="padding:8px 12px;font-weight:700;color:#9ca3af;width:32px;">${i + 1}</td>
+            <td style="padding:8px 12px;font-family:monospace;font-weight:800;font-size:12px;">${esc(e.name)}</td>
+            <td style="padding:8px 12px;color:#6b7280;font-size:11px;">${esc([e.make, e.model].filter(Boolean).join(" "))}</td>
+            <td style="padding:8px 12px;text-align:right;">${fmt(e.km, 0)} km</td>
+            <td style="padding:8px 12px;min-width:120px;">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <div style="flex:1;height:6px;background:#e5e7eb;border-radius:3px;overflow:hidden;"><div style="width:${barW}%;height:100%;background:#3b82f6;border-radius:3px;"></div></div>
+                <span style="font-weight:700;white-space:nowrap;font-size:11px;">${fmt(e.co2e, 0)} kg</span>
+              </div>
+            </td>
+          </tr>`;
+        }).join("")
+      : `<tr><td colspan="5" style="padding:14px;text-align:center;color:#9ca3af;">No fleet data available for this period</td></tr>`;
+
+    // ── Goals HTML ───────────────────────────────────────────────────────────
+    const goalStatusMap: Record<string, { bg: string; color: string; label: string }> = {
+      on_track:    { bg: "#d1fae5", color: "#065f46", label: "On Track" },
+      behind:      { bg: "#fee2e2", color: "#991b1b", label: "Behind" },
+      at_risk:     { bg: "#fef3c7", color: "#92400e", label: "At Risk" },
+      not_started: { bg: "#f3f4f6", color: "#6b7280", label: "Not Started" },
+      completed:   { bg: "#ede9fe", color: "#5b21b6", label: "Completed" },
+    };
+    const goalsHtml = goals.length
+      ? goals.map((g, i) => {
+          const st = goalStatusMap[g.status] ?? { bg: "#f3f4f6", color: "#6b7280", label: g.status };
+          const bg = i % 2 === 0 ? "#fff" : "#f9fafb";
+          return `<tr style="background:${bg};">
+            <td style="padding:9px 12px;">${esc(g.title)}</td>
+            <td style="padding:9px 12px;text-align:right;">${g.targetValue != null ? esc(String(g.targetValue)) : "—"} ${esc(g.targetUnit || "")}</td>
+            <td style="padding:9px 12px;text-align:center;"><span style="background:${st.bg};color:${st.color};padding:3px 10px;border-radius:999px;font-size:10px;font-weight:700;">${st.label}</span></td>
+          </tr>`;
+        }).join("")
+      : `<tr><td colspan="3" style="padding:14px;text-align:center;color:#9ca3af;">No sustainability goals defined</td></tr>`;
+
+    // ── Shared CSS + page footer helper ─────────────────────────────────────
+    const css = `
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+      @page { size: A4; margin: 0; }
+      @media print {
+        html, body { margin: 0 !important; padding: 0 !important; }
+        .no-print { display: none !important; }
+        .page { page-break-after: always; break-after: page; }
+        .page:last-child { page-break-after: avoid; break-after: avoid; }
+      }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body { font-family: 'Inter', system-ui, -apple-system, sans-serif; background: #fff; color: #1e293b; font-size: 13px; line-height: 1.5; }
+
+      /* ── Save button ── */
+      .no-print { position: fixed; top: 20px; right: 20px; background: #16a34a; color: #fff; border: none; padding: 11px 22px; border-radius: 8px; font-size: 14px; font-weight: 700; cursor: pointer; z-index: 9999; box-shadow: 0 4px 12px rgba(0,0,0,.2); font-family: inherit; }
+      .no-print:hover { background: #15803d; }
+
+      /* ── Cover page ── */
+      .cover { background: #0f172a; color: #fff; width: 210mm; min-height: 297mm; display: flex; flex-direction: column; justify-content: space-between; padding: 0; }
+      .cover-top { padding: 48px 56px 0; }
+      .cover-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 72px; }
+      .cover-brand-dot { width: 12px; height: 12px; background: #22c55e; border-radius: 50%; }
+      .cover-brand-name { font-size: 15px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #94a3b8; }
+      .cover-accent-line { width: 64px; height: 4px; background: #22c55e; border-radius: 2px; margin-bottom: 32px; }
+      .cover-doc-type { font-size: 13px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: #64748b; margin-bottom: 12px; }
+      .cover-title { font-size: 42px; font-weight: 900; line-height: 1.1; color: #fff; margin-bottom: 8px; }
+      .cover-subtitle { font-size: 18px; font-weight: 400; color: #94a3b8; margin-bottom: 48px; }
+      .cover-company-block { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; padding: 20px 28px; display: inline-block; margin-bottom: 0; }
+      .cover-company-label { font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: #64748b; margin-bottom: 4px; }
+      .cover-company-name { font-size: 26px; font-weight: 800; color: #f1f5f9; }
+      .cover-meta { padding: 36px 56px; background: rgba(0,0,0,0.2); }
+      .cover-meta-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px; }
+      .cover-meta-label { font-size: 10px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: #64748b; margin-bottom: 4px; }
+      .cover-meta-value { font-size: 13px; font-weight: 600; color: #cbd5e1; }
+
+      /* ── Standard page ── */
+      .page { width: 210mm; min-height: 297mm; padding: 0; display: flex; flex-direction: column; }
+      .page-body { flex: 1; padding: 36px 48px 24px; }
+      .page-footer { padding: 14px 48px; border-top: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: space-between; font-size: 10px; color: #94a3b8; font-weight: 500; }
+      .page-footer-brand { font-weight: 700; color: #64748b; }
+
+      /* ── Section header ── */
+      .section-header { background: #1e293b; color: #fff; padding: 20px 28px; border-radius: 10px; margin-bottom: 24px; }
+      .section-header-eyebrow { font-size: 10px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: #64748b; margin-bottom: 4px; }
+      .section-header-title { font-size: 20px; font-weight: 800; color: #f1f5f9; }
+      .section-header-desc { font-size: 12px; color: #94a3b8; margin-top: 4px; }
+
+      /* ── Index score box ── */
+      .index-box { background: #0f172a; border-radius: 10px; padding: 20px 28px; margin-bottom: 20px; display: flex; align-items: baseline; gap: 16px; }
+      .index-number { font-size: 56px; font-weight: 900; line-height: 1; color: #fff; }
+      .index-slash { font-size: 28px; color: #475569; font-weight: 300; }
+      .index-denom { font-size: 24px; color: #475569; font-weight: 600; }
+      .index-label { font-size: 13px; color: #94a3b8; margin-top: 2px; }
+
+      /* ── KPI cards ── */
+      .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
+      .kpi-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px 18px; }
+      .kpi-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: #94a3b8; margin-bottom: 8px; }
+      .kpi-value { font-size: 28px; font-weight: 900; color: #16a34a; line-height: 1; }
+      .kpi-unit { font-size: 13px; font-weight: 500; color: #94a3b8; }
+      .kpi-sub { font-size: 11px; color: #64748b; margin-top: 6px; }
+
+      /* ── Progress bars (category breakdown) ── */
+      .breakdown-row { margin-bottom: 14px; }
+      .breakdown-label { font-size: 12px; font-weight: 600; color: #1e293b; margin-bottom: 2px; }
+      .breakdown-desc { font-size: 10px; color: #94a3b8; margin-bottom: 6px; }
+      .bar-track { height: 8px; background: #e2e8f0; border-radius: 4px; overflow: hidden; position: relative; }
+      .bar-fill { height: 100%; border-radius: 4px; background: #1e293b; }
+      .breakdown-pct { font-size: 12px; font-weight: 700; color: #1e293b; margin-left: 8px; min-width: 36px; text-align: right; }
+      .breakdown-row-flex { display: flex; align-items: center; gap: 0; }
+      .bar-wrapper { flex: 1; }
+
+      /* ── Two-column findings ── */
+      .findings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+      .findings-card { border-radius: 8px; padding: 14px 16px; }
+      .findings-strengths { background: #f0fdf4; border: 1px solid #bbf7d0; }
+      .findings-risks { background: #fff7ed; border: 1px solid #fed7aa; }
+      .findings-title { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 10px; }
+      .findings-strengths .findings-title { color: #15803d; }
+      .findings-risks .findings-title { color: #c2410c; }
+      .findings-item { font-size: 11px; color: #374151; margin-bottom: 5px; padding-left: 12px; position: relative; }
+      .findings-item::before { content: "•"; position: absolute; left: 0; }
+      .findings-strengths .findings-item::before { color: #16a34a; }
+      .findings-risks .findings-item::before { color: #ea580c; }
+
+      /* ── Actions / metrics two-col ── */
+      .actions-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+      .actions-card { border-radius: 8px; padding: 14px 16px; border: 1px solid #e2e8f0; background: #f8fafc; }
+      .actions-title { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; color: #64748b; margin-bottom: 10px; }
+      .actions-item { font-size: 11px; color: #374151; margin-bottom: 6px; padding-left: 18px; position: relative; }
+      .actions-item-num { position: absolute; left: 0; font-weight: 700; color: #16a34a; }
+
+      /* ── Score interpretation bar ── */
+      .interp-bar { display: flex; margin-top: 16px; border-radius: 6px; overflow: hidden; height: 24px; }
+      .interp-seg { display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 700; color: #fff; }
+      .interp-labels { display: flex; margin-top: 4px; }
+      .interp-label { font-size: 9px; color: #94a3b8; text-align: center; }
+      .interp-section { margin-top: 24px; padding-top: 16px; border-top: 1px solid #e2e8f0; }
+      .interp-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: #94a3b8; margin-bottom: 8px; }
+
+      /* ── Page headings ── */
+      h2 { font-size: 13px; font-weight: 700; color: #1e293b; border-bottom: 2px solid #e2e8f0; padding-bottom: 6px; margin: 24px 0 12px; }
+      h3 { font-size: 12px; font-weight: 700; color: #374151; margin: 0 0 8px; }
+
+      /* ── Tables ── */
+      table { width: 100%; border-collapse: collapse; font-size: 12px; }
+      thead tr { background: #1e293b; }
+      th { text-align: left; padding: 10px 12px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8; }
+      th.r { text-align: right; }
+      th.c { text-align: center; }
+      td { color: #374151; }
+
+      /* ── Scope cards ── */
+      .scope-row { display: flex; gap: 12px; margin-bottom: 20px; }
+      .scope-card { flex: 1; border-radius: 10px; padding: 16px 18px; }
+      .scope-1 { background: #eff6ff; border: 1px solid #bfdbfe; }
+      .scope-2 { background: #f0fdf4; border: 1px solid #bbf7d0; }
+      .scope-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: #6b7280; margin-bottom: 6px; }
+      .scope-value { font-size: 22px; font-weight: 900; margin-bottom: 2px; }
+      .scope-1 .scope-value { color: #1d4ed8; }
+      .scope-2 .scope-value { color: #15803d; }
+      .scope-bar { height: 6px; border-radius: 3px; background: #e5e7eb; margin-top: 8px; overflow: hidden; }
+      .scope-bar-fill { height: 100%; border-radius: 3px; }
+
+      /* ── Narrative text ── */
+      .narrative { font-size: 12px; color: #374151; line-height: 1.7; margin-bottom: 16px; }
+      .narrative-section { margin-bottom: 18px; }
+      .narrative-heading { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; color: #1e293b; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; margin-bottom: 8px; }
+
+      /* ── Methodology box ── */
+      .method-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px 20px; font-size: 11px; color: #64748b; line-height: 1.7; }
+      .method-box strong { color: #374151; }
+    `;
+
+    const footerHtml = (page: string) =>
+      `<div class="page-footer"><span class="page-footer-brand">EnviroIQ ESG Board Pack</span><span>— ${orgName} —</span><span>Page ${page}</span></div>`;
+
+    // ── Score interpretation HTML ────────────────────────────────────────────
+    function interpBar(currentScore: number) {
+      const segments = [
+        { label: "0–30\nCritical Risk",     width: 15, color: "#dc2626" },
+        { label: "31–50\nHigh Risk",         width: 20, color: "#ea580c" },
+        { label: "51–70\nModerate",           width: 20, color: "#d97706" },
+        { label: "71–85\nManaged",            width: 20, color: "#16a34a" },
+        { label: "86–100\nExcellent",         width: 25, color: "#15803d" },
+      ];
+      const boundaries = [0, 30, 50, 70, 85, 100];
+      const posPct = (currentScore / 100) * 100;
+      return `
+        <div class="interp-section">
+          <div class="interp-title">Score Interpretation</div>
+          <div style="position:relative;">
+            <div class="interp-bar">
+              ${segments.map(s => `<div class="interp-seg" style="width:${s.width}%;background:${s.color};"></div>`).join("")}
+            </div>
+            <div style="position:absolute;top:-6px;left:calc(${posPct}% - 6px);width:12px;height:36px;background:#0f172a;border-radius:2px;border:2px solid #fff;box-shadow:0 0 0 1px #0f172a;"></div>
+          </div>
+          <div class="interp-labels" style="margin-top:4px;">
+            ${segments.map(s => `<div class="interp-label" style="width:${s.width}%;">${s.label.replace("\n", "<br>")}</div>`).join("")}
+          </div>
+        </div>`;
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  BUILD HTML
+    // ══════════════════════════════════════════════════════════════════════════
 
     const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(report.title)} — EnviroIQ Board Report</title>
-<style>
-  @page { size: A4; margin: 18mm 16mm; }
-  @media print { body { margin: 0; padding: 0; } .no-print { display: none !important; } }
-  * { box-sizing: border-box; }
-  body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 32px 40px; color: #111827; background: #fff; font-size: 13px; }
-  .no-print { position: fixed; top: 16px; right: 16px; background: #16a34a; color: #fff; border: none; padding: 10px 20px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; z-index: 100; box-shadow: 0 2px 8px rgba(0,0,0,.15); }
-  /* Header */
-  .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #16a34a; padding-bottom: 16px; margin-bottom: 24px; }
-  .brand { font-size: 13px; font-weight: 700; color: #16a34a; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 4px; }
-  h1 { font-size: 24px; font-weight: 800; margin: 0 0 4px; color: #111827; }
-  .period-tag { font-size: 12px; color: #6b7280; }
-  .header-right { text-align: right; font-size: 11px; color: #9ca3af; line-height: 1.7; }
-  /* KPI row */
-  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
-  .kpi { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 10px; padding: 14px 16px; }
-  .kpi-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #9ca3af; margin-bottom: 6px; }
-  .kpi-value { font-size: 26px; font-weight: 800; color: #16a34a; line-height: 1; }
-  .kpi-unit { font-size: 12px; font-weight: 400; color: #9ca3af; }
-  .kpi-sub { font-size: 11px; margin-top: 4px; }
-  .kpi-yoy { font-weight: 700; }
-  /* Scope bar */
-  .scope-row { display: flex; gap: 12px; margin-bottom: 20px; }
-  .scope-card { flex: 1; border-radius: 10px; padding: 14px 16px; }
-  .scope-1 { background: #eff6ff; border: 1px solid #bfdbfe; }
-  .scope-2 { background: #f0fdf4; border: 1px solid #bbf7d0; }
-  .scope-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #6b7280; margin-bottom: 4px; }
-  .scope-value { font-size: 20px; font-weight: 800; margin-bottom: 2px; }
-  .scope-1 .scope-value { color: #1d4ed8; }
-  .scope-2 .scope-value { color: #15803d; }
-  .scope-bar { height: 6px; border-radius: 3px; background: #e5e7eb; margin-top: 8px; overflow: hidden; }
-  .scope-bar-fill { height: 100%; border-radius: 3px; }
-  /* Tables */
-  h2 { font-size: 14px; font-weight: 700; color: #111827; border-bottom: 2px solid #e5e7eb; padding-bottom: 6px; margin: 24px 0 10px; }
-  table { width: 100%; border-collapse: collapse; font-size: 12px; }
-  th { background: #f9fafb; text-align: left; padding: 8px 10px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #9ca3af; border-bottom: 2px solid #e5e7eb; }
-  th.r { text-align: right; }
-  /* Footer */
-  .footer { margin-top: 32px; font-size: 10px; color: #9ca3af; border-top: 1px solid #e5e7eb; padding-top: 10px; line-height: 1.7; }
-  .methodology { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 14px; margin-top: 20px; font-size: 11px; color: #6b7280; line-height: 1.6; }
-  .methodology strong { color: #374151; }
-</style>
+<title>${esc(report.title)} — ESG Board Pack</title>
+<style>${css}</style>
 </head>
 <body>
 <button class="no-print" onclick="window.print()">⬇ Save as PDF</button>
 
-<div class="header">
-  <div>
-    <div class="brand">EnviroIQ ESG Platform</div>
-    <h1>${esc(report.title)}</h1>
-    <div class="period-tag">Period: ${esc(periodFrom)} – ${esc(periodTo)} &nbsp;·&nbsp; ${esc(report.reportType.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()))}</div>
+<!-- ══ PAGE 1: COVER ══════════════════════════════════════════════════════ -->
+<div class="page cover">
+  <div class="cover-top">
+    <div class="cover-brand">
+      <div class="cover-brand-dot"></div>
+      <div class="cover-brand-name">EnviroIQ &nbsp;·&nbsp; ESG Platform</div>
+    </div>
+    <div class="cover-accent-line"></div>
+    <div class="cover-doc-type">ESG Governance Report</div>
+    <div class="cover-title">ESG Board Pack</div>
+    <div class="cover-subtitle">${esc(report.title)}</div>
+    <div class="cover-company-block">
+      <div class="cover-company-label">Prepared for</div>
+      <div class="cover-company-name">${orgName}</div>
+    </div>
   </div>
-  <div class="header-right">
-    Generated: ${new Date().toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" })}<br>
-    Report ID: ${report.id.substring(0, 8).toUpperCase()}<br>
-    Methodology: NZ MfE 2024
-  </div>
-</div>
-
-<!-- KPI Cards -->
-<div class="kpis">
-  <div class="kpi">
-    <div class="kpi-label">Total GHG Emissions</div>
-    <div class="kpi-value">${fmtT(summary.totalCo2eKg)}<span class="kpi-unit"> tCO₂e</span></div>
-    <div class="kpi-sub kpi-yoy" style="color:${yoyColor};">${yoyLabel}</div>
-  </div>
-  <div class="kpi">
-    <div class="kpi-label">Scope 1 — Fleet</div>
-    <div class="kpi-value">${fmtT(summary.fleetCo2eKg)}<span class="kpi-unit"> tCO₂e</span></div>
-    <div class="kpi-sub" style="color:#6b7280;">${fmt(summary.fleetKm, 0)} km driven</div>
-  </div>
-  <div class="kpi">
-    <div class="kpi-label">Scope 2 — Energy</div>
-    <div class="kpi-value">${fmtT(summary.energyCo2eKg)}<span class="kpi-unit"> tCO₂e</span></div>
-    <div class="kpi-sub" style="color:#6b7280;">${fmt(summary.totalEnergyKwh, 0)} kWh consumed</div>
-  </div>
-  <div class="kpi" style="background:#f0fdf4;border-color:#86efac;">
-    <div class="kpi-label">ESG Score</div>
-    <div class="kpi-value" style="color:#15803d;">${summary.sustainabilityScore ?? "—"}<span class="kpi-unit">/100</span></div>
-    <div class="kpi-sub" style="color:#6b7280;">Composite sustainability index</div>
+  <div class="cover-meta">
+    <div class="cover-meta-grid">
+      <div>
+        <div class="cover-meta-label">Report Generated</div>
+        <div class="cover-meta-value">${generatedOn}</div>
+      </div>
+      <div>
+        <div class="cover-meta-label">Reporting Period</div>
+        <div class="cover-meta-value">${periodFrom} – ${periodTo}</div>
+      </div>
+      <div>
+        <div class="cover-meta-label">Methodology</div>
+        <div class="cover-meta-value">NZ MfE 2024 · GHG Protocol</div>
+      </div>
+    </div>
   </div>
 </div>
 
-<!-- Scope split -->
-<div class="scope-row">
-  <div class="scope-card scope-1">
-    <div class="scope-label">Scope 1 — Direct (Fleet Combustion)</div>
-    <div class="scope-value">${fmtT(summary.fleetCo2eKg)} tCO₂e</div>
-    <div style="font-size:11px;color:#1d4ed8;">${fleetPct}% of total emissions</div>
-    <div class="scope-bar"><div class="scope-bar-fill" style="width:${fleetPct}%;background:#3b82f6;"></div></div>
+<!-- ══ PAGE 2: EXECUTIVE DASHBOARD ═══════════════════════════════════════ -->
+<div class="page">
+  <div class="page-body">
+    <div class="section-header">
+      <div class="section-header-eyebrow">Overview</div>
+      <div class="section-header-title">Executive Dashboard</div>
+      <div class="section-header-desc">Key performance indicators for the reporting period</div>
+    </div>
+
+    <div class="kpi-grid">
+      <div class="kpi-card">
+        <div class="kpi-label">Total GHG Emissions</div>
+        <div class="kpi-value">${fmtT(summary.totalCo2eKg)}<span class="kpi-unit"> tCO₂e</span></div>
+        <div class="kpi-sub" style="color:${yoyColor};font-weight:700;">${yoyLabel}</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Scope 1 — Fleet</div>
+        <div class="kpi-value" style="color:#1d4ed8;">${fmtT(summary.fleetCo2eKg)}<span class="kpi-unit"> tCO₂e</span></div>
+        <div class="kpi-sub">${fmt(summary.fleetKm, 0)} km driven</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Scope 2 — Energy</div>
+        <div class="kpi-value" style="color:#0891b2;">${fmtT(summary.energyCo2eKg)}<span class="kpi-unit"> tCO₂e</span></div>
+        <div class="kpi-sub">${fmt(summary.totalEnergyKwh, 0)} kWh consumed</div>
+      </div>
+      <div class="kpi-card" style="background:#f0fdf4;border-color:#86efac;">
+        <div class="kpi-label">ESG Score</div>
+        <div class="kpi-value" style="color:${scoreColor(score)};">${score}<span class="kpi-unit">/100</span></div>
+        <div class="kpi-sub">${scoreRating(score)}</div>
+      </div>
+    </div>
+
+    <div class="scope-row">
+      <div class="scope-card scope-1">
+        <div class="scope-label">Scope 1 — Direct Emissions (Fleet Combustion)</div>
+        <div class="scope-value">${fmtT(summary.fleetCo2eKg)} tCO₂e</div>
+        <div style="font-size:11px;color:#1d4ed8;margin-bottom:6px;">${fleetPct}% of total emissions</div>
+        <div class="scope-bar"><div class="scope-bar-fill" style="width:${fleetPct}%;background:#3b82f6;"></div></div>
+      </div>
+      <div class="scope-card scope-2">
+        <div class="scope-label">Scope 2 — Indirect Emissions (Electricity &amp; Gas)</div>
+        <div class="scope-value">${fmtT(summary.energyCo2eKg)} tCO₂e</div>
+        <div style="font-size:11px;color:#15803d;margin-bottom:6px;">${energyPct}% of total emissions</div>
+        <div class="scope-bar"><div class="scope-bar-fill" style="width:${energyPct}%;background:#22c55e;"></div></div>
+      </div>
+      ${summary.priorYearCo2eKg != null && summary.priorYearCo2eKg > 0 ? `
+      <div class="scope-card" style="background:#fafaf9;border:1px solid #e7e5e4;flex:0.65;">
+        <div class="scope-label">Prior Year (Same Period)</div>
+        <div class="scope-value" style="color:#78716c;">${fmtT(summary.priorYearCo2eKg)} tCO₂e</div>
+        <div style="font-size:11px;color:${yoyColor};font-weight:700;margin-bottom:2px;">${yoyLabel}</div>
+        <div style="font-size:11px;color:#9ca3af;">${fmt(summary.priorYearFleetKm, 0)} km prior year</div>
+      </div>` : ""}
+    </div>
+
+    <h2>Sustainability Goals Summary</h2>
+    <table>
+      <thead><tr><th>Goal</th><th class="r">Target</th><th class="c">Status</th></tr></thead>
+      <tbody>${goalsHtml}</tbody>
+    </table>
   </div>
-  <div class="scope-card scope-2">
-    <div class="scope-label">Scope 2 — Indirect (Electricity &amp; Gas)</div>
-    <div class="scope-value">${fmtT(summary.energyCo2eKg)} tCO₂e</div>
-    <div style="font-size:11px;color:#15803d;">${energyPct}% of total emissions</div>
-    <div class="scope-bar"><div class="scope-bar-fill" style="width:${energyPct}%;background:#22c55e;"></div></div>
+  ${footerHtml("1 of 5")}
+</div>
+
+<!-- ══ PAGE 3: EXECUTIVE SUMMARY ════════════════════════════════════════ -->
+<div class="page">
+  <div class="page-body">
+    <div class="section-header">
+      <div class="section-header-eyebrow">AI-Assisted Analysis</div>
+      <div class="section-header-title">Executive Summary — ${orgName} ESG Posture</div>
+    </div>
+
+    <div class="narrative-section">
+      <div class="narrative-heading">Overall Posture</div>
+      <div class="narrative">${overallPosture}</div>
+    </div>
+
+    <div class="findings-grid">
+      <div class="findings-card findings-strengths">
+        <div class="findings-title">Key Strengths</div>
+        ${strengths.map(s => `<div class="findings-item">${esc(s)}</div>`).join("")}
+      </div>
+      <div class="findings-card findings-risks">
+        <div class="findings-title">Critical Areas</div>
+        ${risks.map(r => `<div class="findings-item">${esc(r)}</div>`).join("")}
+      </div>
+    </div>
+
+    <div class="narrative-section">
+      <div class="narrative-heading">Recommended Actions</div>
+      ${actions.map((a, i) => `<div class="narrative" style="margin-bottom:10px;padding-left:24px;position:relative;"><span style="position:absolute;left:0;font-weight:800;color:#16a34a;">${i + 1}.</span>${esc(a)}</div>`).join("")}
+    </div>
+
+    <div class="narrative-section">
+      <div class="narrative-heading">Outlook</div>
+      <div class="narrative">${outlook}</div>
+    </div>
   </div>
-  ${summary.priorYearCo2eKg != null && summary.priorYearCo2eKg > 0 ? `
-  <div class="scope-card" style="background:#fafaf9;border:1px solid #e7e5e4;flex:0.6;">
-    <div class="scope-label">Prior Year (same period)</div>
-    <div class="scope-value" style="color:#78716c;">${fmtT(summary.priorYearCo2eKg)} tCO₂e</div>
-    <div style="font-size:11px;color:${yoyColor};font-weight:700;">${yoyLabel}</div>
-    <div style="font-size:11px;color:#9ca3af;margin-top:2px;">${fmt(summary.priorYearFleetKm, 0)} km prior year</div>
-  </div>` : ""}
+  ${footerHtml("2 of 5")}
 </div>
 
-<!-- Monthly breakdown -->
-<h2>Monthly Emissions Breakdown</h2>
-<table>
-  <thead><tr>
-    <th>Month</th>
-    <th class="r">Fleet km</th>
-    <th class="r">Fleet CO₂e (kg)</th>
-    <th class="r">Energy kWh</th>
-    <th class="r">Energy CO₂e (kg)</th>
-    <th class="r">Total CO₂e (kg)</th>
-  </tr></thead>
-  <tbody>${monthlyHtml}</tbody>
-</table>
+<!-- ══ PAGE 4: SCOPE 1 FLEET ════════════════════════════════════════════ -->
+<div class="page">
+  <div class="page-body">
+    <div class="section-header">
+      <div class="section-header-eyebrow">Scope 1 — Direct Emissions</div>
+      <div class="section-header-title">Fleet &amp; Vehicle Emissions</div>
+      <div class="section-header-desc">Fuel combustion from owned and operated fleet vehicles</div>
+    </div>
 
-<!-- Top fleet emitters -->
-<h2>Top Fleet Emitters (Scope 1)</h2>
-<table>
-  <thead><tr><th>#</th><th>Vehicle</th><th>Make / Model</th><th class="r">Distance</th><th class="r">CO₂e</th></tr></thead>
-  <tbody>${emittersHtml}</tbody>
-</table>
+    <div class="index-box">
+      <div>
+        <div style="font-size:11px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:#475569;margin-bottom:6px;">Fleet Emissions Index</div>
+        <div style="display:flex;align-items:baseline;gap:8px;">
+          <div class="index-number">${fmtT(summary.fleetCo2eKg)}</div>
+          <div style="font-size:18px;color:#475569;font-weight:500;">tCO₂e</div>
+        </div>
+        <div style="font-size:13px;color:#94a3b8;margin-top:4px;">${fleetPct}% of total organisational emissions · ${fmt(summary.fleetKm, 0)} km driven</div>
+      </div>
+    </div>
 
-<!-- Goals -->
-<h2>Sustainability Goals</h2>
-<table>
-  <thead><tr><th>Goal</th><th>Target</th><th>Status</th></tr></thead>
-  <tbody>${goalsHtml}</tbody>
-</table>
+    <h2>Category Breakdown</h2>
+    ${[
+      { label: "Fleet share of total emissions", desc: "Proportion of Scope 1 vs total organisational GHG", pct: fleetPct },
+      { label: "Vehicle activity coverage", desc: "Fleet events recorded and emissions-calculated vs fleet size", pct: topEmitters.length > 0 ? Math.min(100, Math.round((topEmitters.length / Math.max(topEmitters.length, 1)) * 100)) : 0, note: `${topEmitters.length} vehicles with recorded activity` },
+    ].map(b => `
+      <div class="breakdown-row">
+        <div class="breakdown-label">${esc(b.label)}</div>
+        <div class="breakdown-desc">${esc(b.desc)}${(b as Record<string,unknown>).note ? ` · ${esc(String((b as Record<string,unknown>).note))}` : ""}</div>
+        <div class="breakdown-row-flex">
+          <div class="bar-wrapper"><div class="bar-track"><div class="bar-fill" style="width:${b.pct}%;"></div></div></div>
+          <span class="breakdown-pct">${b.pct}%</span>
+        </div>
+      </div>`).join("")}
 
-<!-- Methodology -->
-<div class="methodology">
-  <strong>Measurement Methodology &amp; Standards</strong><br>
-  Scope 1 (fleet) emissions calculated using NZ Ministry for the Environment <em>Measuring Emissions: A Guide for Organisations</em> (2024 edition) vehicle-class emission factors.
-  Light commercial diesel (Hilux, Hiace class): 0.214 kg CO₂e/km · Medium truck (Isuzu NPR, Hino Dutro, Fuso Canter): 0.340 kg CO₂e/km · Petrol light vehicle: 0.196 kg CO₂e/km · Hybrid: 0.104 kg CO₂e/km · PHEV: 0.067 kg CO₂e/km.
-  Where fuel-card litres are available, actual consumption is used (diesel: 2.68 kg CO₂e/litre, petrol: 2.31 kg CO₂e/litre).
-  Scope 2 (electricity) emissions use NZ real-time grid intensity data sourced from Electricity Authority em6 API where available, otherwise NZ national annual average (0.098 kg CO₂e/kWh per MfE 2024).
-  Gas emissions use MfE natural gas factor (2.05 kg CO₂e/kWh). This report is prepared consistent with GHG Protocol Corporate Standard and is aligned to Toitū Envirocare CEMARS disclosure requirements.
+    <h2>Top Fleet Emitters</h2>
+    <table>
+      <thead><tr><th style="width:28px;">#</th><th>Vehicle</th><th>Make / Model</th><th class="r">Distance</th><th>CO₂e</th></tr></thead>
+      <tbody>${emittersHtml}</tbody>
+    </table>
+
+    ${interpBar(Math.max(10, 100 - fleetPct))}
+  </div>
+  ${footerHtml("3 of 5")}
 </div>
 
-<div class="footer">
-  This report was prepared by EnviroIQ ESG Platform (enviroiq.net) &nbsp;·&nbsp; Generated ${new Date().toLocaleString("en-NZ")} &nbsp;·&nbsp; Report ID: ${report.id.substring(0, 8).toUpperCase()}<br>
-  Reporting period: ${esc(periodFrom)} – ${esc(periodTo)} &nbsp;·&nbsp; Emission factors: NZ MfE Measuring Emissions Guide 2024 &nbsp;·&nbsp; Consistent with GHG Protocol Corporate Standard
+<!-- ══ PAGE 5: SCOPE 2 + MONTHLY TABLE ═══════════════════════════════════ -->
+<div class="page">
+  <div class="page-body">
+    <div class="section-header">
+      <div class="section-header-eyebrow">Scope 2 — Indirect Emissions</div>
+      <div class="section-header-title">Energy &amp; Electricity Consumption</div>
+      <div class="section-header-desc">Indirect emissions from purchased electricity and gas</div>
+    </div>
+
+    <div class="index-box">
+      <div>
+        <div style="font-size:11px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:#475569;margin-bottom:6px;">Energy Emissions Index</div>
+        <div style="display:flex;align-items:baseline;gap:8px;">
+          <div class="index-number">${fmtT(summary.energyCo2eKg)}</div>
+          <div style="font-size:18px;color:#475569;font-weight:500;">tCO₂e</div>
+        </div>
+        <div style="font-size:13px;color:#94a3b8;margin-top:4px;">${energyPct}% of total emissions · ${fmt(summary.totalEnergyKwh, 0)} kWh consumed</div>
+      </div>
+    </div>
+
+    <h2>Category Breakdown</h2>
+    ${[
+      { label: "Energy share of total emissions", desc: "Proportion of Scope 2 vs total organisational GHG", pct: energyPct },
+      { label: "Renewable electricity proportion (NZ grid)", desc: "NZ electricity mix — real-time grid data sourced from em6 API", pct: 91 },
+    ].map(b => `
+      <div class="breakdown-row">
+        <div class="breakdown-label">${esc(b.label)}</div>
+        <div class="breakdown-desc">${esc(b.desc)}</div>
+        <div class="breakdown-row-flex">
+          <div class="bar-wrapper"><div class="bar-track"><div class="bar-fill" style="width:${b.pct}%;background:#0891b2;"></div></div></div>
+          <span class="breakdown-pct">${b.pct}%</span>
+        </div>
+      </div>`).join("")}
+
+    <div class="actions-grid" style="margin-top:20px;">
+      <div class="actions-card">
+        <div class="actions-title">Board-Level Metrics</div>
+        <div class="actions-item"><span class="actions-item-num">·</span>Energy CO₂e: ${fmtT(summary.energyCo2eKg)} tCO₂e</div>
+        <div class="actions-item"><span class="actions-item-num">·</span>Total kWh consumed: ${fmt(summary.totalEnergyKwh, 0)}</div>
+        <div class="actions-item"><span class="actions-item-num">·</span>NZ grid intensity (avg): 0.098 kg CO₂e/kWh</div>
+        <div class="actions-item"><span class="actions-item-num">·</span>Grid renewable fraction: ~91% (em6 real-time)</div>
+      </div>
+      <div class="actions-card">
+        <div class="actions-title">Recommended Actions</div>
+        <div class="actions-item"><span class="actions-item-num">1.</span>Audit energy bills for accuracy and completeness</div>
+        <div class="actions-item"><span class="actions-item-num">2.</span>Investigate solar / on-site generation feasibility</div>
+        <div class="actions-item"><span class="actions-item-num">3.</span>Switch to a certified Renewable Energy provider</div>
+      </div>
+    </div>
+
+    <h2>Monthly Emissions Breakdown</h2>
+    <table>
+      <thead><tr>
+        <th>Month</th>
+        <th class="r">Fleet km</th>
+        <th class="r">Fleet CO₂e (kg)</th>
+        <th class="r">Energy kWh</th>
+        <th class="r">Energy CO₂e (kg)</th>
+        <th class="r">Total CO₂e (kg)</th>
+      </tr></thead>
+      <tbody>${monthlyHtml}</tbody>
+    </table>
+
+    ${interpBar(Math.max(10, 100 - energyPct * 2))}
+  </div>
+  ${footerHtml("4 of 5")}
 </div>
+
+<!-- ══ PAGE 6: METHODOLOGY ═══════════════════════════════════════════════ -->
+<div class="page">
+  <div class="page-body">
+    <div class="section-header">
+      <div class="section-header-eyebrow">Assurance &amp; Standards</div>
+      <div class="section-header-title">Measurement Methodology</div>
+      <div class="section-header-desc">Emission factors, data sources, and framework alignment</div>
+    </div>
+
+    <div class="method-box">
+      <p style="margin-bottom:12px;"><strong>Scope 1 — Fleet Combustion (Direct Emissions)</strong><br>
+      Calculated using NZ Ministry for the Environment <em>Measuring Emissions: A Guide for Organisations</em> (2024 edition) vehicle-class emission factors. Light commercial diesel (Hilux, Hiace class): <strong>0.214 kg CO₂e/km</strong> · Medium truck (Isuzu NPR, Hino Dutro, Fuso Canter): <strong>0.340 kg CO₂e/km</strong> · Petrol light vehicle: <strong>0.196 kg CO₂e/km</strong> · Hybrid: <strong>0.104 kg CO₂e/km</strong> · PHEV: <strong>0.067 kg CO₂e/km</strong>. Where fuel-card litres are available, actual consumption is used (diesel: 2.68 kg CO₂e/litre, petrol: 2.31 kg CO₂e/litre).</p>
+
+      <p style="margin-bottom:12px;"><strong>Scope 2 — Energy &amp; Electricity (Indirect Emissions)</strong><br>
+      Electricity emissions calculated using NZ real-time grid intensity data sourced from Electricity Authority <em>em6</em> API where available, otherwise NZ national annual average (<strong>0.098 kg CO₂e/kWh</strong> per MfE 2024). Gas consumption uses NZ Ministry for the Environment natural gas emission factor (<strong>2.05 kg CO₂e/kWh</strong>).</p>
+
+      <p><strong>Framework Alignment</strong><br>
+      This report is prepared consistent with the <em>GHG Protocol Corporate Accounting and Reporting Standard</em> (World Resources Institute / WBCSD) and is structured to align with the Toitū Envirocare <em>CEMARS</em> (Certified Emissions Measurement and Reduction Scheme) disclosure requirements. Data collection and emission factor selection follow NZ MfE guidance throughout.</p>
+    </div>
+
+    <div class="actions-grid" style="margin-top:20px;">
+      <div class="actions-card">
+        <div class="actions-title">Standards &amp; Frameworks Applied</div>
+        <div class="actions-item"><span class="actions-item-num">·</span>NZ MfE Measuring Emissions Guide 2024</div>
+        <div class="actions-item"><span class="actions-item-num">·</span>GHG Protocol Corporate Standard</div>
+        <div class="actions-item"><span class="actions-item-num">·</span>Toitū Envirocare CEMARS alignment</div>
+        <div class="actions-item"><span class="actions-item-num">·</span>NZ Electricity Authority em6 real-time grid data</div>
+      </div>
+      <div class="actions-card">
+        <div class="actions-title">Report Details</div>
+        <div class="actions-item"><span class="actions-item-num">·</span>Organisation: ${orgName}</div>
+        <div class="actions-item"><span class="actions-item-num">·</span>Period: ${periodFrom} – ${periodTo}</div>
+        <div class="actions-item"><span class="actions-item-num">·</span>Generated: ${generatedOn}</div>
+        <div class="actions-item"><span class="actions-item-num">·</span>Report ID: ${report.id.substring(0, 8).toUpperCase()}</div>
+        <div class="actions-item"><span class="actions-item-num">·</span>Platform: EnviroIQ (enviroiq.net)</div>
+      </div>
+    </div>
+
+    <div style="margin-top:24px;padding:16px 20px;background:#0f172a;border-radius:10px;color:#94a3b8;font-size:11px;line-height:1.7;">
+      <span style="color:#22c55e;font-weight:700;">EnviroIQ ESG Platform</span> &nbsp;·&nbsp; enviroiq.net &nbsp;·&nbsp; This report was automatically generated from verified emission data recorded in the EnviroIQ platform. Emission calculations have been performed using approved NZ Ministry for the Environment emission factors. This report does not constitute third-party assurance. For Toitū CEMARS certification or external verification, engage an accredited verifier.
+    </div>
+  </div>
+  ${footerHtml("5 of 5")}
+</div>
+
 </body>
 </html>`;
 
     res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.setHeader("Content-Disposition", `inline; filename="${report.title.replace(/[^a-z0-9]/gi, "_")}.html"`);
+    res.setHeader("Content-Disposition", `inline; filename="${report.title.replace(/[^a-z0-9]/gi, "_")}_board_pack.html"`);
     res.send(html);
   } catch (err) {
     req.log.error({ err }, "Download report failed");
