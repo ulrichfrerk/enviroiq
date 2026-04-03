@@ -3,6 +3,7 @@ import { Switch, Route, Router as WouterRouter, Redirect, useLocation } from "wo
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import { Toaster } from "@/components/ui/toaster";
+import { Toaster as SonnerToaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 import OrgLogin from "@/pages/org-login";
@@ -25,6 +26,9 @@ import Account from "@/pages/account";
 import SettingsPage from "@/pages/settings";
 import Social from "@/pages/social";
 import Governance from "@/pages/governance";
+import Projects from "@/pages/projects";
+import Waste from "@/pages/waste";
+import Subcontractors from "@/pages/subcontractors";
 
 import { AppLayout } from "@/components/layout/app-layout";
 import { useAuth } from "@/hooks/use-auth";
@@ -77,6 +81,9 @@ function Router() {
       <Route path="/account"><ProtectedRoute component={Account} /></Route>
       <Route path="/social"><ProtectedRoute component={Social} /></Route>
       <Route path="/governance"><ProtectedRoute component={Governance} /></Route>
+      <Route path="/projects"><ProtectedRoute component={Projects} /></Route>
+      <Route path="/waste"><ProtectedRoute component={Waste} /></Route>
+      <Route path="/subcontractors"><ProtectedRoute component={Subcontractors} /></Route>
       <Route path="/:slug" component={OrgLogin} />
       <Route component={NotFound} />
     </Switch>
@@ -91,6 +98,7 @@ function App() {
           <Router />
         </WouterRouter>
         <Toaster />
+        <SonnerToaster />
       </TooltipProvider>
     </QueryClientProvider>
   );

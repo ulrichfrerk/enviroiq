@@ -12,3 +12,6 @@ export * from "./targets";
 export * from "./scenarios";
 export * from "./social-data";
 export * from "./governance-data";
+export * from "./projects";
+export * from "./waste-data";
+export * from "./subcontractors";

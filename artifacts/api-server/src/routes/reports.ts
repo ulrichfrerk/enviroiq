@@ -869,7 +869,290 @@ router.get("/:reportId/pdf", requireAuth, requireOrgAccess, async (req, res) => 
   }
 });
 
-// DELETE /organisations/:orgId/reports/:reportId
+// GET /organisations/:orgId/reports/tender-pack — NZ govt procurement evidence pack
+router.get("/tender-pack", requireAuth, requireOrgAccess, async (req, res) => {
+  try {
+    const orgId = req.params.orgId as string;
+
+    await logAudit({ req, action: "report.tender_pack_download", resourceType: "report", resourceId: orgId });
+
+    const [orgRows, emissionsRow, hsRows, trainingRows, workforceRow, govRow, wasteRow, subRows, goalsRows] = await Promise.all([
+      db.execute(sql`SELECT name FROM organisations WHERE id = ${orgId} LIMIT 1`),
+      db.execute(sql`
+        SELECT
+          COALESCE(SUM(CASE WHEN source='fleet' THEN co2e_kg ELSE 0 END),0)::float AS fleet_co2e,
+          COALESCE(SUM(CASE WHEN source='energy' THEN co2e_kg ELSE 0 END),0)::float AS energy_co2e,
+          COALESCE(SUM(co2e_kg),0)::float AS total_co2e,
+          COALESCE(SUM(CASE WHEN source='fleet' THEN distance_km ELSE 0 END),0)::float AS total_km
+        FROM emission_readings WHERE organisation_id = ${orgId}
+      `),
+      db.execute(sql`SELECT incident_type, incident_date, description, days_lost, closed_out FROM hs_incidents WHERE organisation_id = ${orgId} ORDER BY incident_date DESC LIMIT 20`),
+      db.execute(sql`SELECT topic, category, hours, employee_name, training_date FROM training_records WHERE organisation_id = ${orgId} ORDER BY training_date DESC LIMIT 10`),
+      db.execute(sql`SELECT headcount, female_pct, female_leadership_pct, maori_pct, pasifika_pct, period_year, living_wage_accredited, supplier_code_of_conduct FROM social_workforce_snapshots WHERE organisation_id = ${orgId} ORDER BY period_year DESC LIMIT 1`),
+      db.execute(sql`SELECT board_size, board_female_count, board_independent_count, has_code_of_conduct, has_whistleblower, has_anti_bribery, has_privacy_policy, has_esg_risk_register, has_external_assurance, has_modern_slavery_policy, framework_alignment FROM governance_snapshots WHERE organisation_id = ${orgId} ORDER BY period_year DESC LIMIT 1`),
+      db.execute(sql`SELECT COALESCE(SUM(quantity_kg),0)::float AS total_kg, COALESCE(SUM(CASE WHEN diverted THEN quantity_kg ELSE 0 END),0)::float AS diverted_kg FROM waste_records WHERE organisation_id = ${orgId}`),
+      db.execute(sql`SELECT company_name, trade_type, hs_prequalified, supplier_code_signed, status FROM subcontractors WHERE organisation_id = ${orgId} AND status='active' ORDER BY company_name LIMIT 30`),
+      db.execute(sql`SELECT title, status, target_value, target_unit FROM goals WHERE organisation_id = ${orgId}`),
+    ]);
+
+    const org = esc(String((sqlRows(orgRows)[0] as Record<string,unknown>)?.name ?? "Organisation"));
+    const em = sqlRows(emissionsRow)[0] as Record<string,number> ?? {};
+    const wf = sqlRows(workforceRow)[0] as Record<string,unknown> ?? {};
+    const gov = sqlRows(govRow)[0] as Record<string,unknown> ?? {};
+    const waste = sqlRows(wasteRow)[0] as Record<string,number> ?? {};
+    const subs = sqlRows(subRows) as Record<string,unknown>[];
+    const hs = sqlRows(hsRows) as Record<string,unknown>[];
+    const training = sqlRows(trainingRows) as Record<string,unknown>[];
+    const goals = sqlRows(goalsRows) as Record<string,unknown>[];
+
+    const fmtT = (kg: number) => (kg / 1000).toFixed(2);
+    const fmt = (n: unknown, dp = 1) => typeof n === "number" ? n.toLocaleString("en-NZ", { maximumFractionDigits: dp }) : "—";
+    const bool = (v: unknown) => v ? "✓ Yes" : "✗ No";
+    const pct = (v: unknown) => typeof v === "number" ? `${v.toFixed(1)}%` : "—";
+    const generatedOn = new Date().toLocaleDateString("en-NZ", { day: "numeric", month: "long", year: "numeric" });
+
+    const totalKg = em.total_co2e ?? 0;
+    const divertedKg = waste.diverted_kg ?? 0;
+    const totalWasteKg = waste.total_kg ?? 0;
+    const diversionRate = totalWasteKg > 0 ? (divertedKg / totalWasteKg * 100).toFixed(1) : "—";
+
+    const subPrequalPct = subs.length > 0 ? Math.round(subs.filter(s => s.hs_prequalified).length / subs.length * 100) : 0;
+    const subCodePct = subs.length > 0 ? Math.round(subs.filter(s => s.supplier_code_signed).length / subs.length * 100) : 0;
+
+    const totalTrainingHrs = training.reduce((a, t) => a + (typeof t.hours === "number" ? t.hours : 0), 0);
+    const ltiFree = hs.filter(i => (i.days_lost as number) > 0).length === 0;
+    const openIncidents = hs.filter(i => !i.closed_out).length;
+
+    const goalsHtml = goals.length
+      ? goals.map((g, i) => {
+          const st = g.status as string;
+          const sc = st === "on_track" ? "#15803d" : st === "behind" ? "#dc2626" : st === "completed" ? "#7c3aed" : "#92400e";
+          const sl = st === "on_track" ? "On Track" : st === "behind" ? "Behind" : st === "completed" ? "Completed" : st === "at_risk" ? "At Risk" : st;
+          return `<tr style="background:${i%2===0?"#fff":"#f9fafb"}"><td style="padding:8px 12px;">${esc(String(g.title))}</td><td style="padding:8px 12px;text-align:right;">${g.target_value != null ? `${fmt(g.target_value as number)} ${esc(String(g.target_unit ?? ""))}` : "—"}</td><td style="padding:8px 12px;text-align:center;"><span style="background:${sc}20;color:${sc};padding:2px 10px;border-radius:999px;font-size:10px;font-weight:700;">${sl}</span></td></tr>`;
+        }).join("")
+      : `<tr><td colspan="3" style="padding:12px;text-align:center;color:#9ca3af;">No goals defined</td></tr>`;
+
+    const subHtml = subs.length
+      ? subs.map((s, i) => `<tr style="background:${i%2===0?"#fff":"#f9fafb"}">
+          <td style="padding:8px 12px;font-weight:600;">${esc(String(s.company_name))}</td>
+          <td style="padding:8px 12px;color:#6b7280;">${esc(String(s.trade_type ?? "—")).replace(/_/g," ")}</td>
+          <td style="padding:8px 12px;text-align:center;color:${s.hs_prequalified?"#15803d":"#dc2626"};">${s.hs_prequalified?"✓":"✗"}</td>
+          <td style="padding:8px 12px;text-align:center;color:${s.supplier_code_signed?"#15803d":"#dc2626"};">${s.supplier_code_signed?"✓":"✗"}</td>
+        </tr>`).join("")
+      : `<tr><td colspan="4" style="padding:12px;text-align:center;color:#9ca3af;">No subcontractors registered</td></tr>`;
+
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>${org} — Tender Evidence Pack</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm; }
+  @media print { .no-print { display: none !important; } }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 32px 40px; color: #111827; background: #fff; font-size: 13px; line-height: 1.6; }
+  .no-print { position: fixed; top: 16px; right: 16px; background: #16a34a; color: #fff; border: none; padding: 10px 20px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; z-index: 100; }
+  .cover { background: #0f172a; color: #fff; padding: 56px 64px; border-radius: 12px; margin-bottom: 32px; }
+  .cover-brand { font-size: 11px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #64748b; margin-bottom: 48px; display: flex; align-items: center; gap: 8px; }
+  .cover-dot { width: 8px; height: 8px; background: #22c55e; border-radius: 50%; }
+  .cover-accent { width: 48px; height: 3px; background: #22c55e; border-radius: 2px; margin-bottom: 20px; }
+  .cover-type { font-size: 12px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: #64748b; margin-bottom: 8px; }
+  .cover-title { font-size: 36px; font-weight: 900; color: #fff; margin-bottom: 6px; }
+  .cover-sub { font-size: 16px; color: #94a3b8; margin-bottom: 40px; }
+  .cover-company { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12); border-radius: 10px; padding: 16px 24px; display: inline-block; }
+  .cover-clabel { font-size: 10px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: #64748b; }
+  .cover-cname { font-size: 22px; font-weight: 800; color: #f1f5f9; }
+  .cover-meta { margin-top: 48px; padding-top: 24px; border-top: 1px solid rgba(255,255,255,0.1); display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px; }
+  .cover-mlabel { font-size: 10px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: #64748b; }
+  .cover-mvalue { font-size: 13px; font-weight: 600; color: #cbd5e1; margin-top: 2px; }
+  .disclaimer { background: #fefce8; border: 1px solid #fde68a; border-radius: 8px; padding: 10px 14px; margin-bottom: 24px; font-size: 11px; color: #92400e; }
+  .section { margin-bottom: 32px; }
+  .section-header { background: #1e293b; color: #fff; padding: 14px 20px; border-radius: 8px 8px 0 0; display: flex; align-items: baseline; justify-content: space-between; }
+  .section-eyebrow { font-size: 10px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: #64748b; }
+  .section-title { font-size: 16px; font-weight: 800; color: #f1f5f9; }
+  .section-body { border: 1px solid #e2e8f0; border-top: none; border-radius: 0 0 8px 8px; padding: 20px; }
+  .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 0; }
+  .kpi { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px 16px; }
+  .kpi-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8; margin-bottom: 6px; }
+  .kpi-value { font-size: 22px; font-weight: 900; color: #16a34a; }
+  .kpi-unit { font-size: 12px; font-weight: 400; color: #94a3b8; }
+  .checklist { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .check-item { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 6px 0; }
+  .check-yes { color: #15803d; font-weight: 700; }
+  .check-no { color: #dc2626; font-weight: 700; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  thead tr { background: #f8fafc; }
+  th { text-align: left; padding: 8px 12px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #94a3b8; border-bottom: 2px solid #e2e8f0; }
+  th.r { text-align: right; } th.c { text-align: center; }
+  .footer { margin-top: 40px; font-size: 10px; color: #9ca3af; border-top: 1px solid #e2e8f0; padding-top: 10px; text-align: center; }
+</style>
+</head>
+<body>
+<button class="no-print" onclick="window.print()">⬇ Save as PDF</button>
+
+<div class="cover">
+  <div class="cover-brand"><div class="cover-dot"></div>EnviroIQ &nbsp;·&nbsp; ESG Platform</div>
+  <div class="cover-accent"></div>
+  <div class="cover-type">NZ Government Procurement Evidence</div>
+  <div class="cover-title">Tender Evidence Pack</div>
+  <div class="cover-sub">Responsible Business Practice — Proof of Compliance</div>
+  <div class="cover-company">
+    <div class="cover-clabel">Prepared for</div>
+    <div class="cover-cname">${org}</div>
+  </div>
+  <div class="cover-meta">
+    <div><div class="cover-mlabel">Generated</div><div class="cover-mvalue">${generatedOn}</div></div>
+    <div><div class="cover-mlabel">Standards</div><div class="cover-mvalue">NZ Govt Procurement Rules 5th Ed.</div></div>
+    <div><div class="cover-mlabel">Framework</div><div class="cover-mvalue">GHG Protocol · NZ MfE 2024</div></div>
+  </div>
+</div>
+
+<div class="disclaimer">
+  <strong>Document Purpose:</strong> This pack provides evidence of responsible business practices for use in NZ Government tender responses, consistent with the Government Procurement Rules (5th Edition), Supplier Code of Conduct, and NZS 4801 / HealthSafe. Generated from verified data in the EnviroIQ ESG platform.
+</div>
+
+<!-- 1. EMISSIONS -->
+<div class="section">
+  <div class="section-header">
+    <div><div class="section-eyebrow">Proof Point 1</div><div class="section-title">Emissions Baseline (Scope 1 &amp; 2)</div></div>
+  </div>
+  <div class="section-body">
+    <div class="kpi-grid">
+      <div class="kpi"><div class="kpi-label">Total GHG Emissions</div><div class="kpi-value">${fmtT(totalKg)}<span class="kpi-unit"> tCO₂e</span></div></div>
+      <div class="kpi"><div class="kpi-label">Scope 1 — Fleet</div><div class="kpi-value">${fmtT(em.fleet_co2e ?? 0)}<span class="kpi-unit"> tCO₂e</span></div></div>
+      <div class="kpi"><div class="kpi-label">Scope 2 — Energy</div><div class="kpi-value">${fmtT(em.energy_co2e ?? 0)}<span class="kpi-unit"> tCO₂e</span></div></div>
+      <div class="kpi"><div class="kpi-label">Fleet Distance</div><div class="kpi-value">${fmt(em.total_km, 0)}<span class="kpi-unit"> km</span></div></div>
+    </div>
+    <p style="margin-top:14px;font-size:11px;color:#6b7280;">Emissions calculated using NZ Ministry for the Environment <em>Measuring Emissions Guide</em> (2024 edition) vehicle-class factors and real-time NZ grid intensity from Electricity Authority em6 API. Consistent with GHG Protocol Corporate Standard.</p>
+    ${goals.length ? `<h4 style="font-size:11px;font-weight:700;margin:16px 0 8px;color:#374151;">Emission Reduction Goals</h4><table><thead><tr><th>Goal</th><th class="r">Target</th><th class="c">Status</th></tr></thead><tbody>${goalsHtml}</tbody></table>` : ""}
+  </div>
+</div>
+
+<!-- 2. WASTE & ENVIRONMENTAL -->
+<div class="section">
+  <div class="section-header">
+    <div><div class="section-eyebrow">Proof Point 2</div><div class="section-title">Waste &amp; Environmental Performance</div></div>
+  </div>
+  <div class="section-body">
+    <div class="kpi-grid">
+      <div class="kpi"><div class="kpi-label">Total Waste Generated</div><div class="kpi-value">${(totalWasteKg/1000).toFixed(2)}<span class="kpi-unit"> tonnes</span></div></div>
+      <div class="kpi"><div class="kpi-label">Waste Diversion Rate</div><div class="kpi-value" style="color:${totalWasteKg>0?"#16a34a":"#6b7280"};">${diversionRate}<span class="kpi-unit">${totalWasteKg>0?"%":""}</span></div></div>
+      <div class="kpi"><div class="kpi-label">Diverted from Landfill</div><div class="kpi-value">${(divertedKg/1000).toFixed(2)}<span class="kpi-unit"> tonnes</span></div></div>
+    </div>
+    <p style="margin-top:14px;font-size:11px;color:#6b7280;">Waste tracking covers construction debris, concrete, timber, steel, recyclables, hazardous, and general waste streams. All records include disposal method and diversion status. Environmental incident register maintained separately.</p>
+  </div>
+</div>
+
+<!-- 3. HEALTH & SAFETY -->
+<div class="section">
+  <div class="section-header">
+    <div><div class="section-eyebrow">Proof Point 3</div><div class="section-title">Health &amp; Safety</div></div>
+  </div>
+  <div class="section-body">
+    <div class="kpi-grid" style="margin-bottom:16px;">
+      <div class="kpi"><div class="kpi-label">Recorded Incidents</div><div class="kpi-value">${hs.length}</div></div>
+      <div class="kpi"><div class="kpi-label">Lost Time Incidents</div><div class="kpi-value" style="color:${ltiFree?"#16a34a":"#dc2626"};">${hs.filter(i => (i.days_lost as number) > 0).length}</div></div>
+      <div class="kpi"><div class="kpi-label">Open Items</div><div class="kpi-value" style="color:${openIncidents>0?"#ea580c":"#16a34a"};">${openIncidents}</div></div>
+    </div>
+    ${hs.length ? `
+    <table>
+      <thead><tr><th>Type</th><th>Date</th><th>Description</th><th class="c">Days Lost</th><th class="c">Closed</th></tr></thead>
+      <tbody>${hs.slice(0,10).map((i, idx) => `<tr style="background:${idx%2===0?"#fff":"#f9fafb"}">
+        <td style="padding:7px 12px;font-weight:600;">${esc(String(i.incident_type ?? "")).replace(/_/g," ")}</td>
+        <td style="padding:7px 12px;color:#6b7280;">${new Date(String(i.incident_date)).toLocaleDateString("en-NZ")}</td>
+        <td style="padding:7px 12px;">${esc(String(i.description ?? "").substring(0,60))}${String(i.description ?? "").length>60?"…":""}</td>
+        <td style="padding:7px 12px;text-align:center;">${i.days_lost ?? 0}</td>
+        <td style="padding:7px 12px;text-align:center;color:${i.closed_out?"#15803d":"#ea580c"};">${i.closed_out?"✓":"○"}</td>
+      </tr>`).join("")}</tbody>
+    </table>` : `<p style="color:#9ca3af;font-size:12px;text-align:center;padding:8px;">No incidents recorded in the platform</p>`}
+  </div>
+</div>
+
+<!-- 4. WORKFORCE & SOCIAL -->
+<div class="section">
+  <div class="section-header">
+    <div><div class="section-eyebrow">Proof Point 4</div><div class="section-title">Workforce &amp; Social Outcomes</div></div>
+  </div>
+  <div class="section-body">
+    <div class="kpi-grid" style="margin-bottom:16px;">
+      <div class="kpi"><div class="kpi-label">Headcount</div><div class="kpi-value">${fmt(wf.headcount, 0)}</div></div>
+      <div class="kpi"><div class="kpi-label">Female Representation</div><div class="kpi-value">${pct(wf.female_pct)}</div></div>
+      <div class="kpi"><div class="kpi-label">Māori / Pasifika</div><div class="kpi-value">${typeof wf.maori_pct === "number" && typeof wf.pasifika_pct === "number" ? pct(wf.maori_pct + wf.pasifika_pct) : "—"}</div></div>
+      <div class="kpi"><div class="kpi-label">Training Hours (recent)</div><div class="kpi-value">${totalTrainingHrs.toFixed(0)}<span class="kpi-unit"> hrs</span></div></div>
+    </div>
+    <div class="checklist">
+      <div class="check-item"><span class="${wf.living_wage_accredited?"check-yes":"check-no"}">${bool(wf.living_wage_accredited)}</span> Living Wage Accredited</div>
+      <div class="check-item"><span class="${wf.supplier_code_of_conduct?"check-yes":"check-no"}">${bool(wf.supplier_code_of_conduct)}</span> Supplier Code of Conduct Applied</div>
+    </div>
+    ${training.length ? `
+    <h4 style="font-size:11px;font-weight:700;margin:16px 0 8px;color:#374151;">Recent Training Records (sample)</h4>
+    <table>
+      <thead><tr><th>Employee</th><th>Topic</th><th>Category</th><th class="r">Hours</th><th>Date</th></tr></thead>
+      <tbody>${training.map((t, idx) => `<tr style="background:${idx%2===0?"#fff":"#f9fafb"}">
+        <td style="padding:7px 12px;">${esc(String(t.employee_name))}</td>
+        <td style="padding:7px 12px;">${esc(String(t.topic))}</td>
+        <td style="padding:7px 12px;color:#6b7280;">${esc(String(t.category ?? ""))}</td>
+        <td style="padding:7px 12px;text-align:right;">${fmt(t.hours as number)}</td>
+        <td style="padding:7px 12px;color:#6b7280;">${new Date(String(t.training_date)).toLocaleDateString("en-NZ")}</td>
+      </tr>`).join("")}</tbody>
+    </table>` : ""}
+  </div>
+</div>
+
+<!-- 5. GOVERNANCE -->
+<div class="section">
+  <div class="section-header">
+    <div><div class="section-eyebrow">Proof Point 5</div><div class="section-title">Governance &amp; Responsible Business Practices</div></div>
+  </div>
+  <div class="section-body">
+    <div class="checklist">
+      <div class="check-item"><span class="${gov.has_code_of_conduct?"check-yes":"check-no"}">${bool(gov.has_code_of_conduct)}</span> Code of Conduct</div>
+      <div class="check-item"><span class="${gov.has_whistleblower?"check-yes":"check-no"}">${bool(gov.has_whistleblower)}</span> Whistleblower Policy</div>
+      <div class="check-item"><span class="${gov.has_anti_bribery?"check-yes":"check-no"}">${bool(gov.has_anti_bribery)}</span> Anti-Bribery / Anti-Corruption</div>
+      <div class="check-item"><span class="${gov.has_privacy_policy?"check-yes":"check-no"}">${bool(gov.has_privacy_policy)}</span> Privacy Policy (NZ Privacy Act 2020)</div>
+      <div class="check-item"><span class="${gov.has_esg_risk_register?"check-yes":"check-no"}">${bool(gov.has_esg_risk_register)}</span> ESG Risk Register</div>
+      <div class="check-item"><span class="${gov.has_modern_slavery_policy?"check-yes":"check-no"}">${bool(gov.has_modern_slavery_policy)}</span> Modern Slavery Policy</div>
+      <div class="check-item"><span class="${gov.has_external_assurance?"check-yes":"check-no"}">${bool(gov.has_external_assurance)}</span> Third-Party Assurance</div>
+    </div>
+    ${gov.framework_alignment ? `<p style="margin-top:14px;font-size:11px;color:#6b7280;"><strong>Framework Alignment:</strong> ${esc(String(gov.framework_alignment))}</p>` : ""}
+  </div>
+</div>
+
+<!-- 6. SUPPLY CHAIN -->
+<div class="section">
+  <div class="section-header">
+    <div><div class="section-eyebrow">Proof Point 6</div><div class="section-title">Supply Chain H&amp;S Compliance</div></div>
+  </div>
+  <div class="section-body">
+    <div class="kpi-grid" style="margin-bottom:16px;">
+      <div class="kpi"><div class="kpi-label">Active Subcontractors</div><div class="kpi-value">${subs.length}</div></div>
+      <div class="kpi"><div class="kpi-label">H&amp;S Prequalified</div><div class="kpi-value" style="color:#16a34a;">${subPrequalPct}%</div></div>
+      <div class="kpi"><div class="kpi-label">Supplier Code Signed</div><div class="kpi-value" style="color:#0891b2;">${subCodePct}%</div></div>
+    </div>
+    ${subs.length ? `
+    <table>
+      <thead><tr><th>Company</th><th>Trade</th><th class="c">H&amp;S Prequalified</th><th class="c">Code Signed</th></tr></thead>
+      <tbody>${subHtml}</tbody>
+    </table>` : `<p style="color:#9ca3af;font-size:12px;text-align:center;padding:8px;">No subcontractors registered in the platform</p>`}
+  </div>
+</div>
+
+<div class="footer">
+  This Tender Evidence Pack was generated by EnviroIQ ESG Platform (enviroiq.net) on ${generatedOn} for ${org}.<br>
+  Data is sourced from the organisation's live ESG records. This document is consistent with NZ Government Procurement Rules (5th Edition) and the Supplier Code of Conduct.
+</div>
+</body>
+</html>`;
+
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader("Content-Disposition", `inline; filename="${String((sqlRows(orgRows)[0] as Record<string,unknown>)?.name ?? "Organisation").replace(/[^a-z0-9]/gi, "_")}_tender_pack.html"`);
+    res.send(html);
+  } catch (err) {
+    req.log.error({ err }, "Tender pack failed");
+    res.status(500).send("Failed to generate tender pack");
+  }
+});
+
 router.delete("/:reportId", requireAuth, requireOrgAdmin, async (req, res) => {
   try {
     const orgId = req.params.orgId as string;

@@ -18,6 +18,9 @@ import scenariosRouter from "./scenarios.js";
 import missionRouter from "./mission.js";
 import socialRouter from "./social.js";
 import governanceRouter from "./governance.js";
+import projectsRouter from "./projects.js";
+import wasteRouter from "./waste.js";
+import subcontractorsRouter from "./subcontractors.js";
 
 const router = Router();
 
@@ -43,6 +46,9 @@ router.use("/organisations/:orgId/scenarios", scenariosRouter);
 router.use("/organisations/:orgId/mission", missionRouter);
 router.use("/organisations/:orgId/social", socialRouter);
 router.use("/organisations/:orgId/governance", governanceRouter);
+router.use("/organisations/:orgId/projects", projectsRouter);
+router.use("/organisations/:orgId/waste", wasteRouter);
+router.use("/organisations/:orgId/subcontractors", subcontractorsRouter);
 
 // Webhooks (no auth - use API keys/tokens)
 router.use("/webhooks/fleet", fleetWebhookRouter);

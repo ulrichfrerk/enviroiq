@@ -171,7 +171,11 @@ export default function Reports() {
           <h1 className="text-3xl font-bold tracking-tight text-foreground">Board Reporting</h1>
           <p className="text-muted-foreground mt-1">Year-on-year comparison and professional ESG board reports.</p>
         </div>
-        <Dialog open={isOpen} onOpenChange={setIsOpen}>
+        <div className="flex gap-2 flex-wrap">
+          <Button variant="outline" className="gap-2 border-primary/40 text-primary hover:bg-primary/10" onClick={() => window.open(`/api/organisations/${orgId}/reports/tender-pack`, "_blank")}>
+            <Download className="w-4 h-4" /> Tender Evidence Pack
+          </Button>
+          <Dialog open={isOpen} onOpenChange={setIsOpen}>
           <DialogTrigger asChild>
             <Button className="shadow-lg shadow-primary/20 gap-2"><Plus className="w-4 h-4" /> Generate Report</Button>
           </DialogTrigger>
@@ -238,6 +242,7 @@ export default function Reports() {
             </div>
           </DialogContent>
         </Dialog>
+        </div>
       </div>
 
       {/* YoY chart */}
