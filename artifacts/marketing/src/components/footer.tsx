@@ -6,11 +6,8 @@ export function Footer() {
       <div className="container mx-auto px-6">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-12 mb-16">
           <div className="col-span-1 md:col-span-2">
-            <Link href="/" className="flex items-center gap-3 mb-3">
-              <img src="/favicon.svg" alt="EnviroIQ icon" className="h-10 w-10" />
-              <span className="font-bold text-2xl tracking-tight text-foreground">
-                Enviro<span className="text-primary">IQ</span>
-              </span>
+            <Link href="/" className="block mb-3">
+              <img src="/logo.png" alt="EnviroIQ" className="h-14 w-auto" />
             </Link>
             <p className="text-xs font-semibold tracking-widest text-primary uppercase mb-4">Real Time ESG Intelligence</p>
             <p className="text-muted-foreground max-w-sm text-sm">
