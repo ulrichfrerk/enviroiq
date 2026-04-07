@@ -441,11 +441,12 @@ export default function Fleet() {
       setPlateLookup(json);
       if (json.found) {
         if (json.fuelType) form.setValue("fuelType", json.fuelType as z.infer<typeof vehicleSchema>["fuelType"]);
-        if (json.make)    form.setValue("make", json.make);
+        if (json.make)     form.setValue("make", json.make);
         if (json.model) {
           const fullModel = [json.model, json.subModel].filter(Boolean).join(" ");
           form.setValue("model", fullModel);
         }
+        if ((json as Record<string, unknown>).year) form.setValue("year", (json as Record<string, unknown>).year as number);
         if (!form.getValues("name")) {
           form.setValue("name", [json.make, json.model].filter(Boolean).join(" ") || p);
         }
@@ -1000,15 +1001,15 @@ export default function Fleet() {
                               <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs text-muted-foreground mt-1">
                                 <span>Tailpipe CO₂: <strong className="text-foreground">{plateLookup.co2GPerKm} g/km</strong></span>
                                 <span>CO₂e factor: <strong className="text-foreground">{plateLookup.emissionFactorKgPerKm.toFixed(3)} kg/km</strong></span>
-                                {plateLookup.fuelL100km && <span>Economy: <strong className="text-foreground">{plateLookup.fuelL100km} L/100km</strong></span>}
+                                {(plateLookup as Record<string, unknown>).fuelEconomyText && <span>Economy: <strong className="text-foreground">{(plateLookup as Record<string, unknown>).fuelEconomyText as string}</strong></span>}
                                 {plateLookup.yearlyTonnes && <span>Yearly: <strong className="text-foreground">{plateLookup.yearlyTonnes} t CO₂</strong></span>}
                               </div>
                               <p className="text-xs text-muted-foreground mt-1 italic">
-                                Fuel type, make, model and emission factor auto-filled. Includes 15% NZ MfE upstream uplift.
+                                Make, model, year, fuel type and emission factor auto-filled. Includes 15% NZ MfE upstream uplift.
                               </p>
                             </div>
                           ) : plateLookup.configured === false ? (
-                            <p className="text-amber-400 text-xs">Fuelsaver API not configured yet — add <code>FUELSAVER_LOGIN</code> and <code>FUELSAVER_PASSWORD</code> in Secrets.</p>
+                            <p className="text-amber-400 text-xs">Fuelsaver API not configured — <code>FUELSAVER_LOGIN</code> secret missing.</p>
                           ) : (
                             <p className="text-destructive text-xs">
                               No WLTP data found for this plate (code: {(plateLookup as {errorCode?: string}).errorCode ?? "unknown"}). Fill in details manually.

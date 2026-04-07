@@ -68,14 +68,13 @@ router.get("/vehicles/lookup-plate", requireAuth, requireOrgAccess, async (req, 
   }
 
   const login = process.env.FUELSAVER_LOGIN;
-  const password = process.env.FUELSAVER_PASSWORD;
-  if (!login || !password) {
+  if (!login) {
     res.status(503).json({ found: false, configured: false, error: "Fuelsaver credentials not set" });
     return;
   }
 
   try {
-    const params = JSON.stringify({ api: "labels", listingid: "001", login, password, plate });
+    const params = JSON.stringify({ api: "labels", listingid: "001", login, plate });
     const url = `https://resources.fuelsaver.govt.nz/api/?params=${encodeURIComponent(params)}`;
     const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
     if (!resp.ok) {
@@ -102,16 +101,23 @@ router.get("/vehicles/lookup-plate", requireAuth, requireOrgAccess, async (req, 
     const wttUplift = fuelType === "electric" ? 0 : 1.15;
     const emissionFactorKgPerKm = fuelType === "electric" ? 0 : (co2GPerKm * wttUplift) / 1000;
 
+    const mvrYearRaw = data.mvrYear as string | null | undefined;
+    const year = mvrYearRaw ? parseInt(mvrYearRaw, 10) || null : null;
+
     res.json({
       found: true,
       plate,
-      make:                  data.Make   ?? null,
-      model:                 data.Model  ?? null,
-      subModel:              data.SubModel ?? null,
+      make:                  data.Make      ?? null,
+      model:                 data.Model     ?? null,
+      subModel:              data.SubModel  ?? null,
+      year,
+      vehicleType:           data.VehicleType ?? null,
+      transmission:          data.Transmission ?? null,
+      engineSizeCc:          data.EngineSize ?? null,
       fuelType,
       co2GPerKm,
-      co2Stars:              data.CO2stars ?? null,
-      fuelL100km:            data.FuelConsumption ?? null,
+      co2Stars:              data.CO2stars  ?? null,
+      fuelEconomyText:       data.FuelEconomyText ?? null,
       emissionFactorKgPerKm,
       wttUplift,
       yearlyTonnes:          data.YearlyCO2 ?? null,
