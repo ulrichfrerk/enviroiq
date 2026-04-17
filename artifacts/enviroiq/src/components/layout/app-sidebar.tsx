@@ -2,7 +2,7 @@ import { Link, useLocation } from "wouter";
 import {
   BarChart3, Car, Zap, Target, FileText, Settings, Users,
   ShieldAlert, Shield, LogOut, Leaf, UserCircle, Beaker, TrendingDown, Sparkles,
-  HeartHandshake, Building2, FolderOpen, Recycle, HardHat, BrainCircuit,
+  HeartHandshake, Building2, FolderOpen, Recycle, HardHat, BrainCircuit, ShieldCheck,
 } from "lucide-react";
 import {
   Sidebar,
@@ -62,11 +62,17 @@ const groups: { label: string; items: NavItem[] }[] = [
     ],
   },
   {
+    label: "Trust & Compliance",
+    items: [
+      { title: "Compliance & Evidence", url: "/compliance", icon: ShieldCheck },
+      { title: "Audit Log", url: "/audit", icon: ShieldAlert },
+    ],
+  },
+  {
     label: "Account",
     items: [
       { title: "Settings", url: "/settings", icon: Settings },
       { title: "Users", url: "/users", icon: Users },
-      { title: "Audit Log", url: "/audit", icon: ShieldAlert },
     ],
   },
 ];

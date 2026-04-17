@@ -28,10 +28,12 @@ export function Footer() {
           </div>
 
           <div>
-            <h4 className="font-semibold mb-6 text-foreground">Company</h4>
+            <h4 className="font-semibold mb-6 text-foreground">Trust</h4>
             <ul className="space-y-4">
+              <li><Link href="/trust" className="text-muted-foreground hover:text-primary transition-colors">Trust & Compliance</Link></li>
+              <li><Link href="/trust#data-trust-model" className="text-muted-foreground hover:text-primary transition-colors">Data Trust Model</Link></li>
+              <li><a href="mailto:hello@enviroiq.net?subject=Security%20Pack" className="text-muted-foreground hover:text-primary transition-colors">Security Pack</a></li>
               <li><a href="mailto:hello@enviroiq.net" className="text-muted-foreground hover:text-primary transition-colors">Contact</a></li>
-              <li><a href="mailto:hello@enviroiq.net" className="text-muted-foreground hover:text-primary transition-colors">Request Demo</a></li>
             </ul>
           </div>
         </div>

@@ -1,7 +1,11 @@
+import { useState, useMemo } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { useListAuditLogs } from "@workspace/api-client-react";
 import { Card } from "@/components/ui/card";
-import { Shield, Loader2, CheckCircle, XCircle } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
+import { Shield, Loader2, CheckCircle, XCircle, Filter, X } from "lucide-react";
 import { format } from "date-fns";
 
 const outcomeBadge = (outcome: string) => {
@@ -15,6 +19,31 @@ export default function Audit() {
   const orgId = session?.organisationId;
 
   const { data: logs, isLoading } = useListAuditLogs(orgId!, undefined, { query: { enabled: !!orgId } });
+
+  const [actionFilter, setActionFilter] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [outcome, setOutcome] = useState<"all" | "success" | "failure">("all");
+
+  const filtered = useMemo(() => {
+    const items = logs?.items ?? [];
+    const fromTs = from ? new Date(from).getTime() : 0;
+    const toTs = to ? new Date(to + "T23:59:59").getTime() : Number.MAX_SAFE_INTEGER;
+    const term = actionFilter.trim().toLowerCase();
+    return items.filter((l) => {
+      const t = new Date(l.createdAt).getTime();
+      if (t < fromTs || t > toTs) return false;
+      if (outcome !== "all" && l.outcome !== outcome) return false;
+      if (term) {
+        const hay = `${l.action} ${l.resourceType ?? ""} ${l.userEmail ?? ""}`.toLowerCase();
+        if (!hay.includes(term)) return false;
+      }
+      return true;
+    });
+  }, [logs, actionFilter, from, to, outcome]);
+
+  const clearFilters = () => { setActionFilter(""); setFrom(""); setTo(""); setOutcome("all"); };
+  const hasFilters = actionFilter || from || to || outcome !== "all";
 
   if (isLoading) {
     return <div className="p-8 flex justify-center"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
@@ -38,6 +67,45 @@ export default function Audit() {
         </div>
       </Card>
 
+      <Card className="p-4 border-border/50">
+        <div className="flex items-center gap-2 mb-3">
+          <Filter className="w-4 h-4 text-muted-foreground" />
+          <span className="text-sm font-medium text-foreground">Filters</span>
+          {hasFilters && (
+            <Button variant="ghost" size="sm" onClick={clearFilters} className="ml-auto h-7 text-xs">
+              <X className="w-3 h-3 mr-1" /> Clear
+            </Button>
+          )}
+        </div>
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <div>
+            <Label htmlFor="action" className="text-xs text-muted-foreground mb-1.5">Action / user / resource</Label>
+            <Input id="action" placeholder="e.g. fleet.event_created" value={actionFilter} onChange={(e) => setActionFilter(e.target.value)} />
+          </div>
+          <div>
+            <Label htmlFor="from" className="text-xs text-muted-foreground mb-1.5">From</Label>
+            <Input id="from" type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+          </div>
+          <div>
+            <Label htmlFor="to" className="text-xs text-muted-foreground mb-1.5">To</Label>
+            <Input id="to" type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+          </div>
+          <div>
+            <Label htmlFor="outcome" className="text-xs text-muted-foreground mb-1.5">Outcome</Label>
+            <select
+              id="outcome"
+              value={outcome}
+              onChange={(e) => setOutcome(e.target.value as "all" | "success" | "failure")}
+              className="w-full h-9 px-3 rounded-md border border-input bg-background text-sm"
+            >
+              <option value="all">All</option>
+              <option value="success">Success only</option>
+              <option value="failure">Failure only</option>
+            </select>
+          </div>
+        </div>
+      </Card>
+
       <Card className="border-border/50 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm text-left">
@@ -52,7 +120,7 @@ export default function Audit() {
               </tr>
             </thead>
             <tbody className="divide-y divide-border/50">
-              {logs?.items.map((log) => (
+              {filtered.map((log) => (
                 <tr key={log.id} className="hover:bg-secondary/20 transition-colors">
                   <td className="px-6 py-4 whitespace-nowrap font-mono text-xs text-muted-foreground">
                     {format(new Date(log.createdAt), "MMM d, HH:mm:ss")}
@@ -82,19 +150,19 @@ export default function Audit() {
                   <td className="px-6 py-4 font-mono text-xs text-muted-foreground">{log.ipAddress || "—"}</td>
                 </tr>
               ))}
-              {(!logs?.items || logs.items.length === 0) && (
+              {filtered.length === 0 && (
                 <tr>
                   <td colSpan={6} className="px-6 py-12 text-center text-muted-foreground">
-                    No audit events recorded yet.
+                    {hasFilters ? "No audit events match the current filters." : "No audit events recorded yet."}
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
-        {logs?.total && logs.total > 0 && (
+        {logs?.total != null && logs.total > 0 && (
           <div className="px-6 py-3 border-t border-border/50 bg-secondary/10 text-xs text-muted-foreground">
-            Showing {logs.items.length} of {logs.total} total events
+            Showing {filtered.length} of {logs.total} total events{hasFilters ? " (filtered)" : ""}
           </div>
         )}
       </Card>

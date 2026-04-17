@@ -48,9 +48,22 @@ export function requireOrgAdmin(req: Request, res: Response, next: NextFunction)
     res.status(403).json({ error: "Forbidden", message: "Access denied to this organisation" });
     return;
   }
-  if (role === "org_viewer") {
-    res.status(403).json({ error: "Forbidden", message: "Admin access required" });
+  // Read-only roles cannot mutate
+  if (role === "org_viewer" || role === "org_auditor") {
+    res.status(403).json({ error: "Forbidden", message: "Admin access required (read-only role)" });
     return;
   }
   next();
 }
+
+/**
+ * Roles in EnviroIQ:
+ *   super_admin   - cross-tenant, all access (system operator)
+ *   org_admin     - full read+write within their organisation
+ *   org_user      - read+write for operational data within their organisation
+ *   org_viewer    - read-only within their organisation (limited dashboards)
+ *   org_auditor   - read-only across all organisation data INCLUDING audit logs
+ *                   (purpose-built for external auditors / SOC 2 reviewers)
+ */
+export const READ_ONLY_ROLES = ["org_viewer", "org_auditor"] as const;
+export const ALL_ROLES = ["super_admin", "org_admin", "org_user", "org_viewer", "org_auditor"] as const;

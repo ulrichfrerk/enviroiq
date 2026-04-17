@@ -17,6 +17,7 @@ export function Navbar() {
           <Link href="#solution" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Solution</Link>
           <Link href="#features" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Features</Link>
           <Link href="#use-cases" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Use Cases</Link>
+          <Link href="/trust" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Trust</Link>
           <Link href="#procurement" className="text-sm text-primary hover:text-primary/80 font-medium transition-colors">NZ Procurement</Link>
         </div>
 

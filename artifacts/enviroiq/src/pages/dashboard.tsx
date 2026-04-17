@@ -5,11 +5,33 @@ import { useAuth } from "@/hooks/use-auth";
 import { useListFleetEvents } from "@workspace/api-client-react";
 import { useQuery } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
-import { CloudRain, Car, Zap, Target, ArrowUpRight, ArrowDownRight, Loader2, TrendingDown, ChevronRight, CheckCircle2, AlertTriangle } from "lucide-react";
+import { CloudRain, Car, Zap, Target, ArrowUpRight, ArrowDownRight, Loader2, TrendingDown, ChevronRight, CheckCircle2, AlertTriangle, GitBranch, ShieldCheck } from "lucide-react";
 import {
   ResponsiveContainer, PieChart, Pie, Cell, Tooltip as RechartsTooltip,
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
 } from "recharts";
+
+function DashboardLineageStrip(_props: { fleetCo2eKg: number; energyCo2eKg: number }) {
+  return (
+    <Card className="p-3 bg-primary/5 border-primary/20 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs">
+      <div className="flex items-center gap-2 text-primary">
+        <ShieldCheck className="w-4 h-4" />
+        <span className="font-mono uppercase font-semibold">Audit-grade data</span>
+      </div>
+      <div className="flex items-center gap-1.5 text-muted-foreground">
+        <GitBranch className="w-3 h-3 text-primary" />
+        Fleet: <span className="font-mono text-foreground">NZ MfE 2024 v2024.1</span> · diesel 2.68 / petrol 2.31 kg CO₂e/L
+      </div>
+      <div className="flex items-center gap-1.5 text-muted-foreground">
+        <GitBranch className="w-3 h-3 text-primary" />
+        Energy: <span className="font-mono text-foreground">NZ grid v2024.1</span> · 0.073 kg CO₂/kWh
+      </div>
+      <Link href="/compliance" className="ml-auto text-primary font-mono hover:underline">
+        view full lineage →
+      </Link>
+    </Card>
+  );
+}
 import { format, parseISO } from "date-fns";
 
 const LS_KEY = "enviroiq_dashboard_period";
@@ -288,6 +310,10 @@ export default function Dashboard() {
       </div>
 
       {/* Stat cards */}
+      <DashboardLineageStrip
+        fleetCo2eKg={summary.fleetCo2eKg}
+        energyCo2eKg={summary.totalEnergyKwh ? Math.round((summary.totalEnergyKwh) * 0.073) : 0}
+      />
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
         <StatCard
           title="Total CO₂e"

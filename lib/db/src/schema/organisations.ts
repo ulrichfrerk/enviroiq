@@ -13,6 +13,9 @@ export const organisationsTable = pgTable("organisations", {
   webhookSecret: text("webhook_secret"),
   inboundEmailAddress: text("inbound_email_address").notNull().unique(),
   isActive: boolean("is_active").notNull().default(true),
+  // Trust & compliance settings
+  requireMfa: boolean("require_mfa").notNull().default(false),
+  dataResidency: text("data_residency").notNull().default("NZ"),
   // ESG computed metrics — updated by the scheduled metrics refresh engine
   esgFleetCo2eKg: real("esg_fleet_co2e_kg"),
   esgEnergyCo2eKg: real("esg_energy_co2e_kg"),

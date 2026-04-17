@@ -21,6 +21,7 @@ import Reports from "@/pages/reports";
 import Users from "@/pages/users";
 import Admin from "@/pages/admin";
 import Audit from "@/pages/audit";
+import Compliance from "@/pages/compliance";
 import Widget from "@/pages/widget";
 import Account from "@/pages/account";
 import SettingsPage from "@/pages/settings";
@@ -79,6 +80,7 @@ function Router() {
       <Route path="/widget"><ProtectedRoute component={Widget} /></Route>
       <Route path="/settings"><ProtectedRoute component={SettingsPage} /></Route>
       <Route path="/audit"><ProtectedRoute component={Audit} /></Route>
+      <Route path="/compliance"><ProtectedRoute component={Compliance} /></Route>
       <Route path="/admin"><ProtectedRoute component={Admin} /></Route>
       <Route path="/account"><ProtectedRoute component={Account} /></Route>
       <Route path="/social"><ProtectedRoute component={Social} /></Route>

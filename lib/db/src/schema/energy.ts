@@ -22,6 +22,10 @@ export const energyReadingsTable = pgTable("energy_readings", {
   source: text("source").notNull().default("manual"),
   originalFileName: text("original_file_name"),
   rawText: text("raw_text"),
+  // Lineage — links to versioned emission factor + ingest batch for full traceability
+  emissionFactorId: text("emission_factor_id"),
+  importBatchId: text("import_batch_id"),
+  ingestedByUserId: text("ingested_by_user_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

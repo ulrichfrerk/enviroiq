@@ -45,18 +45,19 @@ export default function Home() {
               </motion.div>
 
               <motion.h1 variants={fadeIn} className="text-5xl md:text-7xl font-bold tracking-tighter mb-8 leading-[1.1]">
-                EnviroIQ:<br />
+                Real-time operational<br />
+                intelligence with<br />
                 <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary to-emerald-500">
-                  Real Time ESG Intelligence
+                  audit-grade ESG outputs.
                 </span>
               </motion.h1>
 
               <motion.p variants={fadeIn} className="text-xl md:text-2xl text-muted-foreground mb-6 max-w-3xl leading-relaxed">
-                The complete ESG platform for New Zealand organisations — covering Environment, Social, and Governance in one unified system.
+                ESG data your board, auditor, and regulator will actually trust — because every number is traceable from source to output.
               </motion.p>
 
               <motion.p variants={fadeIn} className="text-lg text-muted-foreground/80 mb-10 max-w-2xl leading-relaxed">
-                Fleet emissions, energy tracking, workforce reporting, board-ready PDF packs, NZ real-time grid data, AI-generated narratives, and full audit logging — all in one platform.
+                Immutable audit log, versioned emission factors, click-to-lineage on every metric, and a one-click SOC 2 evidence pack. Built for New Zealand organisations who need enterprise-grade ESG today.
               </motion.p>
 
               <motion.div variants={fadeIn} className="flex flex-col sm:flex-row gap-4">

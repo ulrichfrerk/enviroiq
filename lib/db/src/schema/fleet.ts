@@ -32,6 +32,10 @@ export const fleetEventsTable = pgTable("fleet_events", {
   co2eKg: real("co2e_kg"),
   source: text("source").notNull(),
   rawPayload: text("raw_payload"),
+  // Lineage — links to versioned emission factor + ingest batch for full traceability
+  emissionFactorId: text("emission_factor_id"),
+  importBatchId: text("import_batch_id"),
+  ingestedByUserId: text("ingested_by_user_id"),
   recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });

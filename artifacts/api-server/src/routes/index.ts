@@ -22,6 +22,8 @@ import projectsRouter from "./projects.js";
 import wasteRouter from "./waste.js";
 import subcontractorsRouter from "./subcontractors.js";
 import advisorRouter from "./advisor.js";
+import emissionFactorsRouter from "./emission-factors.js";
+import complianceRouter from "./compliance.js";
 
 const router = Router();
 
@@ -51,6 +53,10 @@ router.use("/organisations/:orgId/projects", projectsRouter);
 router.use("/organisations/:orgId/waste", wasteRouter);
 router.use("/organisations/:orgId/subcontractors", subcontractorsRouter);
 router.use("/organisations/:orgId/advisor", advisorRouter);
+router.use("/organisations/:orgId/compliance", complianceRouter);
+
+// Global emission factors (versioned, available to all authenticated users)
+router.use("/emission-factors", emissionFactorsRouter);
 
 // Webhooks (no auth - use API keys/tokens)
 router.use("/webhooks/fleet", fleetWebhookRouter);
