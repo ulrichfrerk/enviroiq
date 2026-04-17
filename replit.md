@@ -93,6 +93,14 @@ All under `/api`:
 - `GET /widget/:widgetKey/data` — public (no auth)
 - `GET /organisations/:orgId/audit-logs`
 - `GET /admin/stats` — super_admin only
+- `GET /security/status` — admin-only (super_admin / org_admin); runs ~17 runtime
+  security checks (TLS, headers, CORS, session, auth rate-limit, passkey store,
+  CRM key hashing + indexed prefix lookup, fleet webhook secrets per org,
+  public-audit token hashing, audit-log activity, CRM call ledger, etc.).
+  Returns `{ overall: pass|warn|fail, counts, checks[] }`. Surfaced in the UI
+  via the floating shield button at the bottom-right of every authenticated
+  page (`SecurityStatusWidget`). Polls every 5 min idle / 1 min while open;
+  hidden entirely for non-admin roles.
 
 ### CRM Integration API (`/api/v1/*`)
 Bearer-key authenticated surface for the sister CRM (also on Replit) to provision EnviroIQ

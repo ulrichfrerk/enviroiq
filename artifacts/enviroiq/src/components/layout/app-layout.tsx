@@ -1,6 +1,7 @@
 import { ReactNode } from "react";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "./app-sidebar";
+import { SecurityStatusWidget } from "@/components/security-status-widget";
 import { useAuth } from "@/hooks/use-auth";
 import { Loader2, Shield } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -65,6 +66,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
             </div>
           </main>
         </div>
+        <SecurityStatusWidget />
       </div>
     </SidebarProvider>
   );

@@ -33,6 +33,7 @@ import supplierPortalRouter from "./supplier-portal.js";
 import crmRouter from "./crm.js";
 import crmKeysRouter from "./crm-keys.js";
 import crmOpenapiRouter from "./crm-openapi.js";
+import securityRouter from "./security.js";
 
 const router = Router();
 
@@ -94,5 +95,8 @@ router.use("/v1", crmRouter);
 
 // Public grid intensity (no auth, open CORS handled in app.ts)
 router.use("/grid", gridRouter);
+
+// Security status (authenticated)
+router.use("/security", securityRouter);
 
 export default router;
