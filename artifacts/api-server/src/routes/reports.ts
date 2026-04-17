@@ -214,8 +214,16 @@ router.post("/", requireAuth, requireOrgAdmin, async (req, res) => {
   }
 });
 
+// Reserved sub-paths under /reports that must not be matched as a :reportId.
+// Express matches routes in registration order, so without this guard a request
+// for /reports/tender-pack falls into the /:reportId handler below and 404s
+// because no report with id "tender-pack" exists. Keep this list in sync with
+// any new static sub-routes added to this router.
+const RESERVED_REPORT_SUBPATHS = new Set(["tender-pack", "trend"]);
+
 // GET /organisations/:orgId/reports/:reportId
-router.get("/:reportId", requireAuth, requireOrgAccess, async (req, res) => {
+router.get("/:reportId", requireAuth, requireOrgAccess, async (req, res, next) => {
+  if (RESERVED_REPORT_SUBPATHS.has(req.params.reportId as string)) return next();
   try {
     const orgId = req.params.orgId as string; const reportId = req.params.reportId as string;
     const report = await db.query.reportsTable.findFirst({
