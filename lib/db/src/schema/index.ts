@@ -17,3 +17,4 @@ export * from "./waste-data";
 export * from "./subcontractors";
 export * from "./advisor-cache";
 export * from "./emission-factors";
+export * from "./suppliers";

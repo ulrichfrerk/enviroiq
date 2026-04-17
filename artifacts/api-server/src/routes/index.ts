@@ -24,6 +24,12 @@ import subcontractorsRouter from "./subcontractors.js";
 import advisorRouter from "./advisor.js";
 import emissionFactorsRouter from "./emission-factors.js";
 import complianceRouter from "./compliance.js";
+import suppliersRouter from "./suppliers.js";
+import supplierAuditTemplatesRouter from "./supplier-audit-templates.js";
+import supplierAuditsRouter from "./supplier-audits.js";
+import supplierReportsRouter from "./supplier-reports.js";
+import publicAuditsRouter from "./public-audits.js";
+import supplierPortalRouter from "./supplier-portal.js";
 
 const router = Router();
 
@@ -54,6 +60,15 @@ router.use("/organisations/:orgId/waste", wasteRouter);
 router.use("/organisations/:orgId/subcontractors", subcontractorsRouter);
 router.use("/organisations/:orgId/advisor", advisorRouter);
 router.use("/organisations/:orgId/compliance", complianceRouter);
+router.use("/organisations/:orgId/suppliers", suppliersRouter);
+router.use("/organisations/:orgId/supplier-audit-templates", supplierAuditTemplatesRouter);
+router.use("/organisations/:orgId/supplier-audits", supplierAuditsRouter);
+router.use("/organisations/:orgId/supplier-reports", supplierReportsRouter);
+
+// Public supplier audit endpoints (no auth — token-based)
+router.use("/public/audits", publicAuditsRouter);
+// Supplier portal (cookie-based session)
+router.use("/portal", supplierPortalRouter);
 
 // Global emission factors (versioned, available to all authenticated users)
 router.use("/emission-factors", emissionFactorsRouter);

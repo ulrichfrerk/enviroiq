@@ -148,3 +148,146 @@ export async function sendMagicLinkEmail(
 
   throw new Error("Resend not configured — cannot send magic link email in production");
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Supplier ESG Audit emails
+// ─────────────────────────────────────────────────────────────────────────────
+
+const supplierAuditHtml = (
+  supplierName: string,
+  orgName: string,
+  auditUrl: string,
+  dueDate: string,
+) => `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><title>${orgName} — Supplier ESG Audit</title></head>
+<body style="font-family:system-ui,sans-serif;background:#f9fafb;margin:0;padding:40px 20px;">
+  <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:12px;padding:40px;border:1px solid #e5e7eb;">
+    <div style="margin-bottom:24px;"><span style="color:#16a34a;font-weight:700;font-size:20px;">EnviroIQ</span></div>
+    <h1 style="font-size:22px;font-weight:700;color:#111827;margin:0 0 12px;">${orgName} requests your annual ESG audit</h1>
+    <p style="color:#374151;margin:0 0 12px;font-size:15px;">Hi ${supplierName || "team"},</p>
+    <p style="color:#374151;margin:0 0 12px;font-size:15px;">As part of <strong>${orgName}</strong>'s supplier assurance programme, please complete the EnviroIQ Supplier ESG Audit. The questionnaire takes about 20-30 minutes and you can save your progress at any time.</p>
+    <p style="color:#374151;margin:0 0 24px;font-size:15px;">Audit due by <strong>${dueDate}</strong>.</p>
+    <a href="${auditUrl}" style="display:inline-block;background:#16a34a;color:#fff;text-decoration:none;padding:14px 32px;border-radius:8px;font-weight:600;font-size:15px;">Start Audit →</a>
+    <p style="color:#6b7280;margin:24px 0 0;font-size:13px;">Or paste this link into your browser:<br><a href="${auditUrl}" style="color:#16a34a;word-break:break-all;">${auditUrl}</a></p>
+    <p style="color:#9ca3af;margin-top:24px;font-size:12px;">This link is unique to your organisation. Once submitted, the audit is locked for record-keeping.</p>
+  </div>
+</body></html>`;
+
+export async function sendSupplierAuditInviteEmail(
+  to: string,
+  supplierName: string,
+  orgName: string,
+  auditUrl: string,
+  dueDate: string,
+): Promise<{ sent: boolean; devMode: boolean }> {
+  const resend = await getResendClient();
+  if (resend) {
+    const { data, error } = await resend.client.emails.send({
+      from: resend.from,
+      to,
+      subject: `${orgName} — Supplier ESG audit (due ${dueDate})`,
+      html: supplierAuditHtml(supplierName, orgName, auditUrl, dueDate),
+      text: `${orgName} requests your annual ESG audit.\n\nDue: ${dueDate}\n\nStart audit: ${auditUrl}`,
+    });
+    if (error) {
+      logger.error({ error, to }, "Resend failed to send supplier audit invite");
+      throw new Error(`Supplier audit invite send failed: ${error.message}`);
+    }
+    logger.info({ to, messageId: data?.id }, "Supplier audit invite sent via Resend");
+    return { sent: true, devMode: false };
+  }
+  if (process.env.NODE_ENV !== "production") {
+    // eslint-disable-next-line no-console
+    console.log(`\n[SUPPLIER AUDIT INVITE — RESEND NOT CONFIGURED]\n  To: ${to}\n  URL: ${auditUrl}\n`);
+    return { sent: false, devMode: true };
+  }
+  throw new Error("Resend not configured — cannot send supplier audit invite in production");
+}
+
+const supplierReminderHtml = (
+  orgName: string,
+  auditUrl: string,
+  dueDate: string,
+  reminderType: "30d" | "7d" | "overdue",
+) => {
+  const headline = reminderType === "overdue"
+    ? `Your ESG audit for ${orgName} is overdue`
+    : reminderType === "7d"
+      ? `Reminder: ${orgName} ESG audit due in 7 days`
+      : `Reminder: ${orgName} ESG audit due in 30 days`;
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><title>${headline}</title></head>
+<body style="font-family:system-ui,sans-serif;background:#f9fafb;margin:0;padding:40px 20px;">
+  <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:12px;padding:40px;border:1px solid #e5e7eb;">
+    <div style="margin-bottom:24px;"><span style="color:#16a34a;font-weight:700;font-size:20px;">EnviroIQ</span></div>
+    <h1 style="font-size:20px;font-weight:700;color:${reminderType === "overdue" ? "#b91c1c" : "#111827"};margin:0 0 12px;">${headline}</h1>
+    <p style="color:#374151;margin:0 0 24px;font-size:15px;">Due: <strong>${dueDate}</strong></p>
+    <a href="${auditUrl}" style="display:inline-block;background:#16a34a;color:#fff;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:600;font-size:15px;">Open Audit →</a>
+  </div>
+</body></html>`;
+};
+
+export async function sendSupplierAuditReminderEmail(
+  to: string,
+  orgName: string,
+  auditUrl: string,
+  dueDate: string,
+  reminderType: "30d" | "7d" | "overdue",
+): Promise<{ sent: boolean; devMode: boolean }> {
+  const resend = await getResendClient();
+  if (resend) {
+    const subject = reminderType === "overdue"
+      ? `OVERDUE: ${orgName} supplier ESG audit`
+      : `Reminder: ${orgName} supplier ESG audit (due ${dueDate})`;
+    const { data, error } = await resend.client.emails.send({
+      from: resend.from,
+      to,
+      subject,
+      html: supplierReminderHtml(orgName, auditUrl, dueDate, reminderType),
+      text: `${subject}\n\n${auditUrl}`,
+    });
+    if (error) throw new Error(`Reminder send failed: ${error.message}`);
+    logger.info({ to, messageId: data?.id, reminderType }, "Supplier audit reminder sent");
+    return { sent: true, devMode: false };
+  }
+  if (process.env.NODE_ENV !== "production") {
+    console.log(`\n[SUPPLIER REMINDER — RESEND NOT CONFIGURED]\n  Type: ${reminderType}\n  To: ${to}\n  URL: ${auditUrl}\n`);
+    return { sent: false, devMode: true };
+  }
+  throw new Error("Resend not configured — cannot send supplier reminder in production");
+}
+
+const supplierPortalHtml = (magicUrl: string) => `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><title>Sign in to your supplier portal</title></head>
+<body style="font-family:system-ui,sans-serif;background:#f9fafb;margin:0;padding:40px 20px;">
+  <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:12px;padding:40px;border:1px solid #e5e7eb;">
+    <div style="margin-bottom:24px;"><span style="color:#16a34a;font-weight:700;font-size:20px;">EnviroIQ</span></div>
+    <h1 style="font-size:20px;font-weight:700;color:#111827;margin:0 0 12px;">Sign in to your supplier portal</h1>
+    <p style="color:#6b7280;margin:0 0 24px;font-size:15px;">Click below to sign in. The link expires in 30 minutes.</p>
+    <a href="${magicUrl}" style="display:inline-block;background:#16a34a;color:#fff;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:600;font-size:15px;">Sign in</a>
+  </div>
+</body></html>`;
+
+export async function sendSupplierPortalMagicLink(
+  to: string,
+  magicUrl: string,
+): Promise<{ sent: boolean; devMode: boolean }> {
+  const resend = await getResendClient();
+  if (resend) {
+    const { data, error } = await resend.client.emails.send({
+      from: resend.from,
+      to,
+      subject: "Sign in to your EnviroIQ supplier portal",
+      html: supplierPortalHtml(magicUrl),
+      text: `Sign in to your EnviroIQ supplier portal:\n${magicUrl}\n\nThis link expires in 30 minutes.`,
+    });
+    if (error) throw new Error(`Portal magic link send failed: ${error.message}`);
+    logger.info({ to, messageId: data?.id }, "Supplier portal magic link sent");
+    return { sent: true, devMode: false };
+  }
+  if (process.env.NODE_ENV !== "production") {
+    console.log(`\n[SUPPLIER PORTAL LINK — RESEND NOT CONFIGURED]\n  To: ${to}\n  URL: ${magicUrl}\n`);
+    return { sent: false, devMode: true };
+  }
+  throw new Error("Resend not configured — cannot send supplier portal link in production");
+}

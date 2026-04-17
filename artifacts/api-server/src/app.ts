@@ -3,6 +3,7 @@ import cors from "cors";
 import helmet from "helmet";
 import compression from "compression";
 import pinoHttp from "pino-http";
+import cookieParser from "cookie-parser";
 import session from "express-session";
 import ConnectPgSimple from "connect-pg-simple";
 import rateLimit from "express-rate-limit";
@@ -67,11 +68,13 @@ app.use(
     logger,
     serializers: {
       req(req) {
-        return {
-          id: req.id,
-          method: req.method,
-          url: req.url?.split("?")[0],
-        };
+        // SECURITY: Strip secrets out of URLs before logging. The public
+        // supplier-audit and supplier-portal flows carry bearer tokens in the
+        // path, which must never appear in any logger output.
+        const stripped = req.url?.split("?")[0]
+          ?.replace(/(\/public\/audits\/[^/]+)\/[^/?]+(\/[^/?]+)?/g, "$1/[REDACTED]$2")
+          ?.replace(/(\/portal\/verify)\?.*$/i, "$1?[REDACTED]");
+        return { id: req.id, method: req.method, url: stripped };
       },
       res(res) {
         return {
@@ -163,6 +166,8 @@ app.use("/api/auth", authLimiter);
 // Body parsing
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
+// Cookie parsing — required by the supplier-portal magic-link cookie session.
+app.use(cookieParser());
 
 // Detect HTTPS context: Replit always terminates TLS at the proxy layer, so any
 // request served via REPLIT_DEV_DOMAIN or REPLIT_DOMAINS is HTTPS even in dev mode.
@@ -209,7 +214,11 @@ app.use("/api", (req: Request, res: Response, next: NextFunction) => {
     const outcome: "success" | "failure" = res.statusCode >= 400 ? "failure" : "success";
     void logAudit({
       req,
-      action: `api.${req.method.toLowerCase()}.${req.path.replace(/\/[0-9a-f-]{8,}/g, "/:id").replace(/\//g, ".")}`,
+      action: `api.${req.method.toLowerCase()}.${req.path
+        // Redact opaque public audit tokens (base64url, 32+ chars) before any UUID redaction
+        .replace(/(\/public\/audits\/[^/]+)\/[^/?]+/g, "$1/:token")
+        .replace(/\/[0-9a-f-]{8,}/g, "/:id")
+        .replace(/\//g, ".")}`,
       outcome,
     });
   });

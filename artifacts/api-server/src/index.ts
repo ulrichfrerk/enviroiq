@@ -1,6 +1,8 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import { startScheduler, stopScheduler } from "./lib/scheduler";
+import { startSupplierAuditScheduler } from "./lib/scheduler-supplier-audits";
+import { ensureDefaultSupplierAuditTemplate } from "./lib/supplier-audit-default-template";
 import { db } from "@workspace/db";
 import { sql, eq } from "drizzle-orm";
 import { usersTable } from "@workspace/db/schema";
@@ -64,10 +66,12 @@ if (Number.isNaN(port) || port <= 0) {
 // Ensure all DB prerequisites exist, then start listening
 ensureSessionTable()
   .then(() => ensureSuperAdmin())
+  .then(() => ensureDefaultSupplierAuditTemplate())
   .then(() => {
     const server = app.listen(port, () => {
       logger.info({ port }, "Server listening");
       startScheduler();
+      startSupplierAuditScheduler();
     });
 
     process.on("SIGTERM", () => {

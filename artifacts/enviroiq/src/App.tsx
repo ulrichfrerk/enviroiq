@@ -32,6 +32,11 @@ import Waste from "@/pages/waste";
 import Subcontractors from "@/pages/subcontractors";
 import Advisor from "@/pages/advisor";
 import OnboardingWizard from "@/pages/onboarding-wizard";
+import Suppliers from "@/pages/suppliers";
+import SupplierReports from "@/pages/supplier-reports";
+import PublicAudit from "@/pages/public-audit";
+import SupplierPortalLogin from "@/pages/portal/login";
+import SupplierPortalHome from "@/pages/portal/index";
 
 import { AppLayout } from "@/components/layout/app-layout";
 import { useAuth } from "@/hooks/use-auth";
@@ -65,6 +70,11 @@ function Router() {
     <Switch>
       <Route path="/login" component={Login} />
       <Route path="/auth/verify" component={Verify} />
+      {/* Public, no-auth supplier audit form (token-based) */}
+      <Route path="/audits/:auditId/:token" component={PublicAudit} />
+      {/* Supplier portal (cookie-based magic-link auth) */}
+      <Route path="/portal/login" component={SupplierPortalLogin} />
+      <Route path="/portal" component={SupplierPortalHome} />
       <Route path="/">
         <Redirect to="/dashboard" />
       </Route>
@@ -88,6 +98,8 @@ function Router() {
       <Route path="/projects"><ProtectedRoute component={Projects} /></Route>
       <Route path="/waste"><ProtectedRoute component={Waste} /></Route>
       <Route path="/subcontractors"><ProtectedRoute component={Subcontractors} /></Route>
+      <Route path="/suppliers"><ProtectedRoute component={Suppliers} /></Route>
+      <Route path="/supplier-reports"><ProtectedRoute component={SupplierReports} /></Route>
       <Route path="/advisor"><ProtectedRoute component={Advisor} /></Route>
       <Route path="/onboard-org"><ProtectedRoute component={OnboardingWizard} /></Route>
       <Route path="/:slug" component={OrgLogin} />
