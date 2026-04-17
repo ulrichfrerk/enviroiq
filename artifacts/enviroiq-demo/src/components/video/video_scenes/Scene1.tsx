@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 
 export function Scene1() {
   const [phase, setPhase] = useState(0);
@@ -45,7 +45,7 @@ export function Scene1() {
         
         {/* Rapid fire problem statements */}
         <div className="h-[20vh] flex items-center justify-center mb-8 relative w-full">
-          <AnimatePresence mode="wait">
+          <AnimatePresence mode="popLayout">
             {phase === 1 && (
               <motion.div
                 key="p1"
