@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   Target, Plus, Trash2, Loader2, TrendingDown, Calendar,
-  CheckCircle2, AlertTriangle, ChevronRight, Sparkles, Wand2,
+  CheckCircle2, AlertTriangle, ChevronRight, Sparkles, Wand2, Pencil,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
@@ -111,6 +111,7 @@ export default function Targets() {
   const qc = useQueryClient();
 
   const [isOpen, setIsOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState({
     baselineYear: new Date().getFullYear() - 1,
     baselineCo2eKg: "",
@@ -229,10 +230,71 @@ export default function Targets() {
       qc.invalidateQueries({ queryKey: ["targets", orgId] });
       setIsOpen(false);
       toast({ title: "Target created" });
-      setForm({ baselineYear: new Date().getFullYear() - 1, baselineCo2eKg: "", targetYear: new Date().getFullYear() + 5, targetPctReduction: "30", label: "", framework: "" });
+      resetForm();
     },
     onError: (e: Error) => toast({ variant: "destructive", title: "Failed to create target", description: e.message }),
   });
+
+  const updateMutation = useMutation({
+    mutationFn: async () => {
+      if (!editingId) throw new Error("No target selected");
+      const res = await fetch(`/api/organisations/${orgId}/targets/${editingId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          baselineYear: Number(form.baselineYear),
+          baselineCo2eKg: Number(form.baselineCo2eKg),
+          targetYear: Number(form.targetYear),
+          targetPctReduction: Number(form.targetPctReduction),
+          label: form.label || null,
+          framework: form.framework || null,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({})) as { message?: string };
+        throw new Error(err.message ?? "Failed to update target");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["targets", orgId] });
+      setIsOpen(false);
+      toast({ title: "Target updated" });
+      resetForm();
+    },
+    onError: (e: Error) => toast({ variant: "destructive", title: "Failed to update target", description: e.message }),
+  });
+
+  function resetForm() {
+    setEditingId(null);
+    setForm({
+      baselineYear: new Date().getFullYear() - 1,
+      baselineCo2eKg: "",
+      targetYear: new Date().getFullYear() + 5,
+      targetPctReduction: "30",
+      label: "",
+      framework: "",
+    });
+  }
+
+  function openEdit(t: EmissionTarget) {
+    setEditingId(t.id);
+    setForm({
+      baselineYear: t.baselineYear,
+      baselineCo2eKg: String(t.baselineCo2eKg),
+      targetYear: t.targetYear,
+      targetPctReduction: String(t.targetPctReduction),
+      label: t.label ?? "",
+      framework: t.framework ?? "",
+    });
+    setIsOpen(true);
+  }
+
+  function openCreate() {
+    resetForm();
+    setIsOpen(true);
+  }
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
@@ -276,7 +338,7 @@ export default function Targets() {
             Set science-based reduction goals and track your trajectory.
           </p>
         </div>
-        <Button onClick={() => setIsOpen(true)} className="shadow-lg shadow-primary/20">
+        <Button onClick={openCreate} className="shadow-lg shadow-primary/20">
           <Plus className="w-4 h-4 mr-2" /> Set Target
         </Button>
       </div>
@@ -291,7 +353,7 @@ export default function Targets() {
             Setting an emission reduction target is the first step toward a credible decarbonisation plan —
             and a requirement for most ESG tender frameworks.
           </p>
-          <Button onClick={() => setIsOpen(true)}>
+          <Button onClick={openCreate}>
             <Plus className="w-4 h-4 mr-2" /> Set your first target
           </Button>
         </Card>
@@ -368,13 +430,24 @@ export default function Targets() {
                   </div>
                 </div>
 
-                <Button
-                  variant="ghost" size="icon"
-                  className="shrink-0 text-muted-foreground hover:text-destructive"
-                  onClick={() => deleteMutation.mutate(t.id)}
-                >
-                  <Trash2 className="w-4 h-4" />
-                </Button>
+                <div className="flex flex-col gap-1 shrink-0">
+                  <Button
+                    variant="ghost" size="icon"
+                    className="text-muted-foreground hover:text-primary"
+                    onClick={() => openEdit(t)}
+                    aria-label="Edit target"
+                  >
+                    <Pencil className="w-4 h-4" />
+                  </Button>
+                  <Button
+                    variant="ghost" size="icon"
+                    className="text-muted-foreground hover:text-destructive"
+                    onClick={() => deleteMutation.mutate(t.id)}
+                    aria-label="Delete target"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
+                </div>
               </div>
             </Card>
           ))}
@@ -382,11 +455,12 @@ export default function Targets() {
       )}
 
       {/* Create dialog */}
-      <Dialog open={isOpen} onOpenChange={setIsOpen}>
+      <Dialog open={isOpen} onOpenChange={(o) => { setIsOpen(o); if (!o) resetForm(); }}>
         <DialogContent className="bg-card border-border sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Target className="w-5 h-5 text-primary" /> New Emission Target
+              <Target className="w-5 h-5 text-primary" />
+              {editingId ? "Edit Emission Target" : "New Emission Target"}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 mt-2">
@@ -521,14 +595,18 @@ export default function Targets() {
             )}
 
             <div className="flex gap-2 justify-end pt-1">
-              <Button variant="outline" onClick={() => setIsOpen(false)}>Cancel</Button>
+              <Button variant="outline" onClick={() => { setIsOpen(false); resetForm(); }}>Cancel</Button>
               <Button
-                onClick={() => createMutation.mutate()}
-                disabled={!form.baselineCo2eKg || !form.targetPctReduction || createMutation.isPending}
+                onClick={() => editingId ? updateMutation.mutate() : createMutation.mutate()}
+                disabled={!form.baselineCo2eKg || !form.targetPctReduction || createMutation.isPending || updateMutation.isPending}
                 className="shadow-sm shadow-primary/20"
               >
-                {createMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-1.5" /> : <Plus className="w-4 h-4 mr-1.5" />}
-                Create Target
+                {(createMutation.isPending || updateMutation.isPending)
+                  ? <Loader2 className="w-4 h-4 animate-spin mr-1.5" />
+                  : editingId
+                    ? <Pencil className="w-4 h-4 mr-1.5" />
+                    : <Plus className="w-4 h-4 mr-1.5" />}
+                {editingId ? "Save Changes" : "Create Target"}
               </Button>
             </div>
           </div>
