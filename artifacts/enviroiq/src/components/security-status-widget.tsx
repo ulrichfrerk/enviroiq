@@ -66,7 +66,22 @@ function statusIcon(status: CheckStatus) {
   return <XCircle className="h-4 w-4 text-red-500" />;
 }
 
-function severityBadge(severity: Severity) {
+function severityBadge(severity: Severity, status: CheckStatus) {
+  // When the check is passing, the severity is informational only ("this is a
+  // critical-importance area — and it's covered"). Use a muted style so users
+  // don't read a green-pass + red-CRITICAL badge as an alarm.
+  if (status === "pass") {
+    return (
+      <Badge
+        variant="outline"
+        className="text-[10px] px-1.5 py-0 h-4 font-medium uppercase bg-muted text-muted-foreground border-border"
+        title={`${severity} importance — currently passing`}
+      >
+        {severity}
+      </Badge>
+    );
+  }
+  // Only when the check is warn/fail does the severity drive the colour.
   const styles: Record<Severity, string> = {
     critical: "bg-red-500/10 text-red-500 border-red-500/30",
     high: "bg-amber-500/10 text-amber-500 border-amber-500/30",
