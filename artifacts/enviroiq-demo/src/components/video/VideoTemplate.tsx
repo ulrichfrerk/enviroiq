@@ -9,7 +9,11 @@ import { Scene5 } from './video_scenes/Scene5';
 const SCENE_DURATIONS = { open: 12000, build1: 15000, build2: 18000, build3: 15000, close: 10000 };
 
 export default function VideoTemplate() {
-  const { currentScene } = useVideoPlayer({ durations: SCENE_DURATIONS });
+  const { currentScene: playerScene } = useVideoPlayer({ durations: SCENE_DURATIONS });
+  const sceneOverride = typeof window !== 'undefined'
+    ? new URLSearchParams(window.location.search).get('scene')
+    : null;
+  const currentScene = sceneOverride !== null ? Number(sceneOverride) : playerScene;
 
   return (
     <div className="relative w-full h-screen overflow-hidden bg-[#0a110d] text-[#fdfbf7]">
