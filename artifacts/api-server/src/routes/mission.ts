@@ -36,11 +36,11 @@ router.post("/generate", requireAuth, requireOrgAccess, async (req: Request, res
   }>(sql`
     SELECT
       (SELECT COALESCE(SUM(co2e_kg),0) FROM fleet_events WHERE organisation_id = ${orgId} AND recorded_at > NOW() - INTERVAL '12 months') +
-      (SELECT COALESCE(SUM(co2e_kg),0) FROM energy_bills WHERE organisation_id = ${orgId} AND bill_date > NOW() - INTERVAL '12 months')
+      (SELECT COALESCE(SUM(co2e_kg),0) FROM energy_readings WHERE organisation_id = ${orgId} AND period_end > NOW() - INTERVAL '12 months')
         AS total_co2e_kg,
       (SELECT COALESCE(SUM(co2e_kg),0) FROM fleet_events WHERE organisation_id = ${orgId} AND recorded_at > NOW() - INTERVAL '12 months') AS fleet_co2e_kg,
-      (SELECT COALESCE(SUM(co2e_kg),0) FROM energy_bills WHERE organisation_id = ${orgId} AND bill_date > NOW() - INTERVAL '12 months') AS energy_co2e_kg,
-      (SELECT COUNT(*) FROM vehicles WHERE organisation_id = ${orgId} AND status = 'active') AS vehicle_count
+      (SELECT COALESCE(SUM(co2e_kg),0) FROM energy_readings WHERE organisation_id = ${orgId} AND period_end > NOW() - INTERVAL '12 months') AS energy_co2e_kg,
+      (SELECT COUNT(*) FROM vehicles WHERE organisation_id = ${orgId}) AS vehicle_count
   `);
 
   const targets = await db.execute<{
@@ -57,7 +57,7 @@ router.post("/generate", requireAuth, requireOrgAccess, async (req: Request, res
   const vehicleCount = parseInt((emissionsRow?.vehicle_count ?? "0"));
   const totalCo2eKg = parseFloat((emissionsRow?.total_co2e_kg ?? "0"));
   const [billCount] = await db.execute<{ cnt: string }>(
-    sql`SELECT COUNT(*)::text AS cnt FROM energy_bills WHERE organisation_id = ${orgId}`
+    sql`SELECT COUNT(*)::text AS cnt FROM energy_readings WHERE organisation_id = ${orgId}`
   );
   const [targetCount] = await db.execute<{ cnt: string }>(
     sql`SELECT COUNT(*)::text AS cnt FROM emission_targets WHERE organisation_id = ${orgId}`
