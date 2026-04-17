@@ -9,19 +9,14 @@ import {
 import { eq, and, gte, sum, sql, desc } from "drizzle-orm";
 import { requireAuth, requireOrgAccess } from "../lib/auth.js";
 import {
-  findVehicleAlternative,
-  VEHICLE_FALLBACK_HYBRID,
+  rankVehicleAlternatives,
+  type ScoredCandidate,
   suggestSolarSystemKw,
   RENEWABLE_SUPPLIERS,
   BUILDING_MEASURES,
   OPERATIONAL_MEASURES,
-  PETROL_NZD_PER_LITRE,
-  DIESEL_NZD_PER_LITRE,
-  PETROL_KG_PER_LITRE,
-  DIESEL_KG_PER_LITRE,
   NZ_GRID_INTENSITY_KG_PER_KWH,
   NZ_RETAIL_KWH_NZD,
-  EV_KWH_PER_KM,
 } from "../lib/recommendations-catalogue.js";
 
 const router = Router({ mergeParams: true });
@@ -53,6 +48,15 @@ export interface Recommendation {
   effort: RecEffort;
   related?: { vehicleId?: string; vehicleName?: string };
   links?: { label: string; href: string }[];
+  /**
+   * For fleet-swap recommendations: the full ranked candidate list, so the UI
+   * can show *why* the top pick beat the runners-up.
+   */
+  vehicleScoring?: {
+    segment: string;
+    pick: string;
+    candidates: ScoredCandidate[];
+  };
 }
 
 const ONE_YEAR_MS = 365 * 24 * 60 * 60 * 1000;
@@ -131,62 +135,64 @@ router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
       const stats = statsByVehicle.get(v.id);
       const kmYear = stats?.kmYear ?? 0;
       const currentCo2eYear = stats?.co2eYearKg ?? 0;
+      const litresYear = stats?.litresYear ?? 0;
 
       // Skip already-electric or low-utilisation
       if (v.fuelType === "electric") continue;
       if (kmYear < 3000) continue; // Right-sizing handled by operational measures
 
-      const alt = findVehicleAlternative(v.make, v.model);
-      const replacement = alt?.alternative ?? VEHICLE_FALLBACK_HYBRID;
-      const segment = alt?.segment ?? "Vehicle";
+      // Score every candidate in this segment against the vehicle's actual duty cycle
+      const { segment: seg, ranked } = rankVehicleAlternatives({
+        make: v.make,
+        model: v.model,
+        kmYear,
+        currentCo2eYearKg: currentCo2eYear,
+        currentLitresYear: litresYear,
+        currentFuelType: v.fuelType,
+      });
 
-      const newCo2eYear = kmYear * replacement.emissionFactorKgPerKm;
-      const annualCo2eSavingKg = Math.round(currentCo2eYear - newCo2eYear);
-
-      if (annualCo2eSavingKg <= 100) continue; // Not worth surfacing
-
-      // Annual fuel-cost saving
-      const litresYear = stats?.litresYear ?? 0;
-      const fuelPrice = v.fuelType === "diesel" ? DIESEL_NZD_PER_LITRE : PETROL_NZD_PER_LITRE;
-      let fuelCostSavingNzd = litresYear * fuelPrice;
-      if (replacement.type === "BEV") {
-        const evRunningCost = kmYear * EV_KWH_PER_KM * NZ_RETAIL_KWH_NZD;
-        fuelCostSavingNzd = Math.round(fuelCostSavingNzd - evRunningCost);
-      } else if (replacement.type === "PHEV") {
-        // PHEV utilisation: ~60% EV-mode kms (charged at home/depot),
-        // ~40% petrol-mode kms once daily EV range exhausted.
-        const PHEV_PETROL_LITRES_PER_KM = 6 / 100; // 6 L/100km on petrol portion
-        const blendedRunning =
-          kmYear * 0.60 * EV_KWH_PER_KM * NZ_RETAIL_KWH_NZD +
-          kmYear * 0.40 * PHEV_PETROL_LITRES_PER_KM * fuelPrice;
-        fuelCostSavingNzd = Math.round(fuelCostSavingNzd - blendedRunning);
-      } else {
-        fuelCostSavingNzd = Math.round(fuelCostSavingNzd * 0.5);
-      }
+      const top = ranked[0];
+      if (!top || top.annualCo2eSavingKg <= 100) continue; // Not worth surfacing
 
       const ageYears = v.year ? new Date().getFullYear() - v.year : null;
+      const runnerUp = ranked[1];
+      const reasonVsRunnerUp = runnerUp
+        ? ` Beat ${runnerUp.name} (${runnerUp.score}/100) by ${top.score - runnerUp.score} points — `
+          + (top.breakdown.tco > runnerUp.breakdown.tco
+              ? `lower 5-yr TCO ($${(top.fiveYearTcoNzd / 1000).toFixed(0)}k vs $${(runnerUp.fiveYearTcoNzd / 1000).toFixed(0)}k).`
+              : top.breakdown.suitability > runnerUp.breakdown.suitability
+                ? "better fit for the duty cycle."
+                : top.breakdown.emissions > runnerUp.breakdown.emissions
+                  ? `bigger CO₂e cut (${top.annualCo2eSavingKg.toLocaleString()} vs ${runnerUp.annualCo2eSavingKg.toLocaleString()} kg/yr).`
+                  : "wider NZ availability and warranty.")
+        : "";
 
       recommendations.push({
         id: `fleet-swap-${v.id}`,
         category: "fleet",
-        priority: priorityFromImpact(annualCo2eSavingKg, grandTotalKg),
+        priority: priorityFromImpact(top.annualCo2eSavingKg, grandTotalKg),
         scope: "1",
-        title: `Replace ${v.name}${v.registration ? ` (${v.registration})` : ""} with ${replacement.name}`,
+        title: `Replace ${v.name}${v.registration ? ` (${v.registration})` : ""} with ${top.name}`,
         rationale:
           `${v.make ?? "This"} ${v.model ?? "vehicle"}` +
           (ageYears != null ? `, ${ageYears} years old, ` : ", ") +
           `drives ~${Math.round(kmYear).toLocaleString()} km/yr emitting ${Math.round(currentCo2eYear).toLocaleString()} kg CO₂e. ` +
-          `${replacement.note}`,
-        action: `Replace with a ${replacement.name} (${segment}, ${replacement.type}). Eligible for whole-of-life cost analysis via the EECA Heavy Vehicle / Light Fleet decision tools.`,
-        annualCo2eSavingKg,
-        annualCostSavingNzd: Math.max(0, fuelCostSavingNzd),
-        estimatedCapexNzd: replacement.nzPriceNzd,
+          `${top.note} Scored ${top.score}/100 against ${ranked.length - 1} alternative${ranked.length - 1 === 1 ? "" : "s"} in the ${seg.segment} segment.${reasonVsRunnerUp}`,
+        action: `Replace with a ${top.name} (${seg.segment}, ${top.type}). Eligible for whole-of-life cost analysis via the EECA Heavy Vehicle / Light Fleet decision tools.`,
+        annualCo2eSavingKg: top.annualCo2eSavingKg,
+        annualCostSavingNzd: top.annualRunningSavingNzd,
+        estimatedCapexNzd: top.nzPriceNzd,
         paybackYears:
-          fuelCostSavingNzd > 0
-            ? Math.round((replacement.nzPriceNzd / fuelCostSavingNzd) * 10) / 10
+          top.annualRunningSavingNzd > 0
+            ? Math.round((top.nzPriceNzd / top.annualRunningSavingNzd) * 10) / 10
             : undefined,
         effort: "high",
         related: { vehicleId: v.id, vehicleName: v.name },
+        vehicleScoring: {
+          segment: seg.segment,
+          pick: top.name,
+          candidates: ranked,
+        },
         links: [
           { label: "Compare in Fleet", href: "/fleet" },
           { label: "Model in Scenarios", href: "/scenarios" },

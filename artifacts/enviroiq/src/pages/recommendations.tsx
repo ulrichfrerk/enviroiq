@@ -7,12 +7,32 @@ import { Button } from "@/components/ui/button";
 import {
   Lightbulb, TrendingDown, Loader2, Car, Zap, Sun, Building2, Wrench,
   Plug, AlertCircle, ChevronRight, Target, ExternalLink, DollarSign,
-  Clock, ArrowRight,
+  Clock, ArrowRight, ChevronDown, Award,
 } from "lucide-react";
 
 type RecCategory = "fleet" | "energy" | "solar" | "supplier" | "building" | "operations";
 type RecPriority = "high" | "medium" | "low";
 type RecEffort = "low" | "medium" | "high";
+
+interface ScoredCandidate {
+  name: string;
+  type: "BEV" | "PHEV" | "HEV";
+  nzPriceNzd: number;
+  rangeKmEV: number;
+  towKg: number;
+  payloadKg: number;
+  availability: "available" | "preorder" | "limited";
+  warrantyYears: number;
+  note: string;
+  score: number;
+  breakdown: { emissions: number; tco: number; suitability: number; availability: number };
+  annualCo2eKg: number;
+  annualCo2eSavingKg: number;
+  annualRunningNzd: number;
+  annualRunningSavingNzd: number;
+  fiveYearTcoNzd: number;
+  reasons: string[];
+}
 
 interface Recommendation {
   id: string;
@@ -29,6 +49,11 @@ interface Recommendation {
   effort: RecEffort;
   related?: { vehicleId?: string; vehicleName?: string };
   links?: { label: string; href: string }[];
+  vehicleScoring?: {
+    segment: string;
+    pick: string;
+    candidates: ScoredCandidate[];
+  };
 }
 
 interface RecommendationsResponse {
@@ -89,6 +114,105 @@ function fmtNzd(n: number) {
 const ALL_CATEGORIES: ("all" | RecCategory)[] = [
   "all", "fleet", "energy", "solar", "supplier", "building", "operations",
 ];
+
+// ── Vehicle scoring comparison table ────────────────────────────────────────
+function VehicleScoringTable({ scoring }: { scoring: NonNullable<Recommendation["vehicleScoring"]> }) {
+  const [open, setOpen] = useState(false);
+  const candidates = scoring.candidates;
+
+  return (
+    <div className="mt-4 rounded-lg border border-border/40 bg-background/30">
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center justify-between px-3 py-2.5 text-left hover:bg-secondary/30 rounded-lg transition-colors"
+      >
+        <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          <Award className="w-3.5 h-3.5" />
+          Why this pick? Compare {candidates.length} {scoring.segment.toLowerCase()} alternative{candidates.length === 1 ? "" : "s"}
+        </span>
+        <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open && (
+        <div className="px-3 pb-3 pt-1 space-y-3">
+          <p className="text-[11px] text-muted-foreground leading-relaxed">
+            Each candidate is scored out of 100 against this vehicle's actual annual km and current fuel use. Top score wins.
+            <span className="block mt-1">
+              <span className="font-semibold text-foreground">Emissions /40</span> · % CO₂e cut ·{" "}
+              <span className="font-semibold text-foreground">5-yr TCO /30</span> · capex + 5yr running vs business-as-usual ·{" "}
+              <span className="font-semibold text-foreground">Suitability /20</span> · tow / payload / range fit ·{" "}
+              <span className="font-semibold text-foreground">Availability /10</span> · NZ supply now
+            </span>
+          </p>
+
+          <div className="overflow-x-auto -mx-3 px-3">
+            <table className="w-full text-xs border-collapse">
+              <thead>
+                <tr className="text-left text-[10px] uppercase tracking-wider text-muted-foreground border-b border-border/30">
+                  <th className="py-2 pr-3 font-semibold">Vehicle</th>
+                  <th className="py-2 px-2 font-semibold text-right">Score</th>
+                  <th className="py-2 px-2 font-semibold text-right" title="Emissions / TCO / Suitability / Availability">Em · TCO · Fit · Avail</th>
+                  <th className="py-2 px-2 font-semibold text-right">CO₂e saved /yr</th>
+                  <th className="py-2 px-2 font-semibold text-right">5-yr TCO</th>
+                  <th className="py-2 px-2 font-semibold text-right">Capex</th>
+                  <th className="py-2 pl-2 font-semibold">Capability</th>
+                </tr>
+              </thead>
+              <tbody>
+                {candidates.map((c, i) => {
+                  const isTop = i === 0;
+                  return (
+                    <tr key={c.name} className={`border-b border-border/20 last:border-0 ${isTop ? "bg-emerald-950/15" : ""}`}>
+                      <td className="py-2.5 pr-3">
+                        <div className="flex items-start gap-2">
+                          {isTop && <Award className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />}
+                          <div className="min-w-0">
+                            <p className={`font-medium leading-tight ${isTop ? "text-foreground" : "text-muted-foreground"}`}>
+                              {c.name}
+                            </p>
+                            <p className="text-[10px] text-muted-foreground/80 mt-0.5">
+                              {c.type}
+                              {c.rangeKmEV > 0 && ` · ${c.rangeKmEV} km EV`}
+                              {c.availability !== "available" && ` · ${c.availability}`}
+                              {` · ${c.warrantyYears}yr warranty`}
+                            </p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className={`py-2.5 px-2 text-right tabular-nums font-bold ${isTop ? "text-emerald-300" : "text-foreground"}`}>
+                        {c.score}
+                      </td>
+                      <td className="py-2.5 px-2 text-right tabular-nums text-[11px] text-muted-foreground">
+                        {c.breakdown.emissions} · {c.breakdown.tco} · {c.breakdown.suitability} · {c.breakdown.availability}
+                      </td>
+                      <td className="py-2.5 px-2 text-right tabular-nums text-emerald-300/90">
+                        {c.annualCo2eSavingKg >= 1000 ? `${(c.annualCo2eSavingKg / 1000).toFixed(1)} t` : `${c.annualCo2eSavingKg} kg`}
+                      </td>
+                      <td className="py-2.5 px-2 text-right tabular-nums text-foreground">
+                        ${(c.fiveYearTcoNzd / 1000).toFixed(0)}k
+                      </td>
+                      <td className="py-2.5 px-2 text-right tabular-nums text-muted-foreground">
+                        ${(c.nzPriceNzd / 1000).toFixed(0)}k
+                      </td>
+                      <td className="py-2.5 pl-2 text-[11px] text-muted-foreground">
+                        {c.towKg > 0 ? `${(c.towKg / 1000).toFixed(c.towKg >= 1000 ? 1 : 2)}T tow` : "no tow"}
+                        {` · ${c.payloadKg}kg payload`}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="text-[11px] text-muted-foreground leading-relaxed border-t border-border/30 pt-2">
+            <span className="font-semibold text-foreground">Top pick:</span> {candidates[0].note}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function Recommendations() {
   const { session } = useAuth();
@@ -312,6 +436,9 @@ export default function Recommendations() {
                           </div>
                         )}
                       </div>
+
+                      {/* Vehicle scoring breakdown (fleet-swap recs only) */}
+                      {r.vehicleScoring && <VehicleScoringTable scoring={r.vehicleScoring} />}
 
                       {/* Links */}
                       {r.links && r.links.length > 0 && (
