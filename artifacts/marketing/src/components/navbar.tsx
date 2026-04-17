@@ -26,10 +26,10 @@ export function Navbar() {
             <a href="/app/login">Log In</a>
           </Button>
           <Button asChild variant="ghost" className="hidden sm:inline-flex">
-            <a href="mailto:hello@enviroiq.net">Contact Sales</a>
+            <a href="mailto:contact@frerkencompanies.com">Contact Sales</a>
           </Button>
           <Button asChild className="bg-primary text-primary-foreground hover:bg-primary/90 font-medium">
-            <a href="mailto:hello@enviroiq.net">Request a Demo</a>
+            <a href="mailto:contact@frerkencompanies.com">Request a Demo</a>
           </Button>
         </div>
       </div>

@@ -241,7 +241,7 @@ router.get("/public/pack.txt", async (req: Request, res: Response) => {
   lines.push("");
   lines.push("Detailed per-check infrastructure data is intentionally not");
   lines.push("included in the public pack. Customers and auditors can request");
-  lines.push("the full Security Pack (signed PDF) from platform@enviroiq.net,");
+  lines.push("the full Security Pack (signed PDF) from contact@frerkencompanies.com,");
   lines.push("or download it directly from the in-app admin Security widget.");
   lines.push("");
 

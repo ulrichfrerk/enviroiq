@@ -373,7 +373,7 @@ export default function Trust() {
                 { q: "How do I prove a number to my board?", a: "Click any ESG figure. You see the raw source rows, the emission factor version applied, the calculation timestamp, and the ingest batch ID. Or export the full evidence pack as a ZIP." },
                 { q: "Are you SOC 2 certified?", a: "SOC 2 Type I is in active preparation, target H1 2026. The platform is built to SOC 2 controls today (immutable audit log, RBAC, encryption, change management). Type II attestation follows in H2 2026." },
                 { q: "What's your incident response process?", a: "Detected within minutes via runtime monitoring. Customer notification within 24 hours of confirmed breach affecting their data. Full post-incident report within 14 days." },
-                { q: "Do you have a security pack for procurement?", a: "Yes — request it via hello@enviroiq.net. Includes architecture diagram, data flow, control mapping, sub-processor list, and SOC 2 readiness summary." },
+                { q: "Do you have a security pack for procurement?", a: "Yes — request it via contact@frerkencompanies.com. Includes architecture diagram, data flow, control mapping, sub-processor list, and SOC 2 readiness summary." },
               ].map((item, i) => (
                 <motion.details
                   key={i}
@@ -402,7 +402,7 @@ export default function Trust() {
               Architecture diagram, data flow, control mapping, sub-processor list, and SOC 2 readiness summary — for your procurement team.
             </p>
             <Button size="lg" className="bg-primary text-primary-foreground hover:bg-primary/90 h-14 px-8 text-lg" asChild>
-              <a href="mailto:hello@enviroiq.net?subject=EnviroIQ%20Security%20Review">
+              <a href="mailto:contact@frerkencompanies.com?subject=EnviroIQ%20Security%20Review">
                 Request Security Pack
                 <ArrowRight className="ml-2 w-5 h-5" />
               </a>

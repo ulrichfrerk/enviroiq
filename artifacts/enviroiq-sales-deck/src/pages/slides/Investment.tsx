@@ -57,7 +57,7 @@ export default function Investment() {
           </div>
           <div className="text-right">
             <div className="font-mono text-[0.95vw] text-muted uppercase tracking-[0.25em]">Contact</div>
-            <div className="mt-[1vh] text-[1.6vw] font-display font-semibold">hello@enviroiq.net</div>
+            <div className="mt-[1vh] text-[1.6vw] font-display font-semibold">contact@frerkencompanies.com</div>
             <div className="mt-[0.5vh] text-[1.1vw] text-muted font-mono">enviroiq.net/trust</div>
           </div>
         </div>

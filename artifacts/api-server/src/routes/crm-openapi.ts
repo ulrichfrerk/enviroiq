@@ -368,7 +368,7 @@ provisioning requests and support tickets, and to query the audit log.
 **Authentication:** Bearer API key (\`eiq_live_…\`) issued from the EnviroIQ
 Super Admin portal. Each key has explicit scopes — see \`securitySchemes\`.
       `.trim(),
-      contact: { name: "EnviroIQ Platform Team", email: "platform@enviroiq.net" },
+      contact: { name: "EnviroIQ Platform Team", email: "contact@frerkencompanies.com" },
     },
     servers: [{ url: baseUrl, description: "Production" }],
     components: {

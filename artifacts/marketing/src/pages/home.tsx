@@ -65,7 +65,7 @@ export default function Home() {
 
               <motion.div variants={fadeIn} className="flex flex-col sm:flex-row gap-4">
                 <Button size="lg" className="bg-primary text-primary-foreground hover:bg-primary/90 h-14 px-8 text-lg group" asChild>
-                  <a href="mailto:hello@enviroiq.net">
+                  <a href="mailto:contact@frerkencompanies.com">
                     Request a Demo
                     <ArrowRight className="ml-2 w-5 h-5 group-hover:translate-x-1 transition-transform" />
                   </a>
@@ -892,7 +892,7 @@ export default function Home() {
               <span>Built for New Zealand.</span>
             </div>
             <Button size="lg" className="bg-white text-primary hover:bg-white/90 h-16 px-10 text-xl shadow-2xl font-semibold" asChild>
-              <a href="mailto:hello@enviroiq.net">
+              <a href="mailto:contact@frerkencompanies.com">
                 Request a Demo Now
               </a>
             </Button>
