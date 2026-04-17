@@ -1,0 +1,58 @@
+[
+  {
+    "id": "8c4a6c1e-1a2b-4d3e-9f01-a1b2c3d4e5f1",
+    "position": 1,
+    "filepath": "src/pages/slides/Title.tsx",
+    "title": "ESG data your board, auditor and regulator will trust",
+    "description": "Title slide — positioning statement and brand mark.",
+    "speakerNotes": ""
+  },
+  {
+    "id": "8c4a6c1e-1a2b-4d3e-9f01-a1b2c3d4e5f2",
+    "position": 2,
+    "filepath": "src/pages/slides/Problem.tsx",
+    "title": "The problem — most ESG dashboards are 'trust me' data",
+    "description": "Three audience views: boards lose confidence, auditors reject, procurement stalls.",
+    "speakerNotes": ""
+  },
+  {
+    "id": "8c4a6c1e-1a2b-4d3e-9f01-a1b2c3d4e5f3",
+    "position": 3,
+    "filepath": "src/pages/slides/Positioning.tsx",
+    "title": "Positioning — real-time operational intelligence with audit-grade ESG outputs",
+    "description": "Three pillars: operational, audit-grade, enterprise-ready, plus the narrative quote.",
+    "speakerNotes": ""
+  },
+  {
+    "id": "8c4a6c1e-1a2b-4d3e-9f01-a1b2c3d4e5f4",
+    "position": 4,
+    "filepath": "src/pages/slides/TrustLayer.tsx",
+    "title": "The trust layer — click any number, see where it came from",
+    "description": "Lineage drill-down mockup beside the four pillars: immutable, versioned, logged, replayable.",
+    "speakerNotes": ""
+  },
+  {
+    "id": "8c4a6c1e-1a2b-4d3e-9f01-a1b2c3d4e5f5",
+    "position": 5,
+    "filepath": "src/pages/slides/Platform.tsx",
+    "title": "The platform — full E + S + G coverage plus Supplier Assurance",
+    "description": "Four modules and three differentiators (AI Advisor, board PDFs, maturity scoring).",
+    "speakerNotes": ""
+  },
+  {
+    "id": "8c4a6c1e-1a2b-4d3e-9f01-a1b2c3d4e5f6",
+    "position": 6,
+    "filepath": "src/pages/slides/Compliance.tsx",
+    "title": "Compliance & security — built to clear procurement on day one",
+    "description": "Six-tile control summary plus SOC 2 / ISO 27001 dated roadmap.",
+    "speakerNotes": ""
+  },
+  {
+    "id": "8c4a6c1e-1a2b-4d3e-9f01-a1b2c3d4e5f7",
+    "position": 7,
+    "filepath": "src/pages/slides/Investment.tsx",
+    "title": "Investment & next steps — Operate / Assure / Enterprise tiers",
+    "description": "Three pricing tiers with the Assure tier highlighted, plus next-step CTA.",
+    "speakerNotes": ""
+  }
+]

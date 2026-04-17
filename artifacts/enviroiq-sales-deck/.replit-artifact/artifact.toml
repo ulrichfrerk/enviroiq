@@ -1,0 +1,31 @@
+kind = "slides"
+previewPath = "/enviroiq-sales-deck/"
+title = "EnviroIQ Sales Deck"
+version = "1.0.0"
+id = "artifacts/enviroiq-sales-deck"
+router = "path"
+
+[[integratedSkills]]
+name = "slides"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/enviroiq-sales-deck/" ]
+localPort = 22044
+
+[services.development]
+run = "pnpm --filter @workspace/enviroiq-sales-deck run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/enviroiq-sales-deck", "run", "build" ]
+publicDir = "artifacts/enviroiq-sales-deck/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "22044"
+BASE_PATH = "/enviroiq-sales-deck/"

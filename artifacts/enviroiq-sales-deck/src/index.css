@@ -1,0 +1,33 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-primary: var(--slide-primary);
+  --color-accent: var(--slide-accent);
+  --color-bg: var(--slide-bg);
+  --color-surface: var(--slide-surface);
+  --color-text: var(--slide-text);
+  --color-muted: var(--slide-muted);
+  --color-line: var(--slide-line);
+  --font-display: var(--font-display-family);
+  --font-body: var(--font-body-family);
+  --font-mono: var(--font-mono-family);
+}
+
+:root {
+  --slide-primary: #22C55E;
+  --slide-accent: #16A34A;
+  --slide-bg: #0B0D0F;
+  --slide-surface: #15191D;
+  --slide-text: #F5F7F8;
+  --slide-muted: #8A949D;
+  --slide-line: #232A30;
+  --font-display-family: "Space Grotesk", system-ui, sans-serif;
+  --font-body-family: "Inter", system-ui, sans-serif;
+  --font-mono-family: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  color-scheme: dark;
+}
+
+html, body, #root { width: 100%; height: 100%; margin: 0; }
+body { background: var(--slide-bg); color: var(--slide-text); font-family: var(--font-body-family); }
+.slide { width: 100vw; height: 100vh; overflow: hidden; }
+.slide-viewer { touch-action: none; user-select: none; -webkit-user-select: none; }
