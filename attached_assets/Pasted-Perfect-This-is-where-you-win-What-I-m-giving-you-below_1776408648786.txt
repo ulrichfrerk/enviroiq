@@ -1,0 +1,245 @@
+Perfect. This is where you win.
+
+What I’m giving you below is not a generic ESG checklist — this is a commercial-grade Supplier ESG Audit that:
+	•	Feeds scoring
+	•	Creates audit defensibility
+	•	Aligns with TCFD, GRI, and GHG Protocol
+	•	Works inside your EnviroIQ platform
+
+⸻
+
+🧾 ENVIR0IQ SUPPLIER ESG AUDIT
+
+(Structured, Scorable, Audit-Ready)
+
+⸻
+
+🔹 SECTION 0: SUPPLIER DETAILS (Required)
+	•	Legal company name
+	•	Trading name
+	•	Company registration number
+	•	Country of operation
+	•	Industry / sector
+	•	Description of goods/services supplied
+
+Contacts
+	•	Primary ESG contact (name, email, phone)
+	•	Secondary contact
+	•	Senior responsible officer (Director / GM)
+
+⸻
+
+🌱 SECTION 1: ENVIRONMENTAL
+
+Carbon & Emissions
+	•	Do you measure your greenhouse gas emissions? (Yes/No)
+	•	Which scopes do you measure? (Scope 1 / 2 / 3)
+	•	Provide your last 12 months emissions data (upload)
+	•	Do you have emissions reduction targets? (Yes/No)
+	•	Are targets science-based? (Yes/No)
+
+⸻
+
+Energy
+	•	Total annual energy consumption (kWh)
+	•	% renewable energy used
+	•	Do you have an energy reduction plan? (Yes/No)
+
+⸻
+
+Materials & Sourcing
+	•	List key materials supplied
+	•	Are materials sustainably sourced? (Yes/No)
+	•	Do you hold certifications (e.g. FSC, recycled content)? (Upload)
+	•	Country of origin for materials
+
+⸻
+
+Waste Management
+	•	Do you track waste output? (Yes/No)
+	•	% waste recycled
+	•	Hazardous waste handling process (describe)
+
+⸻
+
+Water
+	•	Do you track water usage? (Yes/No)
+	•	Any water reduction initiatives? (Yes/No)
+
+⸻
+
+👥 SECTION 2: SOCIAL
+
+Labour Practices
+	•	Do you comply with local labour laws? (Yes/No)
+	•	Do you have a formal employment contract for all staff? (Yes/No)
+	•	Average weekly working hours
+
+⸻
+
+Modern Slavery
+	•	Do you have a Modern Slavery / Human Rights policy? (Upload)
+	•	Do you assess your own suppliers for slavery risk? (Yes/No)
+
+⸻
+
+Health & Safety
+	•	Do you have a Health & Safety policy? (Upload)
+	•	Recordable incident rate (last 12 months)
+	•	Lost Time Injury Frequency Rate (LTIFR)
+
+⸻
+
+Diversity & Inclusion
+	•	Do you track workforce diversity? (Yes/No)
+	•	% female workforce
+	•	% female leadership
+
+⸻
+
+🏛️ SECTION 3: GOVERNANCE
+
+Policies & Ethics
+	•	Do you have a Code of Conduct? (Upload)
+	•	Anti-bribery / corruption policy? (Upload)
+	•	Whistleblower policy? (Yes/No)
+
+⸻
+
+Data & Cyber Security
+	•	Do you have a cybersecurity framework? (Yes/No)
+	•	Are you aligned to any standard (e.g. ISO 27001)?
+	•	Do you use MFA for systems? (Yes/No)
+
+⸻
+
+Compliance
+	•	Any regulatory breaches in last 3 years? (Yes/No)
+	•	Any ongoing investigations? (Yes/No)
+
+⸻
+
+📦 SECTION 4: SUPPLY CHAIN & TRACEABILITY (YOUR EDGE)
+
+Supply Chain Visibility
+	•	Do you know the origin of all materials? (Yes/No)
+	•	Do you audit your suppliers? (Yes/No)
+
+⸻
+
+Logistics
+	•	Primary shipping method (Road / Sea / Air)
+	•	Estimated annual freight emissions (if known)
+	•	Do you track transport emissions? (Yes/No)
+
+⸻
+
+Risk
+	•	Are any materials sourced from high-risk regions? (Yes/No)
+	•	Conflict minerals involved? (Yes/No)
+
+⸻
+
+📊 SECTION 5: PERFORMANCE & IMPROVEMENT
+	•	Do you have ESG targets? (Yes/No)
+	•	Do you report ESG publicly? (Yes/No)
+	•	What improvements have been made in last 12 months?
+
+⸻
+
+🧾 SECTION 6: EVIDENCE UPLOADS (MANDATORY FOR HIGH SCORE)
+
+Require uploads for:
+	•	Policies (H&S, Code of Conduct, etc.)
+	•	Certifications
+	•	Emissions reports
+	•	Audit reports
+
+⸻
+
+🔐 SECTION 7: DECLARATION
+	•	I confirm the information provided is accurate (Yes/No)
+	•	Name of person completing
+	•	Role
+	•	Date
+
+⸻
+
+🧠 SCORING MODEL (IMPORTANT)
+
+You don’t just ask — you score.
+
+Example weighting:
+	•	Environmental: 35%
+	•	Social: 20%
+	•	Governance: 25%
+	•	Supply Chain: 20%
+
+⸻
+
+Scoring logic:
+	•	Yes + evidence → full points
+	•	Yes without evidence → partial
+	•	No → zero
+	•	Missing → penalty
+
+⸻
+
+Output:
+	•	ESG Score (0–100)
+	•	Risk Level:
+	•	80+ → Low Risk
+	•	50–79 → Medium
+	•	<50 → High Risk
+
+⸻
+
+🔁 RECURRING LOGIC (12 MONTHS)
+
+Each supplier must:
+	•	Re-submit annually
+	•	Update changes
+	•	Upload new documents
+
+Track:
+	•	Last audit date
+	•	Next due date
+	•	Overdue status
+
+⸻
+
+🔥 POWER MOVE (this is you)
+
+Add 3 killer questions at the end:
+	•	“What is your biggest ESG risk today?”
+	•	“What support do you need to improve?”
+	•	“Are you willing to align to our ESG framework?”
+
+👉 This turns audit → partnership
+
+⸻
+
+⚡ Final insight
+
+Most audits:
+	•	Tick boxes
+	•	Sit in SharePoint
+	•	Get ignored
+
+Yours:
+	•	Feeds EnviroIQ
+	•	Drives scoring
+	•	Triggers action
+	•	Builds trust
+
+👉 That’s enterprise-grade governance.
+
+⸻
+
+If you want next level:
+I can turn this into:
+	•	A ready-to-send digital form (Typeform / app UI)
+	•	A scoring algorithm spec for Replit
+	•	Or a beautiful PDF audit template for clients
+
+That’s the step from idea → deployable system.

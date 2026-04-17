@@ -99,8 +99,48 @@ export default function Reports() {
     }
   };
 
-  const handleDownload = (reportId: string) => {
-    window.open(`/api/organisations/${orgId}/reports/${reportId}/pdf`, "_blank");
+  const handleDownload = async (reportId: string, reportTitle?: string) => {
+    const t = toast({ title: "Generating PDF…", description: "This usually takes a few seconds." });
+    try {
+      const res = await fetch(`/api/organisations/${orgId}/reports/${reportId}/pdf`, { credentials: "include" });
+      if (!res.ok) throw new Error(`Server returned ${res.status}`);
+      const blob = await res.blob();
+      const cd = res.headers.get("content-disposition") ?? "";
+      const m = cd.match(/filename="?([^";]+)"?/);
+      const safe = (reportTitle ?? "report").replace(/[^a-z0-9]/gi, "_");
+      const filename = m?.[1] ?? `${safe}_board_pack.pdf`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+      t.dismiss?.();
+      toast({ title: "Download ready", description: filename });
+    } catch (e) {
+      t.dismiss?.();
+      toast({ variant: "destructive", title: "Download failed", description: e instanceof Error ? e.message : "Unknown error" });
+    }
+  };
+
+  const handleTenderPackDownload = async () => {
+    const t = toast({ title: "Generating tender pack…", description: "This usually takes a few seconds." });
+    try {
+      const res = await fetch(`/api/organisations/${orgId}/reports/tender-pack`, { credentials: "include" });
+      if (!res.ok) throw new Error(`Server returned ${res.status}`);
+      const blob = await res.blob();
+      const cd = res.headers.get("content-disposition") ?? "";
+      const m = cd.match(/filename="?([^";]+)"?/);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = m?.[1] ?? "tender_pack.pdf";
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+      t.dismiss?.();
+      toast({ title: "Tender pack ready" });
+    } catch (e) {
+      t.dismiss?.();
+      toast({ variant: "destructive", title: "Download failed", description: e instanceof Error ? e.message : "Unknown error" });
+    }
   };
 
   const handleDelete = async (reportId: string) => {
@@ -191,7 +231,7 @@ export default function Reports() {
           <p className="text-muted-foreground mt-1">Year-on-year comparison and professional ESG board reports.</p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          <Button variant="outline" className="gap-2 border-primary/40 text-primary hover:bg-primary/10" onClick={() => window.open(`/api/organisations/${orgId}/reports/tender-pack`, "_blank")}>
+          <Button variant="outline" className="gap-2 border-primary/40 text-primary hover:bg-primary/10" onClick={handleTenderPackDownload}>
             <Download className="w-4 h-4" /> Tender Evidence Pack
           </Button>
           <Dialog open={isOpen} onOpenChange={setIsOpen}>
@@ -348,7 +388,7 @@ export default function Reports() {
               </div>
             </div>
             <div className="flex gap-2 w-full sm:w-auto justify-end">
-              <Button variant="outline" size="sm" onClick={() => handleDownload(report.id)} disabled={report.status !== "ready"} className="gap-2">
+              <Button variant="outline" size="sm" onClick={() => handleDownload(report.id, report.title)} disabled={report.status !== "ready"} className="gap-2">
                 <Download className="w-4 h-4" /> Open PDF
               </Button>
               <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-destructive" onClick={() => handleDelete(report.id)}>

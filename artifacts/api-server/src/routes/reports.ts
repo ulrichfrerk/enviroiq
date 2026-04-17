@@ -6,6 +6,7 @@ import { requireAuth, requireOrgAccess, requireOrgAdmin } from "../lib/auth.js";
 import { sqlRow, sqlRows, numCol, intCol, strCol } from "../lib/sql-result.js";
 import { logAudit } from "../lib/audit.js";
 import { calcSustainabilityScore } from "../lib/emissions.js";
+import { htmlToPdf } from "../lib/pdf.js";
 
 const router = Router({ mergeParams: true });
 
@@ -563,7 +564,6 @@ router.get("/:reportId/pdf", requireAuth, requireOrgAccess, async (req, res) => 
 <style>${css}</style>
 </head>
 <body>
-<button class="no-print" onclick="window.print()">⬇ Save as PDF</button>
 
 <!-- ══ PAGE 1: COVER ══════════════════════════════════════════════════════ -->
 <div class="page cover">
@@ -860,12 +860,26 @@ router.get("/:reportId/pdf", requireAuth, requireOrgAccess, async (req, res) => 
 </body>
 </html>`;
 
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.setHeader("Content-Disposition", `inline; filename="${report.title.replace(/[^a-z0-9]/gi, "_")}_board_pack.html"`);
-    res.send(html);
+    const wantsHtml = req.query.format === "html";
+    if (wantsHtml) {
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.setHeader("Content-Disposition", "inline");
+      res.send(html);
+      return;
+    }
+
+    const safeTitle = report.title.replace(/[^a-z0-9]/gi, "_");
+    const pdfBuffer = await htmlToPdf(html, {
+      footerLabel: `EnviroIQ ESG Board Pack · ${report.title}`,
+      showPageNumbers: true,
+    });
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${safeTitle}_board_pack.pdf"`);
+    res.setHeader("Content-Length", String(pdfBuffer.length));
+    res.send(pdfBuffer);
   } catch (err) {
     req.log.error({ err }, "Download report failed");
-    res.status(500).send("Failed to generate report");
+    res.status(500).json({ error: "Internal Server Error", message: "Failed to generate PDF" });
   }
 });
 
@@ -988,8 +1002,6 @@ router.get("/tender-pack", requireAuth, requireOrgAccess, async (req, res) => {
 </style>
 </head>
 <body>
-<button class="no-print" onclick="window.print()">⬇ Save as PDF</button>
-
 <div class="cover">
   <div class="cover-brand"><div class="cover-dot"></div>EnviroIQ &nbsp;·&nbsp; ESG Platform</div>
   <div class="cover-accent"></div>
@@ -1144,12 +1156,28 @@ router.get("/tender-pack", requireAuth, requireOrgAccess, async (req, res) => {
 </body>
 </html>`;
 
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.setHeader("Content-Disposition", `inline; filename="${String((sqlRows(orgRows)[0] as Record<string,unknown>)?.name ?? "Organisation").replace(/[^a-z0-9]/gi, "_")}_tender_pack.html"`);
-    res.send(html);
+    const orgName = String((sqlRows(orgRows)[0] as Record<string, unknown>)?.name ?? "Organisation");
+    const safeName = orgName.replace(/[^a-z0-9]/gi, "_");
+
+    if (req.query.format === "html") {
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.setHeader("Content-Disposition", "inline");
+      res.send(html);
+      return;
+    }
+
+    const pdfBuffer = await htmlToPdf(html, {
+      footerLabel: `EnviroIQ Tender Evidence Pack · ${orgName}`,
+      marginMm: { top: 0, right: 0, bottom: 14, left: 0 },
+      showPageNumbers: true,
+    });
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${safeName}_tender_pack.pdf"`);
+    res.setHeader("Content-Length", String(pdfBuffer.length));
+    res.send(pdfBuffer);
   } catch (err) {
     req.log.error({ err }, "Tender pack failed");
-    res.status(500).send("Failed to generate tender pack");
+    res.status(500).json({ error: "Internal Server Error", message: "Failed to generate tender pack PDF" });
   }
 });
 
