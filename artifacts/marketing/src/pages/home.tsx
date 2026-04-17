@@ -99,14 +99,18 @@ export default function Home() {
               initial={{ opacity: 0, y: 40 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 1, delay: 0.4 }}
-              className="mt-16 relative rounded-2xl border border-border bg-card overflow-hidden shadow-xl"
+              className="mt-16 relative rounded-2xl border border-border bg-card overflow-hidden shadow-2xl shadow-primary/10"
             >
-              <img
-                src={`${import.meta.env.BASE_URL}images/hero-data.png`}
-                alt="EnviroIQ Dashboard Visualization"
-                className="w-full h-auto object-cover"
-              />
-              <div className="absolute inset-0 bg-gradient-to-t from-card via-transparent to-transparent" />
+              <div className="relative w-full" style={{ aspectRatio: '16 / 9' }}>
+                <iframe
+                  src="/enviroiq-demo/"
+                  title="EnviroIQ product demo"
+                  className="absolute inset-0 w-full h-full"
+                  loading="lazy"
+                  allow="autoplay"
+                />
+              </div>
+              <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-card/40 via-transparent to-transparent" />
             </motion.div>
           </div>
         </section>
