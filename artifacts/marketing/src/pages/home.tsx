@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { ComplianceWidget } from "@/components/compliance-widget";
+import { usePageMeta, PAGE_META } from "@/lib/use-page-meta";
 
 const staggerContainer = {
   hidden: { opacity: 0 },
@@ -23,6 +24,7 @@ const fadeIn = {
 };
 
 export default function Home() {
+  usePageMeta(PAGE_META.home);
   return (
     <div className="min-h-screen bg-background selection:bg-primary/20">
       <Navbar />

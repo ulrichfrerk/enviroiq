@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ComplianceWidget } from "@/components/compliance-widget";
 import { apiUrl } from "@/lib/api";
+import { usePageMeta, PAGE_META } from "@/lib/use-page-meta";
 import {
   ShieldCheck, Lock, Fingerprint, KeyRound, Database, FileCheck,
   GitBranch, History, Eye, Download, Server, Globe, AlertCircle,
@@ -22,6 +23,7 @@ const stagger = {
 };
 
 export default function Trust() {
+  usePageMeta(PAGE_META.trust);
   return (
     <div className="min-h-screen bg-background selection:bg-primary/20">
       <Navbar />

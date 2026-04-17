@@ -18,11 +18,17 @@ function Router() {
   );
 }
 
-function App() {
+interface AppProps {
+  /** Pre-render-time URL pathname. Only used during SSR/prerender. */
+  ssrPath?: string;
+}
+
+function App({ ssrPath }: AppProps = {}) {
+  const base = import.meta.env.BASE_URL.replace(/\/$/, "");
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
+        <WouterRouter base={base} ssrPath={ssrPath}>
           <Router />
         </WouterRouter>
         <Toaster />
