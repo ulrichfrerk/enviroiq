@@ -196,10 +196,10 @@ export default function Trust() {
                 <div className="p-6 rounded-xl bg-card border border-border">
                   <div className="flex items-center gap-3 mb-3">
                     <Globe className="w-5 h-5 text-primary" />
-                    <h4 className="font-bold">Hosted in Auckland · NZ Sovereign Data</h4>
+                    <h4 className="font-bold">NZ Sovereign Data Hosting · Coming Soon</h4>
                   </div>
                   <p className="text-sm text-muted-foreground leading-relaxed">
-                    Customer data resides on infrastructure within Aotearoa New Zealand jurisdiction. No cross-border data transfers without explicit opt-in.
+                    Auckland-region hosting on AWS ap-southeast-2 (Sydney) with NZ-resident failover is on our 2026 roadmap. Until then, infrastructure is hosted in geographically redundant cloud regions, encrypted at rest and in transit. Customers requiring strict NZ data residency today can opt into a private deployment — talk to us.
                   </p>
                 </div>
               </div>

@@ -13,12 +13,12 @@ export function Navbar() {
         </Link>
         
         <div className="hidden md:flex items-center gap-8">
-          <Link href="#problem" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Problem</Link>
-          <Link href="#solution" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Solution</Link>
-          <Link href="#features" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Features</Link>
-          <Link href="#use-cases" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Use Cases</Link>
+          <a href="/#problem" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Problem</a>
+          <a href="/#features" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Features</a>
+          <a href="/#how-it-works" className="text-sm text-muted-foreground hover:text-foreground transition-colors">How It Works</a>
+          <a href="/#use-cases" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Use Cases</a>
           <Link href="/trust" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Trust</Link>
-          <Link href="#procurement" className="text-sm text-primary hover:text-primary/80 font-medium transition-colors">NZ Procurement</Link>
+          <a href="/#procurement" className="text-sm text-primary hover:text-primary/80 font-medium transition-colors">NZ Procurement</a>
         </div>
 
         <div className="flex items-center gap-4">
