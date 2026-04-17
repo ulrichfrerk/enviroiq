@@ -16,6 +16,7 @@ import Energy from "@/pages/energy";
 import Goals from "@/pages/goals";
 import Targets from "@/pages/targets";
 import Scenarios from "@/pages/scenarios";
+import Recommendations from "@/pages/recommendations";
 import MissionStatement from "@/pages/mission";
 import Reports from "@/pages/reports";
 import Users from "@/pages/users";
@@ -85,6 +86,7 @@ function Router() {
       <Route path="/goals"><ProtectedRoute component={Goals} /></Route>
       <Route path="/targets"><ProtectedRoute component={Targets} /></Route>
       <Route path="/scenarios"><ProtectedRoute component={Scenarios} /></Route>
+      <Route path="/recommendations"><ProtectedRoute component={Recommendations} /></Route>
       <Route path="/mission"><ProtectedRoute component={MissionStatement} /></Route>
       <Route path="/reports"><ProtectedRoute component={Reports} /></Route>
       <Route path="/users"><ProtectedRoute component={Users} /></Route>

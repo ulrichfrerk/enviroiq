@@ -3,7 +3,7 @@ import {
   BarChart3, Car, Zap, Target, FileText, Settings, Users,
   ShieldAlert, Shield, LogOut, Leaf, UserCircle, Beaker, TrendingDown, Sparkles,
   HeartHandshake, Building2, FolderOpen, Recycle, HardHat, BrainCircuit, ShieldCheck,
-  Truck, ClipboardCheck, KeyRound,
+  Truck, ClipboardCheck, KeyRound, Lightbulb,
 } from "lucide-react";
 import {
   Sidebar,
@@ -36,6 +36,7 @@ const groups: { label: string; items: NavItem[] }[] = [
       { title: "Energy", url: "/energy", icon: Zap },
       { title: "Waste & Environmental", url: "/waste", icon: Recycle },
       { title: "Targets", url: "/targets", icon: TrendingDown },
+      { title: "Recommendations", url: "/recommendations", icon: Lightbulb },
       { title: "Scenarios", url: "/scenarios", icon: Beaker },
     ],
   },

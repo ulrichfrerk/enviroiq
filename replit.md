@@ -89,6 +89,16 @@ All under `/api`:
 - `GET /organisations/:orgId/emissions` — with period and groupBy
 - `GET/POST/PATCH /organisations/:orgId/goals`
 - `GET/POST /organisations/:orgId/reports`
+- `GET /organisations/:orgId/recommendations` — concrete, ranked NZ-specific
+  decarbonisation actions generated from live fleet, energy, and target data.
+  Returns `{ baseline, totals, targetGap, items[] }`. Items include vehicle
+  EV/PHEV swaps (BYD Shark 6, Atto 3, MG4, LDV eDeliver, Kia EV9), right-sized
+  rooftop solar (SEANZ benchmarks), renewable supplier switches (Ecotricity
+  lead), building measures (LED, HVAC schedule, heat-pump HWC, sub-metering),
+  and operational changes (telematics coaching, fleet right-sizing, hybrid WFH).
+  Each rec carries CO₂e saving, capex, payback, scope, effort, and links.
+  Frontend: `/recommendations` page with category filter chips and target-gap
+  callout. Catalogue lives in `lib/recommendations-catalogue.ts`.
 - `GET/PUT /organisations/:orgId/widget`
 - `GET /widget/:widgetKey/data` — public (no auth)
 - `GET /organisations/:orgId/audit-logs`

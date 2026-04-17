@@ -37,6 +37,7 @@ import crmOpenapiRouter from "./crm-openapi.js";
 import { fgcErrorHandler } from "../lib/api-response.js";
 import securityRouter from "./security.js";
 import compliancePublicRouter from "./compliance-public.js";
+import recommendationsRouter from "./recommendations.js";
 
 const router = Router();
 
@@ -59,6 +60,7 @@ router.use("/organisations/:orgId/audit-logs", auditRouter);
 router.use("/organisations/:orgId/targets", targetsRouter);
 router.use("/organisations/:orgId/maturity", maturityRouter);
 router.use("/organisations/:orgId/scenarios", scenariosRouter);
+router.use("/organisations/:orgId/recommendations", recommendationsRouter);
 router.use("/organisations/:orgId/mission", missionRouter);
 router.use("/organisations/:orgId/social", socialRouter);
 router.use("/organisations/:orgId/governance", governanceRouter);
