@@ -3,6 +3,8 @@ import { Navbar } from "@/components/navbar";
 import { Footer } from "@/components/footer";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { ComplianceWidget } from "@/components/compliance-widget";
+import { apiUrl } from "@/lib/api";
 import {
   ShieldCheck, Lock, Fingerprint, KeyRound, Database, FileCheck,
   GitBranch, History, Eye, Download, Server, Globe, AlertCircle,
@@ -57,15 +59,24 @@ export default function Trust() {
 
               <motion.div variants={fadeIn} className="flex flex-col sm:flex-row gap-4">
                 <Button size="lg" className="bg-primary text-primary-foreground hover:bg-primary/90 h-14 px-8 text-lg group" asChild>
-                  <a href="mailto:hello@enviroiq.net?subject=EnviroIQ%20Security%20Review">
-                    Request Security Pack
-                    <ArrowRight className="ml-2 w-5 h-5 group-hover:translate-x-1 transition-transform" />
+                  <a href={apiUrl("/api/compliance/public/pack.txt")} download>
+                    <Download className="mr-2 w-5 h-5" />
+                    Download Trust Pack
                   </a>
                 </Button>
                 <Button size="lg" variant="outline" className="h-14 px-8 text-lg border-border" asChild>
                   <a href="#data-trust-model">See the Data Trust Model</a>
                 </Button>
               </motion.div>
+            </motion.div>
+
+            <motion.div
+              initial={{ opacity: 0, y: 24 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.6, delay: 0.4 }}
+              className="mt-12 max-w-4xl"
+            >
+              <ComplianceWidget />
             </motion.div>
           </div>
         </section>

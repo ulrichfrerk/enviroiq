@@ -36,6 +36,7 @@ import crmKeysRouter from "./crm-keys.js";
 import crmOpenapiRouter from "./crm-openapi.js";
 import { fgcErrorHandler } from "../lib/api-response.js";
 import securityRouter from "./security.js";
+import compliancePublicRouter from "./compliance-public.js";
 
 const router = Router();
 
@@ -103,5 +104,7 @@ router.use("/grid", gridRouter);
 
 // Security status (authenticated)
 router.use("/security", securityRouter);
+// Sanitised public compliance surface — no auth required, safe for marketing site.
+router.use("/compliance", compliancePublicRouter);
 
 export default router;

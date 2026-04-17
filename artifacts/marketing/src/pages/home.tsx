@@ -10,6 +10,7 @@ import {
   FolderOpen, Package, CheckSquare, Award
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { ComplianceWidget } from "@/components/compliance-widget";
 
 const staggerContainer = {
   hidden: { opacity: 0 },
@@ -105,6 +106,24 @@ export default function Home() {
               />
               <div className="absolute inset-0 bg-gradient-to-t from-card via-transparent to-transparent" />
             </motion.div>
+          </div>
+        </section>
+
+        {/* ── LIVE OPERATIONAL COMPLIANCE ──────────────────────────────────── */}
+        <section id="compliance" className="py-12 md:py-16 bg-background border-y border-border/60">
+          <div className="container mx-auto px-6">
+            <div className="text-center mb-8">
+              <p className="text-sm font-mono text-primary mb-3 tracking-wider">CONTINUOUSLY VERIFIED</p>
+              <h2 className="text-3xl md:text-4xl font-bold mb-3 text-foreground">
+                Operational compliance, in real time
+              </h2>
+              <p className="text-base text-muted-foreground max-w-2xl mx-auto">
+                We don't just claim we're secure — we prove it. Every minute, automated checks across transport, authentication, integrations, and audit trails are run against the live platform. The status below is the live result.
+              </p>
+            </div>
+            <div className="max-w-4xl mx-auto">
+              <ComplianceWidget />
+            </div>
           </div>
         </section>
 

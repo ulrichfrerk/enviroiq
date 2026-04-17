@@ -10,6 +10,7 @@ import {
   AlertTriangle,
   XCircle,
   RefreshCw,
+  Download,
 } from "lucide-react";
 import {
   Popover,
@@ -121,6 +122,11 @@ export function SecurityStatusWidget() {
   const { data, isLoading, isFetching, refetch, error } =
     useQuery<SecurityStatusResponse>({
       queryKey: ["/api/security/status"],
+      queryFn: async () => {
+        const res = await fetch("/api/security/status", { credentials: "include" });
+        if (!res.ok) throw new Error(`Security status request failed (${res.status})`);
+        return (await res.json()) as SecurityStatusResponse;
+      },
       enabled: isAdmin,
       refetchInterval: open ? 60_000 : 5 * 60_000,
       refetchOnWindowFocus: false,
@@ -250,12 +256,28 @@ export function SecurityStatusWidget() {
           </ScrollArea>
 
           {data && (
-            <div className="px-4 py-2 border-t border-border/60 text-[10px] text-muted-foreground flex justify-between">
-              <span>Auto-refreshes every 60s</span>
-              <span>
-                Last check {new Date(data.generatedAt).toLocaleTimeString()}
-              </span>
-            </div>
+            <>
+              <div className="px-3 py-2 border-t border-border/60">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="w-full h-8 text-xs"
+                  asChild
+                  data-testid="security-pack-download"
+                >
+                  <a href="/api/security/pack.txt" download>
+                    <Download className="h-3.5 w-3.5 mr-2" />
+                    Download full security pack (admin)
+                  </a>
+                </Button>
+              </div>
+              <div className="px-4 py-2 border-t border-border/60 text-[10px] text-muted-foreground flex justify-between">
+                <span>Auto-refreshes every 60s</span>
+                <span>
+                  Last check {new Date(data.generatedAt).toLocaleTimeString()}
+                </span>
+              </div>
+            </>
           )}
         </PopoverContent>
       </Popover>

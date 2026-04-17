@@ -101,6 +101,17 @@ All under `/api`:
   via the floating shield button at the bottom-right of every authenticated
   page (`SecurityStatusWidget`). Polls every 5 min idle / 1 min while open;
   hidden entirely for non-admin roles.
+- `GET /security/pack.txt` — admin-only; downloadable plaintext "Internal
+  Security Pack" with every check + detail + SHA-256 self-checksum. Confidential.
+- `GET /api/compliance/public` — **PUBLIC**, no auth, open CORS. Returns a
+  sanitised aggregate snapshot: overall status, passing/total counts, 8 high-level
+  category buckets (no check IDs, no env names, no infra detail). 60s in-memory
+  cache. Powers the live `<ComplianceWidget>` on the marketing site (front page
+  + /trust hero).
+- `GET /api/compliance/public/pack.txt` — **PUBLIC** downloadable text "Trust
+  Pack" with the same sanitised data plus framework alignment claims (SOC 2,
+  ISO 27001, NZ Privacy Act, GDPR, GHG Protocol, FIDO2) and SHA-256 checksum.
+  Safe for boards, prospects, and procurement.
 
 ### CRM Integration API (`/api/v1/*`) — FGC Customer Operations API Standard v1
 Bearer-key authenticated surface for the sister CRM (FGC, also on Replit) to provision
