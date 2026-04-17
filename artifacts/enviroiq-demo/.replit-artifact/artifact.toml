@@ -1,0 +1,31 @@
+kind = "video"
+previewPath = "/enviroiq-demo/"
+title = "EnviroIQ Demo"
+version = "1.0.0"
+id = "artifacts/enviroiq-demo"
+router = "path"
+
+[[integratedSkills]]
+name = "video-js"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/enviroiq-demo/" ]
+localPort = 23461
+
+[services.development]
+run = "pnpm --filter @workspace/enviroiq-demo run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/enviroiq-demo", "run", "build" ]
+publicDir = "artifacts/enviroiq-demo/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "23461"
+BASE_PATH = "/enviroiq-demo/"

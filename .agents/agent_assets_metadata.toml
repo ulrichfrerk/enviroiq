@@ -12,6 +12,18 @@ uri = "file://artifacts/marketing/public/images/dashboard-mockup.png"
 type = "image"
 title = "generated_image"
 
+[[generated]]
+id = "eQfMz4kvy8GaHyQIAFtIb"
+uri = "file://artifacts/enviroiq-demo/public/images/bg_texture.png"
+type = "image"
+title = "Abstract dark green texture"
+
+[[generated]]
+id = "Bz9kFknhyBRVW8kvHZHZz"
+uri = "file://artifacts/enviroiq-demo/public/images/dashboard_motif.png"
+type = "image"
+title = "Dashboard motif abstraction"
+
 [[outputs]]
 id = "7WJAtXO6ie4-KrlsigLuZ"
 uri = "file://.local/outputs/EnviroIQ.pdf"
