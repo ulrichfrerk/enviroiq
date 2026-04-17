@@ -10,7 +10,9 @@ import {
   Zap, Upload, Mail, FileText, Loader2, Copy, Check,
   Leaf, Wind, Info, AlertTriangle, CheckCircle2, XCircle,
   Flame, Droplets, Clock, Trash2, Search, ChevronLeft, ChevronRight,
+  LineChart,
 } from "lucide-react";
+import { GridHistoryDialog } from "@/components/grid-history-dialog";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useDropzone } from "react-dropzone";
@@ -31,6 +33,7 @@ interface GridIntensityData {
 }
 
 function GridIntensityBanner() {
+  const [historyOpen, setHistoryOpen] = useState(false);
   const { data, isLoading, error } = useQuery<GridIntensityData>({
     queryKey: ["nz-grid-intensity"],
     queryFn: async () => {
@@ -77,11 +80,24 @@ function GridIntensityBanner() {
             <span>Updated {formatDistanceToNow(new Date(data.fetchedAt), { addSuffix: true })}</span>
           </div>
         </div>
-        <div className="text-right shrink-0 hidden md:block">
-          <div className="text-xs text-muted-foreground/60">Source</div>
-          <div className="text-xs text-muted-foreground">em6 / EMS · Transpower NZ</div>
+        <div className="flex items-center gap-3 shrink-0">
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-2 border-border/60"
+            onClick={() => setHistoryOpen(true)}
+            data-testid="grid-history-trigger"
+          >
+            <LineChart className="w-3.5 h-3.5" />
+            View history
+          </Button>
+          <div className="text-right hidden md:block">
+            <div className="text-xs text-muted-foreground/60">Source</div>
+            <div className="text-xs text-muted-foreground">em6 / EMS · Transpower NZ</div>
+          </div>
         </div>
       </div>
+      <GridHistoryDialog open={historyOpen} onOpenChange={setHistoryOpen} />
     </Card>
   );
 }
