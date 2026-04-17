@@ -102,19 +102,60 @@ All under `/api`:
   page (`SecurityStatusWidget`). Polls every 5 min idle / 1 min while open;
   hidden entirely for non-admin roles.
 
-### CRM Integration API (`/api/v1/*`)
-Bearer-key authenticated surface for the sister CRM (also on Replit) to provision EnviroIQ
-customers, manage users, lock accounts, update billing and pull live ESG + supplier audit metrics.
+### CRM Integration API (`/api/v1/*`) — FGC Customer Operations API Standard v1
+Bearer-key authenticated surface for the sister CRM (FGC, also on Replit) to provision
+EnviroIQ customers, manage contacts/users/subscriptions/billing/provisioning/tickets,
+and pull audit + ESG metrics. **Fully aligned to the FGC Customer Operations API Standard
+v1** — every payload is snake_case, every response uses the standard envelope.
+
+**Conventions enforced platform-wide on `/api/v1`:**
+- Response envelope: `{ success, data, meta:{timestamp,version,requestId}, [pagination] }`.
+- Error envelope: `{ success:false, error:{ code, message, details? }, meta }` with
+  SCREAMING_SNAKE_CASE codes (`BAD_REQUEST`, `UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND`,
+  `CONFLICT`, `UNPROCESSABLE`, `RATE_LIMITED`, `INTERNAL_ERROR`, `UPSTREAM_ERROR`).
+- Per-request `X-Correlation-ID` (auto-minted if absent) — echoed back, persisted on
+  every audit row (`audit_logs.correlation_id`), and threaded through inner calls.
+- `Idempotency-Key` header on POST/PATCH/DELETE — 24h replay window via
+  `idempotency_keys` table (returns cached body + `Idempotent-Replay: true` header;
+  same key + different body = `409 CONFLICT`).
+- Lifecycle endpoints (suspend/reactivate/archive/cancel/credit-hold/escalate) **require**
+  a `reason_code` from the FGC enum: `customer_request`, `billing_non_payment`,
+  `security_event`, `compliance_issue`, `duplicate_record`, `internal_admin_change`,
+  `failed_verification`, `contract_end`, `fraud_review`.
+- Webhook event names (emitted in `audit_logs.details.event`): `customer.created`,
+  `customer.suspended`, `customer.reactivated`, `customer.archived`, `contact.*`,
+  `user.suspended`, `subscription.created`, `subscription.cancelled`,
+  `billing_profile.credit_hold_applied`, `billing_profile.credit_hold_released`,
+  `provisioning.requested`, `ticket.escalated`, etc.
+
+**Entity surface** (all under `/api/v1`):
+- `customers` (formerly organisations) — full CRUD + `/suspend`, `/reactivate`, `/archive`
+- `customers/:cid/contacts` — CRUD
+- `customers/:cid/users` — invite + `/suspend`, `/reactivate`
+- `customers/:cid/subscriptions` — create + `/cancel`
+- `customers/:cid/billing-profile` — GET, PUT, `/credit-hold`
+- `customers/:cid/provisioning-requests` — create + list
+- `customers/:cid/tickets` — CRUD + `/escalate`
+- `audit` — global query with filters (customer_id, action, actor_type, reason_code, correlation_id, …)
+
+**Scopes** (each key has explicit subset; enforced per route):
+`customers|contacts|users|subscriptions|billing|provisioning|tickets|audit|metrics × read|write`.
+
+**Key infra:**
+- `lib/api-response.ts` — `ok`, `created`, `paginated`, `noContent`, `Errors.*`,
+  `fgcErrorHandler` (last middleware on `/v1`), `asyncRoute`.
+- `lib/api-context.ts` — `correlationMiddleware` (binds `X-Correlation-ID`).
+- `lib/idempotency.ts` — replay + body-hash conflict detection.
+- `lib/audit.ts` — extended with `actor_type`, `previous_value`, `new_value`,
+  `reason_code`, `correlation_id`; `FGC_REASON_CODES` allow-list.
 - Keys issued from Super Admin → "CRM API & Keys" (`/api-keys`); SHA-256 hashed only,
   shown to operator exactly once at creation; per-call audit log (`crm_api_key_usage`).
-- Auth flow: lookup by indexed public prefix → constant-time hash compare (`safeEqualHex`).
-- Scopes: `customers|users|metrics|audits|billing × read|write` — enforced per route.
-- Suspending/locking a customer (`PATCH /v1/customers/:id/billing` `billingStatus=suspended`
-  or `POST /v1/customers/:id/lock`) immediately blocks all logins for that org's users
-  via `lib/org-active-guard.ts` (called from session, passkey-authenticate, magic-link verify).
-- Spec: `GET /api/v1/openapi.json` (OpenAPI 3.1) + `/crm-api-spec.md` (human brief).
-- `organisations.plan` (`operate|assure|enterprise`) and `organisations.billing_status`
-  (`active|trialing|past_due|suspended`) are CRM-managed; in Drizzle schema.
+- Auth flow: lookup by indexed public prefix → constant-time hash compare. All auth
+  failures route through the FGC envelope (`UNAUTHORIZED`/`FORBIDDEN`).
+- Suspending a customer immediately blocks all logins for that org's users via
+  `lib/org-active-guard.ts` (called from session, passkey-authenticate, magic-link verify).
+- Spec: `GET /api/v1/openapi.json` (OpenAPI 3.1, includes `x-fgc-standard` extension
+  listing all reason codes + webhook events) + `/crm-api-spec.md` (human brief).
 
 ## Key Environment Variables
 

@@ -1,31 +1,31 @@
 /**
- * CRM Integration API — versioned at /api/v1/*
+ * CRM Integration API — FGC Customer Operations API Standard v1.
  *
- * Authenticated via Bearer API keys (see lib/crm-api-auth.ts). Designed for a
- * sister CRM application to programmatically:
- *   - provision new customers (organisations + admin user with magic link)
- *   - manage user access (invite, deactivate)
- *   - lock / unlock accounts (suspend access)
- *   - update billing plan and status
- *   - pull live ESG metrics + supplier audit status to sync into the CRM
+ * Mounted at /api/v1. All endpoints:
+ *   - Bearer-key authenticated via requireCrmApiKey()
+ *   - snake_case request/response payloads
+ *   - Standard envelope: { success, data, meta, [pagination] }
+ *   - Standard error codes (BAD_REQUEST, NOT_FOUND, CONFLICT, …)
+ *   - Optional Idempotency-Key on POST/PATCH/DELETE
+ *   - Lifecycle endpoints require a reason_code from FGC_REASON_CODES
  *
- * All write endpoints emit an audit_logs row with the API key prefix in details
- * so every CRM action is traceable.
+ * Customer = Organisation (in EnviroIQ each tenant is one customer/account).
+ *
+ * This file owns: customer CRUD + lifecycle + the /audit query endpoint.
+ * Sub-entity routes (contacts, users, subscriptions, billing, provisioning,
+ * tickets) live in crm-entities.ts.
  */
 import { Router } from "express";
-import { randomBytes } from "crypto";
-import { db, organisationsTable, usersTable, magicLinksTable } from "@workspace/db";
-import { eq, sql, count, and } from "drizzle-orm";
+import { z } from "zod/v4";
 import { v4 as uuidv4 } from "uuid";
+import { db, organisationsTable, usersTable, auditLogsTable } from "@workspace/db";
+import { eq, and, desc, asc, sql, ilike, or, gte, lte, inArray } from "drizzle-orm";
 import { requireCrmApiKey } from "../lib/crm-api-auth.js";
-import { logAudit } from "../lib/audit.js";
-import { sendInviteEmail } from "../lib/mailer.js";
+import { idempotency } from "../lib/idempotency.js";
+import { logAudit, isFgcReasonCode, FGC_REASON_CODES } from "../lib/audit.js";
+import { ok, created, paginated, noContent, Errors, asyncRoute } from "../lib/api-response.js";
+import { randomBytes } from "crypto";
 
-const router = Router();
-
-function generateSlug(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-}
 function generateWidgetKey(): string {
   return `wk_${uuidv4().replace(/-/g, "").substring(0, 24)}`;
 }
@@ -36,649 +36,11 @@ function generateInboundEmail(slug: string): string {
   const domain = process.env.INBOUND_EMAIL_DOMAIN || "enviroiq.net";
   return `${slug}@${domain}`;
 }
-function appBase(): string {
-  return (
-    process.env.APP_BASE_URL ||
-    `https://${process.env.REPLIT_DOMAINS?.split(",")[0]?.trim() ?? "enviroiq.net"}/app`
-  );
-}
 
-const VALID_PLANS = new Set(["operate", "assure", "enterprise"]);
-const VALID_BILLING_STATUSES = new Set(["active", "trialing", "past_due", "suspended"]);
-const VALID_USER_ROLES = new Set(["org_admin", "org_user", "org_viewer", "org_auditor"]);
+const router = Router();
 
 /* ------------------------------------------------------------------ */
-/* Sanity                                                              */
-/* ------------------------------------------------------------------ */
-
-// GET /api/v1/ping — confirm key is alive
-router.get("/ping", requireCrmApiKey(), (req, res) => {
-  res.json({
-    ok: true,
-    keyPrefix: req.crmApiKey?.prefix,
-    keyName: req.crmApiKey?.name,
-    scopes: req.crmApiKey?.scopes,
-    serverTime: new Date().toISOString(),
-  });
-});
-
-/* ------------------------------------------------------------------ */
-/* Customers (= organisations)                                         */
-/* ------------------------------------------------------------------ */
-
-// GET /api/v1/customers
-router.get("/customers", requireCrmApiKey("customers:read"), async (req, res) => {
-  try {
-    const page = Math.max(1, parseInt(String(req.query.page ?? "1")) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit ?? "50")) || 50));
-    const offset = (page - 1) * limit;
-
-    const [items, [{ total }]] = await Promise.all([
-      db.select().from(organisationsTable).limit(limit).offset(offset),
-      db.select({ total: count() }).from(organisationsTable),
-    ]);
-
-    res.json({
-      items: items.map(serializeCustomer),
-      total: Number(total) || 0,
-      page,
-      limit,
-    });
-  } catch (err) {
-    req.log.error({ err }, "CRM list customers failed");
-    res.status(500).json({ error: "Internal Server Error" });
-  }
-});
-
-// POST /api/v1/customers — provision a new customer
-router.post("/customers", requireCrmApiKey("customers:write"), async (req, res) => {
-  try {
-    const { name, industry, country, adminEmail, adminName, plan, sendInvite } = req.body as {
-      name?: string;
-      industry?: string;
-      country?: string;
-      adminEmail?: string;
-      adminName?: string;
-      plan?: string;
-      sendInvite?: boolean;
-    };
-    if (!name || !adminEmail || !adminName) {
-      res.status(400).json({
-        error: "Bad Request",
-        message: "name, adminEmail and adminName are required",
-      });
-      return;
-    }
-    if (plan && !VALID_PLANS.has(plan)) {
-      res.status(400).json({ error: "Bad Request", message: `plan must be one of ${[...VALID_PLANS].join(", ")}` });
-      return;
-    }
-
-    const slug = generateSlug(name);
-    const orgId = uuidv4();
-    const widgetKey = generateWidgetKey();
-    const webhookSecret = generateWebhookSecret();
-    const inboundEmail = generateInboundEmail(slug);
-
-    const [org] = await db
-      .insert(organisationsTable)
-      .values({
-        id: orgId,
-        name,
-        slug,
-        industry,
-        country,
-        widgetKey,
-        webhookSecret,
-        inboundEmailAddress: inboundEmail,
-      })
-      .returning();
-
-    let adminUser = await db.query.usersTable.findFirst({ where: eq(usersTable.email, adminEmail) });
-    if (!adminUser) {
-      const [created] = await db
-        .insert(usersTable)
-        .values({
-          id: uuidv4(),
-          email: adminEmail,
-          name: adminName,
-          role: "org_admin",
-          organisationId: orgId,
-        })
-        .returning();
-      adminUser = created;
-    } else {
-      await db
-        .update(usersTable)
-        .set({ organisationId: orgId, role: "org_admin", updatedAt: new Date() })
-        .where(eq(usersTable.id, adminUser.id));
-    }
-
-    if (plan) {
-      await db.update(organisationsTable).set({ plan, updatedAt: new Date() }).where(eq(organisationsTable.id, orgId));
-    }
-
-    // Generate magic link so the CRM can deliver the welcome email or hand it back
-    const token = randomBytes(32).toString("hex");
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    await db.insert(magicLinksTable).values({ id: uuidv4(), userId: adminUser.id, token, expiresAt });
-    const magicUrl = `${appBase()}/auth/verify?token=${token}`;
-
-    if (sendInvite !== false) {
-      try {
-        await sendInviteEmail({ to: adminEmail, name: adminName, organisationName: name, magicUrl });
-      } catch (err) {
-        req.log.warn({ err }, "CRM customer create: invite email failed (link still returned)");
-      }
-    }
-
-    await logAudit({
-      req,
-      action: "crm.customer.create",
-      resourceType: "organisation",
-      resourceId: orgId,
-      organisationId: orgId,
-      details: { keyPrefix: req.crmApiKey?.prefix, name, adminEmail, plan: plan ?? null },
-    });
-
-    res.status(201).json({
-      customer: serializeCustomer(org),
-      adminUser: { id: adminUser.id, email: adminUser.email, name: adminUser.name, role: adminUser.role },
-      magicLink: { url: magicUrl, expiresAt },
-    });
-  } catch (err) {
-    req.log.error({ err }, "CRM create customer failed");
-    res.status(500).json({ error: "Internal Server Error" });
-  }
-});
-
-// GET /api/v1/customers/:id
-router.get("/customers/:id", requireCrmApiKey("customers:read"), async (req, res) => {
-  try {
-    const { id } = req.params as { id: string };
-    const org = await db.query.organisationsTable.findFirst({ where: eq(organisationsTable.id, id) });
-    if (!org) {
-      res.status(404).json({ error: "Not Found", message: "Customer not found" });
-      return;
-    }
-    res.json({ customer: serializeCustomer(org) });
-  } catch (err) {
-    res.status(500).json({ error: "Internal Server Error" });
-  }
-});
-
-// PATCH /api/v1/customers/:id — update profile, lock/unlock
-router.patch("/customers/:id", requireCrmApiKey("customers:write"), async (req, res) => {
-  try {
-    const { id } = req.params as { id: string };
-    const { name, industry, country, isActive } = req.body as {
-      name?: string;
-      industry?: string;
-      country?: string;
-      isActive?: boolean;
-    };
-    const updates: Partial<typeof organisationsTable.$inferInsert> = { updatedAt: new Date() };
-    if (typeof name === "string") updates.name = name;
-    if (typeof industry === "string") updates.industry = industry;
-    if (typeof country === "string") updates.country = country;
-    if (typeof isActive === "boolean") updates.isActive = isActive;
-
-    const [org] = await db
-      .update(organisationsTable)
-      .set(updates)
-      .where(eq(organisationsTable.id, id))
-      .returning();
-
-    if (!org) {
-      res.status(404).json({ error: "Not Found", message: "Customer not found" });
-      return;
-    }
-
-    await logAudit({
-      req,
-      action: "crm.customer.update",
-      resourceType: "organisation",
-      resourceId: id,
-      organisationId: id,
-      details: { keyPrefix: req.crmApiKey?.prefix, ...updates },
-    });
-
-    res.json({ customer: serializeCustomer(org) });
-  } catch (err) {
-    res.status(500).json({ error: "Internal Server Error" });
-  }
-});
-
-// POST /api/v1/customers/:id/lock — convenience: lock account
-router.post("/customers/:id/lock", requireCrmApiKey("customers:write"), async (req, res) => {
-  return setActive(req, res, false, "crm.customer.lock");
-});
-// POST /api/v1/customers/:id/unlock
-router.post("/customers/:id/unlock", requireCrmApiKey("customers:write"), async (req, res) => {
-  return setActive(req, res, true, "crm.customer.unlock");
-});
-
-async function setActive(
-  req: import("express").Request,
-  res: import("express").Response,
-  isActive: boolean,
-  action: string,
-) {
-  try {
-    const { id } = req.params as { id: string };
-    const [org] = await db
-      .update(organisationsTable)
-      .set({ isActive, updatedAt: new Date() })
-      .where(eq(organisationsTable.id, id))
-      .returning();
-    if (!org) {
-      res.status(404).json({ error: "Not Found", message: "Customer not found" });
-      return;
-    }
-    await logAudit({
-      req,
-      action,
-      resourceType: "organisation",
-      resourceId: id,
-      organisationId: id,
-      details: { keyPrefix: req.crmApiKey?.prefix },
-    });
-    res.json({ customer: serializeCustomer(org) });
-  } catch (err) {
-    res.status(500).json({ error: "Internal Server Error" });
-  }
-}
-
-/* ------------------------------------------------------------------ */
-/* Users                                                               */
-/* ------------------------------------------------------------------ */
-
-// GET /api/v1/customers/:id/users
-router.get("/customers/:id/users", requireCrmApiKey("users:read"), async (req, res) => {
-  try {
-    const { id } = req.params as { id: string };
-    const users = await db.query.usersTable.findMany({
-      where: eq(usersTable.organisationId, id),
-    });
-    res.json({
-      items: users.map((u) => ({
-        id: u.id,
-        email: u.email,
-        name: u.name,
-        role: u.role,
-        isActive: u.isActive,
-        lastLoginAt: u.lastLoginAt,
-        createdAt: u.createdAt,
-      })),
-    });
-  } catch (err) {
-    res.status(500).json({ error: "Internal Server Error" });
-  }
-});
-
-// POST /api/v1/customers/:id/users — invite a new user (or attach existing)
-router.post("/customers/:id/users", requireCrmApiKey("users:write"), async (req, res) => {
-  try {
-    const { id } = req.params as { id: string };
-    const { email, name, role, sendInvite } = req.body as {
-      email?: string;
-      name?: string;
-      role?: string;
-      sendInvite?: boolean;
-    };
-    if (!email || !name) {
-      res.status(400).json({ error: "Bad Request", message: "email and name are required" });
-      return;
-    }
-    const finalRole = role && VALID_USER_ROLES.has(role) ? role : "org_user";
-
-    const org = await db.query.organisationsTable.findFirst({
-      where: eq(organisationsTable.id, id),
-    });
-    if (!org) {
-      res.status(404).json({ error: "Not Found", message: "Customer not found" });
-      return;
-    }
-
-    let user = await db.query.usersTable.findFirst({ where: eq(usersTable.email, email) });
-    if (!user) {
-      const [created] = await db
-        .insert(usersTable)
-        .values({
-          id: uuidv4(),
-          email,
-          name,
-          role: finalRole,
-          organisationId: id,
-        })
-        .returning();
-      user = created;
-    } else {
-      await db
-        .update(usersTable)
-        .set({ organisationId: id, role: finalRole, isActive: true, updatedAt: new Date() })
-        .where(eq(usersTable.id, user.id));
-    }
-
-    const token = randomBytes(32).toString("hex");
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    await db.insert(magicLinksTable).values({ id: uuidv4(), userId: user.id, token, expiresAt });
-    const magicUrl = `${appBase()}/auth/verify?token=${token}`;
-
-    if (sendInvite !== false) {
-      try {
-        await sendInviteEmail({ to: email, name, organisationName: org.name, magicUrl });
-      } catch (err) {
-        req.log.warn({ err }, "CRM user invite email failed (link still returned)");
-      }
-    }
-
-    await logAudit({
-      req,
-      action: "crm.user.invite",
-      resourceType: "user",
-      resourceId: user.id,
-      organisationId: id,
-      details: { keyPrefix: req.crmApiKey?.prefix, email, role: finalRole },
-    });
-
-    res.status(201).json({
-      user: { id: user.id, email: user.email, name: user.name, role: finalRole, isActive: true },
-      magicLink: { url: magicUrl, expiresAt },
-    });
-  } catch (err) {
-    req.log.error({ err }, "CRM invite user failed");
-    res.status(500).json({ error: "Internal Server Error" });
-  }
-});
-
-// PATCH /api/v1/customers/:id/users/:userId — update role / activate / deactivate
-router.patch(
-  "/customers/:id/users/:userId",
-  requireCrmApiKey("users:write"),
-  async (req, res) => {
-    try {
-      const { id, userId } = req.params as { id: string; userId: string };
-      const { role, isActive } = req.body as { role?: string; isActive?: boolean };
-      const updates: Partial<typeof usersTable.$inferInsert> = { updatedAt: new Date() };
-      if (role) {
-        if (!VALID_USER_ROLES.has(role)) {
-          res.status(400).json({ error: "Bad Request", message: "Invalid role" });
-          return;
-        }
-        updates.role = role;
-      }
-      if (typeof isActive === "boolean") updates.isActive = isActive;
-
-      const [user] = await db
-        .update(usersTable)
-        .set(updates)
-        .where(and(eq(usersTable.id, userId), eq(usersTable.organisationId, id)))
-        .returning();
-      if (!user) {
-        res.status(404).json({ error: "Not Found", message: "User not found in this customer" });
-        return;
-      }
-      await logAudit({
-        req,
-        action: "crm.user.update",
-        resourceType: "user",
-        resourceId: userId,
-        organisationId: id,
-        details: { keyPrefix: req.crmApiKey?.prefix, ...updates },
-      });
-      res.json({
-        user: {
-          id: user.id,
-          email: user.email,
-          name: user.name,
-          role: user.role,
-          isActive: user.isActive,
-        },
-      });
-    } catch (err) {
-      res.status(500).json({ error: "Internal Server Error" });
-    }
-  },
-);
-
-// DELETE /api/v1/customers/:id/users/:userId — soft-deactivate
-router.delete(
-  "/customers/:id/users/:userId",
-  requireCrmApiKey("users:write"),
-  async (req, res) => {
-    try {
-      const { id, userId } = req.params as { id: string; userId: string };
-      const [user] = await db
-        .update(usersTable)
-        .set({ isActive: false, updatedAt: new Date() })
-        .where(and(eq(usersTable.id, userId), eq(usersTable.organisationId, id)))
-        .returning();
-      if (!user) {
-        res.status(404).json({ error: "Not Found", message: "User not found in this customer" });
-        return;
-      }
-      await logAudit({
-        req,
-        action: "crm.user.deactivate",
-        resourceType: "user",
-        resourceId: userId,
-        organisationId: id,
-        details: { keyPrefix: req.crmApiKey?.prefix },
-      });
-      res.json({ id: userId, deactivated: true });
-    } catch (err) {
-      res.status(500).json({ error: "Internal Server Error" });
-    }
-  },
-);
-
-/* ------------------------------------------------------------------ */
-/* Metrics                                                             */
-/* ------------------------------------------------------------------ */
-
-// GET /api/v1/customers/:id/metrics — ESG snapshot for CRM display
-router.get("/customers/:id/metrics", requireCrmApiKey("metrics:read"), async (req, res) => {
-  try {
-    const { id } = req.params as { id: string };
-    const org = await db.query.organisationsTable.findFirst({
-      where: eq(organisationsTable.id, id),
-    });
-    if (!org) {
-      res.status(404).json({ error: "Not Found", message: "Customer not found" });
-      return;
-    }
-    res.json({
-      organisationId: id,
-      sustainabilityScore: org.esgSustainabilityScore,
-      totalCo2eKg: org.esgTotalCo2eKg,
-      fleetCo2eKg: org.esgFleetCo2eKg,
-      energyCo2eKg: org.esgEnergyCo2eKg,
-      energyKwh: org.esgEnergyKwh,
-      computedAt: org.esgComputedAt,
-    });
-  } catch (err) {
-    res.status(500).json({ error: "Internal Server Error" });
-  }
-});
-
-/* ------------------------------------------------------------------ */
-/* Supplier audits                                                     */
-/* ------------------------------------------------------------------ */
-
-// GET /api/v1/customers/:id/audits — audit summary + recent items
-router.get("/customers/:id/audits", requireCrmApiKey("audits:read"), async (req, res) => {
-  try {
-    const { id } = req.params as { id: string };
-
-    const [supplierTotalsRes, statusRes, recentRes, upcomingRes] = await Promise.all([
-      db
-        .execute(
-          sql`SELECT COUNT(*)::int AS total FROM suppliers WHERE organisation_id = ${id}`,
-        )
-        .catch(() => ({ rows: [{ total: 0 }] })),
-      db
-        .execute(sql`
-          SELECT status, COUNT(*)::int AS cnt
-          FROM supplier_audits
-          WHERE organisation_id = ${id}
-          GROUP BY status
-        `)
-        .catch(() => ({ rows: [] })),
-      db
-        .execute(sql`
-          SELECT id, supplier_id, status, esg_score, risk_level, sent_at, due_at, submitted_at
-          FROM supplier_audits
-          WHERE organisation_id = ${id}
-          ORDER BY COALESCE(submitted_at, sent_at, created_at) DESC NULLS LAST
-          LIMIT 25
-        `)
-        .catch(() => ({ rows: [] })),
-      db
-        .execute(sql`
-          SELECT COUNT(*)::int AS due_soon
-          FROM suppliers
-          WHERE organisation_id = ${id}
-            AND next_audit_due_at IS NOT NULL
-            AND next_audit_due_at <= NOW() + INTERVAL '30 days'
-        `)
-        .catch(() => ({ rows: [{ due_soon: 0 }] })),
-    ]);
-
-    const supplierTotals = ((supplierTotalsRes as { rows?: Array<{ total: number }> }).rows ?? [])[0] ?? { total: 0 };
-    const statusRows = ((statusRes as { rows?: Array<{ status: string; cnt: number }> }).rows ?? []);
-    const recentRows = ((recentRes as { rows?: Array<Record<string, unknown>> }).rows ?? []);
-    const upcoming = ((upcomingRes as { rows?: Array<{ due_soon: number }> }).rows ?? [])[0] ?? { due_soon: 0 };
-
-    const byStatus: Record<string, number> = {};
-    let total = 0;
-    for (const r of statusRows) {
-      byStatus[r.status] = Number(r.cnt) || 0;
-      total += Number(r.cnt) || 0;
-    }
-    const submitted = (byStatus.submitted ?? 0) + (byStatus.approved ?? 0);
-    const compliancePct = total > 0 ? Math.round((submitted / total) * 1000) / 10 : null;
-
-    // Average ESG score across submitted/approved audits
-    const avgRes = await db
-      .execute(sql`
-        SELECT AVG(esg_score)::float AS avg
-        FROM supplier_audits
-        WHERE organisation_id = ${id} AND esg_score IS NOT NULL
-      `)
-      .catch(() => ({ rows: [{ avg: null }] }));
-    const avgScore = ((avgRes as { rows?: Array<{ avg: number | null }> }).rows ?? [])[0]?.avg ?? null;
-
-    res.json({
-      organisationId: id,
-      totalSuppliers: Number(supplierTotals.total) || 0,
-      totalAudits: total,
-      auditsByStatus: byStatus,
-      compliancePct,
-      averageEsgScore: avgScore,
-      auditsDueWithin30Days: Number(upcoming.due_soon) || 0,
-      recent: recentRows.map((r) => ({
-        id: r.id,
-        supplierId: r.supplier_id,
-        status: r.status,
-        esgScore: r.esg_score,
-        riskLevel: r.risk_level,
-        sentAt: r.sent_at,
-        dueAt: r.due_at,
-        submittedAt: r.submitted_at,
-      })),
-    });
-  } catch (err) {
-    req.log.error({ err }, "CRM audits summary failed");
-    res.status(500).json({ error: "Internal Server Error" });
-  }
-});
-
-/* ------------------------------------------------------------------ */
-/* Billing                                                             */
-/* ------------------------------------------------------------------ */
-
-// GET /api/v1/customers/:id/billing
-router.get("/customers/:id/billing", requireCrmApiKey("billing:read"), async (req, res) => {
-  try {
-    const { id } = req.params as { id: string };
-    const org = await db.query.organisationsTable.findFirst({ where: eq(organisationsTable.id, id) });
-    if (!org) {
-      res.status(404).json({ error: "Not Found", message: "Customer not found" });
-      return;
-    }
-    res.json({
-      organisationId: id,
-      plan: org.plan ?? null,
-      billingStatus: org.billingStatus ?? "active",
-      isActive: org.isActive,
-    });
-  } catch (err) {
-    req.log.error({ err }, "CRM billing read failed");
-    res.status(500).json({ error: "Internal Server Error" });
-  }
-});
-
-// PATCH /api/v1/customers/:id/billing
-router.patch("/customers/:id/billing", requireCrmApiKey("billing:write"), async (req, res) => {
-  try {
-    const { id } = req.params as { id: string };
-    const { plan, billingStatus } = req.body as { plan?: string; billingStatus?: string };
-    if (plan && !VALID_PLANS.has(plan)) {
-      res.status(400).json({ error: "Bad Request", message: `plan must be one of ${[...VALID_PLANS].join(", ")}` });
-      return;
-    }
-    if (billingStatus && !VALID_BILLING_STATUSES.has(billingStatus)) {
-      res.status(400).json({
-        error: "Bad Request",
-        message: `billingStatus must be one of ${[...VALID_BILLING_STATUSES].join(", ")}`,
-      });
-      return;
-    }
-
-    // 404 on unknown customer — never silently succeed.
-    const existing = await db.query.organisationsTable.findFirst({ where: eq(organisationsTable.id, id) });
-    if (!existing) {
-      res.status(404).json({ error: "Not Found", message: "Customer not found" });
-      return;
-    }
-
-    const patch: Partial<typeof organisationsTable.$inferInsert> = { updatedAt: new Date() };
-    if (plan) patch.plan = plan;
-    if (billingStatus) {
-      patch.billingStatus = billingStatus;
-      patch.isActive = billingStatus !== "suspended";
-    }
-
-    const [updated] = await db
-      .update(organisationsTable)
-      .set(patch)
-      .where(eq(organisationsTable.id, id))
-      .returning();
-
-    await logAudit({
-      req,
-      action: "crm.billing.update",
-      resourceType: "organisation",
-      resourceId: id,
-      organisationId: id,
-      details: { keyPrefix: req.crmApiKey?.prefix, plan, billingStatus },
-    });
-
-    res.json({
-      organisationId: id,
-      plan: updated.plan ?? null,
-      billingStatus: updated.billingStatus ?? "active",
-      isActive: updated.isActive,
-    });
-  } catch (err) {
-    req.log.error({ err }, "CRM billing update failed");
-    res.status(500).json({ error: "Internal Server Error" });
-  }
-});
-
-/* ------------------------------------------------------------------ */
-/* Helpers                                                             */
+/* Serializers — DB row → FGC snake_case payload                       */
 /* ------------------------------------------------------------------ */
 
 function serializeCustomer(o: typeof organisationsTable.$inferSelect) {
@@ -686,19 +48,537 @@ function serializeCustomer(o: typeof organisationsTable.$inferSelect) {
     id: o.id,
     name: o.name,
     slug: o.slug,
+    legal_entity_name: o.legalEntityName,
+    trading_name: o.tradingName,
+    company_number: o.companyNumber,
+    gst_vat_tax_number: o.gstVatTaxNumber,
     industry: o.industry,
     country: o.country,
-    isActive: o.isActive,
-    dataResidency: o.dataResidency,
-    requireMfa: o.requireMfa,
-    inboundEmailAddress: o.inboundEmailAddress,
-    plan: o.plan ?? null,
-    billingStatus: o.billingStatus ?? "active",
-    sustainabilityScore: o.esgSustainabilityScore,
-    totalCo2eKg: o.esgTotalCo2eKg,
-    createdAt: o.createdAt,
-    updatedAt: o.updatedAt,
+    logo_url: o.logoUrl,
+    account_type: o.accountType,
+    account_owner: o.accountOwner,
+    account_manager: o.accountManager,
+    commercial_status: o.commercialStatus,
+    onboarding_status: o.onboardingStatus,
+    risk_rating: o.riskRating,
+    support_tier: o.supportTier,
+    contract_start_date: o.contractStartDate,
+    contract_end_date: o.contractEndDate,
+    renewal_date: o.renewalDate,
+    parent_account_id: o.parentAccountId,
+    notes: o.notes,
+    tags: o.tags ?? [],
+    credit_limit: o.creditLimit,
+    payment_terms: o.paymentTerms,
+    preferred_currency: o.preferredCurrency,
+    default_timezone: o.defaultTimezone,
+    default_language: o.defaultLanguage,
+    privacy_classification: o.privacyClassification,
+    security_classification: o.securityClassification,
+    dpa_nda_status: o.dpaNdaStatus,
+    trust_framework_status: o.trustFrameworkStatus,
+    compliance_status: o.complianceStatus,
+    suspension_reason: o.suspensionReason,
+    suspended_at: o.suspendedAt,
+    suspended_by: o.suspendedBy,
+    archived_at: o.archivedAt,
+    is_active: o.isActive,
+    require_mfa: o.requireMfa,
+    data_residency: o.dataResidency,
+    inbound_email_address: o.inboundEmailAddress,
+    plan: o.plan,
+    billing_status: o.billingStatus,
+    sustainability_score: o.esgSustainabilityScore,
+    total_co2e_kg: o.esgTotalCo2eKg,
+    source_system: o.sourceSystem,
+    version: o.version,
+    created_by: o.createdBy,
+    updated_by: o.updatedBy,
+    created_at: o.createdAt,
+    updated_at: o.updatedAt,
   };
 }
 
+function serializeAudit(a: typeof auditLogsTable.$inferSelect) {
+  let details: unknown = null;
+  if (a.details) {
+    try {
+      details = JSON.parse(a.details);
+    } catch {
+      details = a.details;
+    }
+  }
+  return {
+    id: a.id,
+    correlation_id: a.correlationId,
+    organisation_id: a.organisationId,
+    customer_id: a.organisationId,
+    user_id: a.userId,
+    user_email: a.userEmail,
+    actor_type: a.actorType,
+    action: a.action,
+    resource_type: a.resourceType,
+    resource_id: a.resourceId,
+    previous_value: a.previousValue,
+    new_value: a.newValue,
+    reason_code: a.reasonCode,
+    source_system: a.sourceSystem,
+    outcome: a.outcome,
+    ip_address: a.ipAddress,
+    user_agent: a.userAgent,
+    details,
+    created_at: a.createdAt,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Validation                                                          */
+/* ------------------------------------------------------------------ */
+
+const reasonCodeSchema = z
+  .string()
+  .refine(isFgcReasonCode, {
+    message: `reason_code must be one of: ${FGC_REASON_CODES.join(", ")}`,
+  });
+
+const createCustomerSchema = z.object({
+  name: z.string().min(1).max(200),
+  slug: z
+    .string()
+    .min(2)
+    .max(80)
+    .regex(/^[a-z0-9-]+$/i, "slug must be alphanumeric + hyphens"),
+  legal_entity_name: z.string().max(200).optional().nullable(),
+  trading_name: z.string().max(200).optional().nullable(),
+  company_number: z.string().max(64).optional().nullable(),
+  gst_vat_tax_number: z.string().max(64).optional().nullable(),
+  industry: z.string().max(80).optional().nullable(),
+  country: z.string().max(2).optional().nullable(),
+  logo_url: z.string().url().optional().nullable(),
+  account_type: z.enum(["prospect", "active_customer", "suspended", "closed"]).optional(),
+  account_owner: z.string().max(120).optional().nullable(),
+  account_manager: z.string().max(120).optional().nullable(),
+  commercial_status: z.string().max(40).optional().nullable(),
+  risk_rating: z.enum(["low", "medium", "high"]).optional(),
+  support_tier: z.string().max(40).optional().nullable(),
+  contract_start_date: z.coerce.date().optional().nullable(),
+  contract_end_date: z.coerce.date().optional().nullable(),
+  renewal_date: z.coerce.date().optional().nullable(),
+  parent_account_id: z.string().optional().nullable(),
+  notes: z.string().max(4000).optional().nullable(),
+  tags: z.array(z.string().max(40)).max(50).optional(),
+  credit_limit: z.number().nonnegative().optional().nullable(),
+  payment_terms: z.string().max(80).optional().nullable(),
+  preferred_currency: z.string().length(3).optional(),
+  default_timezone: z.string().max(64).optional(),
+  default_language: z.string().max(16).optional(),
+  data_residency: z.string().max(8).optional(),
+  require_mfa: z.boolean().optional(),
+  plan: z.string().max(40).optional().nullable(),
+  source_system: z.string().max(40).optional(),
+});
+
+const updateCustomerSchema = createCustomerSchema.partial().omit({ slug: true });
+
+const lifecycleActionSchema = z.object({
+  reason_code: reasonCodeSchema,
+  reason_note: z.string().max(500).optional(),
+});
+
+/* ------------------------------------------------------------------ */
+/* Customers                                                           */
+/* ------------------------------------------------------------------ */
+
+const customerIncludeMap: Record<string, string> = {
+  // Reserved for future expansion (?include=primary_contact,subscription)
+};
+
+const listCustomersQuery = z.object({
+  page: z.coerce.number().int().positive().default(1),
+  limit: z.coerce.number().int().positive().max(200).default(50),
+  q: z.string().optional(),
+  account_type: z
+    .enum(["prospect", "active_customer", "suspended", "closed"])
+    .optional(),
+  industry: z.string().optional(),
+  country: z.string().optional(),
+  sort: z.enum(["created_at", "updated_at", "name"]).default("created_at"),
+  order: z.enum(["asc", "desc"]).default("desc"),
+});
+
+router.get(
+  "/customers",
+  requireCrmApiKey("customers:read"),
+  asyncRoute(async (req, res) => {
+    const parse = listCustomersQuery.safeParse(req.query);
+    if (!parse.success) throw Errors.badRequest("Invalid query parameters", parse.error.issues);
+    const q = parse.data;
+
+    const filters = [] as ReturnType<typeof eq>[];
+    if (q.q) {
+      filters.push(
+        or(
+          ilike(organisationsTable.name, `%${q.q}%`),
+          ilike(organisationsTable.slug, `%${q.q}%`),
+          ilike(organisationsTable.legalEntityName, `%${q.q}%`),
+        )!,
+      );
+    }
+    if (q.account_type) filters.push(eq(organisationsTable.accountType, q.account_type));
+    if (q.industry) filters.push(eq(organisationsTable.industry, q.industry));
+    if (q.country) filters.push(eq(organisationsTable.country, q.country));
+
+    const where = filters.length ? and(...filters) : undefined;
+    const sortCol =
+      q.sort === "name"
+        ? organisationsTable.name
+        : q.sort === "updated_at"
+          ? organisationsTable.updatedAt
+          : organisationsTable.createdAt;
+
+    const [{ total }] = await db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(organisationsTable)
+      .where(where ?? sql`true`);
+
+    const rows = await db
+      .select()
+      .from(organisationsTable)
+      .where(where ?? sql`true`)
+      .orderBy(q.order === "asc" ? asc(sortCol) : desc(sortCol))
+      .limit(q.limit)
+      .offset((q.page - 1) * q.limit);
+
+    res.json(
+      paginated(rows.map(serializeCustomer), { page: q.page, limit: q.limit, total }, req),
+    );
+  }),
+);
+
+router.get(
+  "/customers/:id",
+  requireCrmApiKey("customers:read"),
+  asyncRoute(async (req, res) => {
+    const [row] = await db
+      .select()
+      .from(organisationsTable)
+      .where(eq(organisationsTable.id, req.params.id))
+      .limit(1);
+    if (!row) throw Errors.notFound("Customer", req.params.id);
+    res.json(ok(serializeCustomer(row), req));
+  }),
+);
+
+router.post(
+  "/customers",
+  requireCrmApiKey("customers:write"),
+  idempotency(),
+  asyncRoute(async (req, res) => {
+    const parse = createCustomerSchema.safeParse(req.body);
+    if (!parse.success) throw Errors.unprocessable("Invalid customer payload", parse.error.issues);
+    const body = parse.data;
+
+    const [existing] = await db
+      .select({ id: organisationsTable.id })
+      .from(organisationsTable)
+      .where(eq(organisationsTable.slug, body.slug))
+      .limit(1);
+    if (existing) throw Errors.conflict("Customer slug already exists", { slug: body.slug });
+
+    const id = uuidv4();
+    const widgetKey = generateWidgetKey();
+    const inboundEmailAddress = generateInboundEmail(body.slug);
+    const webhookSecret = generateWebhookSecret();
+
+    const insertValues: typeof organisationsTable.$inferInsert = {
+      id,
+      name: body.name,
+      slug: body.slug,
+      legalEntityName: body.legal_entity_name ?? undefined,
+      tradingName: body.trading_name ?? undefined,
+      companyNumber: body.company_number ?? undefined,
+      gstVatTaxNumber: body.gst_vat_tax_number ?? undefined,
+      industry: body.industry ?? undefined,
+      country: body.country ?? undefined,
+      logoUrl: body.logo_url ?? undefined,
+      accountType: body.account_type ?? "active_customer",
+      accountOwner: body.account_owner ?? undefined,
+      accountManager: body.account_manager ?? undefined,
+      commercialStatus: body.commercial_status ?? undefined,
+      riskRating: body.risk_rating ?? undefined,
+      supportTier: body.support_tier ?? undefined,
+      contractStartDate: body.contract_start_date ?? undefined,
+      contractEndDate: body.contract_end_date ?? undefined,
+      renewalDate: body.renewal_date ?? undefined,
+      parentAccountId: body.parent_account_id ?? undefined,
+      notes: body.notes ?? undefined,
+      tags: body.tags ?? undefined,
+      creditLimit: body.credit_limit ?? undefined,
+      paymentTerms: body.payment_terms ?? undefined,
+      preferredCurrency: body.preferred_currency ?? "NZD",
+      defaultTimezone: body.default_timezone ?? "Pacific/Auckland",
+      defaultLanguage: body.default_language ?? "en-NZ",
+      dataResidency: body.data_residency ?? "NZ",
+      requireMfa: body.require_mfa ?? false,
+      plan: body.plan ?? undefined,
+      sourceSystem: body.source_system ?? "fgc-crm",
+      createdBy: req.crmApiKey?.prefix,
+      updatedBy: req.crmApiKey?.prefix,
+      widgetKey,
+      inboundEmailAddress,
+      webhookSecret,
+    };
+    const [row] = await db.insert(organisationsTable).values(insertValues).returning();
+
+    await logAudit({
+      req,
+      action: "customer.created",
+      resourceType: "customer",
+      resourceId: id,
+      organisationId: id,
+      newValue: serializeCustomer(row),
+      details: { event: "customer.created", api_key: req.crmApiKey?.prefix },
+    });
+
+    res.status(201).json(created(serializeCustomer(row), req));
+  }),
+);
+
+router.patch(
+  "/customers/:id",
+  requireCrmApiKey("customers:write"),
+  idempotency(),
+  asyncRoute(async (req, res) => {
+    const parse = updateCustomerSchema.safeParse(req.body);
+    if (!parse.success) throw Errors.unprocessable("Invalid customer patch", parse.error.issues);
+    const body = parse.data;
+
+    const [before] = await db
+      .select()
+      .from(organisationsTable)
+      .where(eq(organisationsTable.id, req.params.id))
+      .limit(1);
+    if (!before) throw Errors.notFound("Customer", req.params.id);
+
+    const patch: Partial<typeof organisationsTable.$inferInsert> = {
+      updatedAt: new Date(),
+      updatedBy: req.crmApiKey?.prefix,
+      version: (before.version ?? 1) + 1,
+    };
+    if (body.name !== undefined) patch.name = body.name;
+    if (body.legal_entity_name !== undefined) patch.legalEntityName = body.legal_entity_name ?? null;
+    if (body.trading_name !== undefined) patch.tradingName = body.trading_name ?? null;
+    if (body.company_number !== undefined) patch.companyNumber = body.company_number ?? null;
+    if (body.gst_vat_tax_number !== undefined) patch.gstVatTaxNumber = body.gst_vat_tax_number ?? null;
+    if (body.industry !== undefined) patch.industry = body.industry ?? null;
+    if (body.country !== undefined) patch.country = body.country ?? null;
+    if (body.logo_url !== undefined) patch.logoUrl = body.logo_url ?? null;
+    if (body.account_type !== undefined) patch.accountType = body.account_type;
+    if (body.account_owner !== undefined) patch.accountOwner = body.account_owner ?? null;
+    if (body.account_manager !== undefined) patch.accountManager = body.account_manager ?? null;
+    if (body.commercial_status !== undefined) patch.commercialStatus = body.commercial_status ?? null;
+    if (body.risk_rating !== undefined) patch.riskRating = body.risk_rating;
+    if (body.support_tier !== undefined) patch.supportTier = body.support_tier ?? null;
+    if (body.contract_start_date !== undefined) patch.contractStartDate = body.contract_start_date ?? null;
+    if (body.contract_end_date !== undefined) patch.contractEndDate = body.contract_end_date ?? null;
+    if (body.renewal_date !== undefined) patch.renewalDate = body.renewal_date ?? null;
+    if (body.parent_account_id !== undefined) patch.parentAccountId = body.parent_account_id ?? null;
+    if (body.notes !== undefined) patch.notes = body.notes ?? null;
+    if (body.tags !== undefined) patch.tags = body.tags;
+    if (body.credit_limit !== undefined) patch.creditLimit = body.credit_limit ?? null;
+    if (body.payment_terms !== undefined) patch.paymentTerms = body.payment_terms ?? null;
+    if (body.preferred_currency !== undefined) patch.preferredCurrency = body.preferred_currency;
+    if (body.default_timezone !== undefined) patch.defaultTimezone = body.default_timezone;
+    if (body.default_language !== undefined) patch.defaultLanguage = body.default_language;
+    if (body.data_residency !== undefined) patch.dataResidency = body.data_residency;
+    if (body.require_mfa !== undefined) patch.requireMfa = body.require_mfa;
+    if (body.plan !== undefined) patch.plan = body.plan ?? null;
+
+    const [updated] = await db
+      .update(organisationsTable)
+      .set(patch)
+      .where(eq(organisationsTable.id, req.params.id))
+      .returning();
+
+    await logAudit({
+      req,
+      action: "customer.updated",
+      resourceType: "customer",
+      resourceId: req.params.id,
+      organisationId: req.params.id,
+      previousValue: serializeCustomer(before),
+      newValue: serializeCustomer(updated),
+      details: { event: "customer.updated", changed_fields: Object.keys(patch) },
+    });
+
+    res.json(ok(serializeCustomer(updated), req));
+  }),
+);
+
+/* ----- lifecycle actions ----------------------------------------- */
+
+async function lifecycleAction(opts: {
+  req: import("express").Request;
+  id: string;
+  action: "suspend" | "reactivate" | "archive";
+  patch: Partial<typeof organisationsTable.$inferInsert>;
+}) {
+  const parse = lifecycleActionSchema.safeParse(opts.req.body);
+  if (!parse.success)
+    throw Errors.badRequest("Invalid lifecycle payload", parse.error.issues);
+  const { reason_code, reason_note } = parse.data;
+
+  const [before] = await db
+    .select()
+    .from(organisationsTable)
+    .where(eq(organisationsTable.id, opts.id))
+    .limit(1);
+  if (!before) throw Errors.notFound("Customer", opts.id);
+
+  const next: Partial<typeof organisationsTable.$inferInsert> = {
+    ...opts.patch,
+    updatedAt: new Date(),
+    updatedBy: opts.req.crmApiKey?.prefix,
+    version: (before.version ?? 1) + 1,
+  };
+  if (opts.action === "suspend") {
+    next.suspensionReason = reason_code;
+    next.suspendedAt = new Date();
+    next.suspendedBy = opts.req.crmApiKey?.prefix;
+    next.isActive = false;
+    next.accountType = "suspended";
+  } else if (opts.action === "reactivate") {
+    next.suspensionReason = null;
+    next.suspendedAt = null;
+    next.suspendedBy = null;
+    next.isActive = true;
+    next.accountType = "active_customer";
+  } else if (opts.action === "archive") {
+    next.archivedAt = new Date();
+    next.isActive = false;
+    next.accountType = "closed";
+  }
+
+  const [updated] = await db
+    .update(organisationsTable)
+    .set(next)
+    .where(eq(organisationsTable.id, opts.id))
+    .returning();
+
+  await logAudit({
+    req: opts.req,
+    action: `customer.${opts.action === "suspend" ? "suspended" : opts.action === "reactivate" ? "reactivated" : "archived"}`,
+    resourceType: "customer",
+    resourceId: opts.id,
+    organisationId: opts.id,
+    reasonCode: reason_code,
+    previousValue: { account_type: before.accountType, is_active: before.isActive },
+    newValue: { account_type: updated.accountType, is_active: updated.isActive },
+    details: {
+      event: `customer.${opts.action === "suspend" ? "suspended" : opts.action === "reactivate" ? "reactivated" : "archived"}`,
+      reason_note,
+    },
+  });
+
+  return updated;
+}
+
+router.post(
+  "/customers/:id/suspend",
+  requireCrmApiKey("customers:write"),
+  idempotency(),
+  asyncRoute(async (req, res) => {
+    const updated = await lifecycleAction({ req, id: req.params.id, action: "suspend", patch: {} });
+    res.json(ok(serializeCustomer(updated), req));
+  }),
+);
+
+router.post(
+  "/customers/:id/reactivate",
+  requireCrmApiKey("customers:write"),
+  idempotency(),
+  asyncRoute(async (req, res) => {
+    const updated = await lifecycleAction({ req, id: req.params.id, action: "reactivate", patch: {} });
+    res.json(ok(serializeCustomer(updated), req));
+  }),
+);
+
+router.post(
+  "/customers/:id/archive",
+  requireCrmApiKey("customers:write"),
+  idempotency(),
+  asyncRoute(async (req, res) => {
+    const updated = await lifecycleAction({ req, id: req.params.id, action: "archive", patch: {} });
+    res.json(ok(serializeCustomer(updated), req));
+  }),
+);
+
+/* ------------------------------------------------------------------ */
+/* Audit query — FGC standard /audit endpoint                          */
+/* ------------------------------------------------------------------ */
+
+const auditQuerySchema = z.object({
+  page: z.coerce.number().int().positive().default(1),
+  limit: z.coerce.number().int().positive().max(500).default(100),
+  customer_id: z.string().optional(),
+  organisation_id: z.string().optional(),
+  resource_type: z.string().optional(),
+  resource_id: z.string().optional(),
+  action: z.string().optional(),
+  actor_type: z.string().optional(),
+  reason_code: z.string().optional(),
+  correlation_id: z.string().optional(),
+  source_system: z.string().optional(),
+  outcome: z.enum(["success", "failure"]).optional(),
+  from: z.coerce.date().optional(),
+  to: z.coerce.date().optional(),
+});
+
+router.get(
+  "/audit",
+  requireCrmApiKey("audit:read"),
+  asyncRoute(async (req, res) => {
+    const parse = auditQuerySchema.safeParse(req.query);
+    if (!parse.success) throw Errors.badRequest("Invalid audit query", parse.error.issues);
+    const q = parse.data;
+
+    const filters = [] as ReturnType<typeof eq>[];
+    const orgId = q.customer_id ?? q.organisation_id;
+    if (orgId) filters.push(eq(auditLogsTable.organisationId, orgId));
+    if (q.resource_type) filters.push(eq(auditLogsTable.resourceType, q.resource_type));
+    if (q.resource_id) filters.push(eq(auditLogsTable.resourceId, q.resource_id));
+    if (q.action) filters.push(eq(auditLogsTable.action, q.action));
+    if (q.actor_type) filters.push(eq(auditLogsTable.actorType, q.actor_type));
+    if (q.reason_code) filters.push(eq(auditLogsTable.reasonCode, q.reason_code));
+    if (q.correlation_id) filters.push(eq(auditLogsTable.correlationId, q.correlation_id));
+    if (q.source_system) filters.push(eq(auditLogsTable.sourceSystem, q.source_system));
+    if (q.outcome) filters.push(eq(auditLogsTable.outcome, q.outcome));
+    if (q.from) filters.push(gte(auditLogsTable.createdAt, q.from));
+    if (q.to) filters.push(lte(auditLogsTable.createdAt, q.to));
+
+    const where = filters.length ? and(...filters) : undefined;
+
+    const [{ total }] = await db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(auditLogsTable)
+      .where(where ?? sql`true`);
+
+    const rows = await db
+      .select()
+      .from(auditLogsTable)
+      .where(where ?? sql`true`)
+      .orderBy(desc(auditLogsTable.createdAt))
+      .limit(q.limit)
+      .offset((q.page - 1) * q.limit);
+
+    res.json(paginated(rows.map(serializeAudit), { page: q.page, limit: q.limit, total }, req));
+  }),
+);
+
 export default router;
+
+/* ------------------------------------------------------------------ */
+/* Re-exports for ergonomics                                           */
+/* ------------------------------------------------------------------ */
+
+export { serializeCustomer };

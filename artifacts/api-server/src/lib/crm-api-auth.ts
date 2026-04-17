@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
 import { sha256Hex, safeEqualHex, parseScopes, type CrmApiScope } from "./crm-api-keys.js";
+import { Errors } from "./api-response.js";
 
 declare module "express-serve-static-core" {
   interface Request {
@@ -42,11 +43,11 @@ export function requireCrmApiKey(...requiredScopes: CrmApiScope[]) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const token = getBearerToken(req);
     if (!token || !token.startsWith("eiq_live_")) {
-      res.status(401).json({
-        error: "Unauthorized",
-        message: "Missing or malformed API key. Use header: Authorization: Bearer eiq_live_…",
-      });
-      return;
+      return next(
+        Errors.unauthorized(
+          "Missing or malformed API key. Use header: Authorization: Bearer eiq_live_…",
+        ),
+      );
     }
 
     // Look up candidates by indexed PUBLIC prefix (the first 17 chars of the key
@@ -85,29 +86,25 @@ export function requireCrmApiKey(...requiredScopes: CrmApiScope[]) {
 
     if (!row) {
       req.log.warn({ ip: clientIp(req), path: req.path, prefix }, "CRM API key auth failed: unknown key");
-      res.status(401).json({ error: "Unauthorized", message: "Invalid API key" });
-      return;
+      return next(Errors.unauthorized("Invalid API key"));
     }
 
     if (row.revoked_at) {
-      res.status(401).json({ error: "Unauthorized", message: "API key has been revoked" });
-      return;
+      return next(Errors.unauthorized("API key has been revoked"));
     }
     if (row.expires_at && new Date(row.expires_at) < new Date()) {
-      res.status(401).json({ error: "Unauthorized", message: "API key has expired" });
-      return;
+      return next(Errors.unauthorized("API key has expired"));
     }
 
     const scopes = parseScopes(row.scopes);
     const missing = requiredScopes.filter((s) => !scopes.includes(s));
     if (missing.length > 0) {
-      res.status(403).json({
-        error: "Forbidden",
-        message: `API key is missing required scope(s): ${missing.join(", ")}`,
-        requiredScopes,
-        keyScopes: scopes,
-      });
-      return;
+      return next(
+        Errors.forbidden(
+          `API key is missing required scope(s): ${missing.join(", ")}`,
+          { required_scopes: requiredScopes, key_scopes: scopes },
+        ),
+      );
     }
 
     req.crmApiKey = { id: row.id, name: row.name, prefix: row.prefix, scopes };

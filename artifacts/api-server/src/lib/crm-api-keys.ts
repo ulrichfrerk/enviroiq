@@ -10,25 +10,43 @@ import { logger } from "./logger.js";
 export const CRM_API_SCOPES = [
   "customers:read",
   "customers:write",
+  "contacts:read",
+  "contacts:write",
   "users:read",
   "users:write",
-  "metrics:read",
-  "audits:read",
+  "subscriptions:read",
+  "subscriptions:write",
   "billing:read",
   "billing:write",
+  "provisioning:read",
+  "provisioning:write",
+  "tickets:read",
+  "tickets:write",
+  "audit:read",
+  "metrics:read",
+  "audits:read",
 ] as const;
 
 export type CrmApiScope = (typeof CRM_API_SCOPES)[number];
 
 export const CRM_API_SCOPE_DESCRIPTIONS: Record<CrmApiScope, string> = {
-  "customers:read": "List and read customer (organisation) records",
-  "customers:write": "Create new customers, update details, lock/unlock accounts",
+  "customers:read": "List and read customer (organisation/account) records",
+  "customers:write": "Create customers, update details, suspend/reactivate/archive accounts",
+  "contacts:read": "List and read customer contacts",
+  "contacts:write": "Add, update, remove customer contacts",
   "users:read": "List users for any customer",
-  "users:write": "Invite users, update roles, deactivate users",
+  "users:write": "Invite users, update roles, suspend/unlock/reset users",
+  "subscriptions:read": "Read subscriptions and entitlements",
+  "subscriptions:write": "Create, change, cancel, suspend, reactivate subscriptions",
+  "billing:read": "Read billing profile and plan/status",
+  "billing:write": "Update billing profile, payment method, credit-hold",
+  "provisioning:read": "Read provisioning request status",
+  "provisioning:write": "Create provisioning requests and manage service instances",
+  "tickets:read": "Read support tickets",
+  "tickets:write": "Create, update, escalate, assign and close support tickets",
+  "audit:read": "Read audit log entries (FGC standard /audit query)",
   "metrics:read": "Read ESG metrics, sustainability scores, totals",
-  "audits:read": "Read supplier audit status, scores, recurrence info",
-  "billing:read": "Read billing plan and account status",
-  "billing:write": "Update billing plan, mark account as past due / suspended",
+  "audits:read": "Read supplier ESG audit status, scores, recurrence info",
 };
 
 /**

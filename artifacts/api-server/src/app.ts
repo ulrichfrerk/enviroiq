@@ -10,6 +10,7 @@ import rateLimit from "express-rate-limit";
 import router from "./routes/index.js";
 import { logger } from "./lib/logger.js";
 import { logAudit } from "./lib/audit.js";
+import { correlationMiddleware } from "./lib/api-context.js";
 
 const sessionSecret = process.env.SESSION_SECRET;
 if (!sessionSecret && process.env.NODE_ENV === "production") {
@@ -224,6 +225,9 @@ app.use("/api", (req: Request, res: Response, next: NextFunction) => {
   });
   next();
 });
+
+// FGC: per-request correlation ID — feeds response.meta.requestId + audit logs
+app.use("/api", correlationMiddleware);
 
 app.use("/api", router);
 

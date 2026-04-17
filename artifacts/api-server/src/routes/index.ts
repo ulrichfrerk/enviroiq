@@ -31,8 +31,10 @@ import supplierReportsRouter from "./supplier-reports.js";
 import publicAuditsRouter from "./public-audits.js";
 import supplierPortalRouter from "./supplier-portal.js";
 import crmRouter from "./crm.js";
+import crmEntitiesRouter from "./crm-entities.js";
 import crmKeysRouter from "./crm-keys.js";
 import crmOpenapiRouter from "./crm-openapi.js";
+import { fgcErrorHandler } from "../lib/api-response.js";
 import securityRouter from "./security.js";
 
 const router = Router();
@@ -92,6 +94,9 @@ router.use("/admin/audit-logs", globalAuditRouter);
 router.use("/crm-keys", crmKeysRouter);
 router.use("/v1", crmOpenapiRouter);
 router.use("/v1", crmRouter);
+router.use("/v1", crmEntitiesRouter);
+// FGC error envelope handler — must be LAST under /v1
+router.use("/v1", fgcErrorHandler);
 
 // Public grid intensity (no auth, open CORS handled in app.ts)
 router.use("/grid", gridRouter);
