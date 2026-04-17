@@ -30,6 +30,9 @@ import supplierAuditsRouter from "./supplier-audits.js";
 import supplierReportsRouter from "./supplier-reports.js";
 import publicAuditsRouter from "./public-audits.js";
 import supplierPortalRouter from "./supplier-portal.js";
+import crmRouter from "./crm.js";
+import crmKeysRouter from "./crm-keys.js";
+import crmOpenapiRouter from "./crm-openapi.js";
 
 const router = Router();
 
@@ -83,6 +86,11 @@ router.use("/widget", widgetPublicRouter);
 // Admin
 router.use("/admin", adminRouter);
 router.use("/admin/audit-logs", globalAuditRouter);
+
+// CRM Integration API (Bearer-key authenticated, versioned)
+router.use("/crm-keys", crmKeysRouter);
+router.use("/v1", crmOpenapiRouter);
+router.use("/v1", crmRouter);
 
 // Public grid intensity (no auth, open CORS handled in app.ts)
 router.use("/grid", gridRouter);

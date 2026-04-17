@@ -1,5 +1,4 @@
 uploads = []
-outputs = []
 
 [[generated]]
 id = "F1_i4hZ1AmQ3ZoJZ1-Yug"
@@ -12,3 +11,15 @@ id = "T9ea_mIXccibNumtNtez6"
 uri = "file://artifacts/marketing/public/images/dashboard-mockup.png"
 type = "image"
 title = "generated_image"
+
+[[outputs]]
+id = "7WJAtXO6ie4-KrlsigLuZ"
+uri = "file://.local/outputs/EnviroIQ.pdf"
+type = "pdf"
+title = "EnviroIQ.pdf"
+
+[[outputs]]
+id = "GldJ66tForayWDd08nlQQ"
+uri = "file://.local/outputs/EnviroIQ.pptx"
+type = "slides"
+title = "EnviroIQ.pptx"

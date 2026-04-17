@@ -3,7 +3,7 @@ import {
   BarChart3, Car, Zap, Target, FileText, Settings, Users,
   ShieldAlert, Shield, LogOut, Leaf, UserCircle, Beaker, TrendingDown, Sparkles,
   HeartHandshake, Building2, FolderOpen, Recycle, HardHat, BrainCircuit, ShieldCheck,
-  Truck, ClipboardCheck,
+  Truck, ClipboardCheck, KeyRound,
 } from "lucide-react";
 import {
   Sidebar,
@@ -121,6 +121,18 @@ export function AppSidebar() {
                     <Link href="/admin" className="flex items-center gap-3">
                       <Shield className="w-4 h-4 text-primary" />
                       <span>Admin Portal</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    asChild
+                    isActive={location === "/api-keys"}
+                    className="hover-elevate active-elevate-2 transition-all"
+                  >
+                    <Link href="/api-keys" className="flex items-center gap-3">
+                      <KeyRound className="w-4 h-4 text-primary" />
+                      <span>CRM API &amp; Keys</span>
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>

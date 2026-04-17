@@ -3,6 +3,7 @@ import { logger } from "./lib/logger";
 import { startScheduler, stopScheduler } from "./lib/scheduler";
 import { startSupplierAuditScheduler } from "./lib/scheduler-supplier-audits";
 import { ensureDefaultSupplierAuditTemplate } from "./lib/supplier-audit-default-template";
+import { ensureCrmApiKeyTables } from "./lib/crm-api-keys";
 import { db } from "@workspace/db";
 import { sql, eq } from "drizzle-orm";
 import { usersTable } from "@workspace/db/schema";
@@ -64,8 +65,19 @@ if (Number.isNaN(port) || port <= 0) {
 }
 
 // Ensure all DB prerequisites exist, then start listening
+async function ensureOrgBillingColumns(): Promise<void> {
+  // Idempotent — adds plan + billing_status columns used by the CRM API.
+  await db.execute(sql`ALTER TABLE organisations ADD COLUMN IF NOT EXISTS plan text`);
+  await db.execute(
+    sql`ALTER TABLE organisations ADD COLUMN IF NOT EXISTS billing_status text NOT NULL DEFAULT 'active'`,
+  );
+  logger.info("Organisation billing columns ready");
+}
+
 ensureSessionTable()
   .then(() => ensureSuperAdmin())
+  .then(() => ensureOrgBillingColumns())
+  .then(() => ensureCrmApiKeyTables())
   .then(() => ensureDefaultSupplierAuditTemplate())
   .then(() => {
     const server = app.listen(port, () => {
