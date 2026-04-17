@@ -24,11 +24,11 @@ router.post("/generate", requireAuth, requireOrgAccess, async (req: Request, res
   const { tone, focusAreas, customContext } = parsed.data;
 
   // ── Gather org context ────────────────────────────────────────────────────
-  const [org] = await db.execute<{
+  const { rows: [org] } = await db.execute<{
     name: string; industry: string | null; slug: string;
   }>(sql`SELECT name, industry, slug FROM organisations WHERE id = ${orgId} LIMIT 1`);
 
-  const [emissionsRow] = await db.execute<{
+  const { rows: [emissionsRow] } = await db.execute<{
     total_co2e_kg: string | null;
     fleet_co2e_kg: string | null;
     energy_co2e_kg: string | null;
@@ -43,7 +43,7 @@ router.post("/generate", requireAuth, requireOrgAccess, async (req: Request, res
       (SELECT COUNT(*) FROM vehicles WHERE organisation_id = ${orgId}) AS vehicle_count
   `);
 
-  const targets = await db.execute<{
+  const { rows: targets } = await db.execute<{
     label: string | null; target_year: number; target_pct_reduction: number; framework: string | null;
   }>(sql`
     SELECT label, target_year, target_pct_reduction, framework
@@ -56,13 +56,13 @@ router.post("/generate", requireAuth, requireOrgAccess, async (req: Request, res
   // Build maturity score from 4 dimensions dynamically (same logic as maturity route)
   const vehicleCount = parseInt((emissionsRow?.vehicle_count ?? "0"));
   const totalCo2eKg = parseFloat((emissionsRow?.total_co2e_kg ?? "0"));
-  const [billCount] = await db.execute<{ cnt: string }>(
+  const { rows: [billCount] } = await db.execute<{ cnt: string }>(
     sql`SELECT COUNT(*)::text AS cnt FROM energy_readings WHERE organisation_id = ${orgId}`
   );
-  const [targetCount] = await db.execute<{ cnt: string }>(
+  const { rows: [targetCount] } = await db.execute<{ cnt: string }>(
     sql`SELECT COUNT(*)::text AS cnt FROM emission_targets WHERE organisation_id = ${orgId}`
   );
-  const [auditCount] = await db.execute<{ cnt: string }>(
+  const { rows: [auditCount] } = await db.execute<{ cnt: string }>(
     sql`SELECT COUNT(*)::text AS cnt FROM audit_logs WHERE organisation_id = ${orgId}`
   );
 

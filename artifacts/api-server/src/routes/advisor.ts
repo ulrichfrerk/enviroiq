@@ -78,12 +78,12 @@ Always ground your advice in the organisation's actual data. Be specific, action
 
 // ── Helper: gather org ESG context ───────────────────────────────────────────
 async function gatherOrgContext(orgId: string) {
-  const [org] = await db.execute<{ name: string; industry: string | null; esg_sustainability_score: number | null }>(
+  const { rows: [org] } = await db.execute<{ name: string; industry: string | null; esg_sustainability_score: number | null }>(
     sql`SELECT name, industry, esg_sustainability_score FROM organisations WHERE id = ${orgId} LIMIT 1`
   );
   if (!org) return null;
 
-  const fleetRows = await db.execute<{ fuel_type: string; events: number; total_km: number; total_litres: number; total_co2e: number }>(
+  const { rows: fleetRows } = await db.execute<{ fuel_type: string; events: number; total_km: number; total_litres: number; total_co2e: number }>(
     sql`SELECT v.fuel_type, COUNT(*)::int as events, 
         ROUND(SUM(fe.distance_km)::numeric,1) as total_km,
         ROUND(SUM(fe.fuel_litres)::numeric,1) as total_litres,
@@ -93,14 +93,14 @@ async function gatherOrgContext(orgId: string) {
       GROUP BY v.fuel_type ORDER BY total_co2e DESC`
   );
 
-  const vehicleRows = await db.execute<{ make: string; model: string; fuel_type: string; year: number | null; status: string }>(
+  const { rows: vehicleRows } = await db.execute<{ make: string; model: string; fuel_type: string; year: number | null; status: string }>(
     sql`SELECT make, model, fuel_type, year,
                CASE WHEN is_active THEN 'active' ELSE 'inactive' END AS status
         FROM vehicles WHERE organisation_id = ${orgId}
         ORDER BY is_active DESC, fuel_type`
   );
 
-  const energyRows = await db.execute<{ utility_type: string; bills: number; total_kwh: number; total_mj: number; total_co2e: number }>(
+  const { rows: energyRows } = await db.execute<{ utility_type: string; bills: number; total_kwh: number; total_mj: number; total_co2e: number }>(
     sql`SELECT utility_type, COUNT(*)::int as bills, 
         ROUND(SUM(usage_kwh)::numeric,1) as total_kwh,
         ROUND(SUM(usage_mj)::numeric,1) as total_mj,
@@ -108,13 +108,13 @@ async function gatherOrgContext(orgId: string) {
       FROM energy_readings WHERE organisation_id = ${orgId} GROUP BY utility_type ORDER BY total_co2e DESC`
   );
 
-  const goalRows = await db.execute<{ title: string; status: string; target_value: number | null; target_unit: string | null; target_year: number | null }>(
+  const { rows: goalRows } = await db.execute<{ title: string; status: string; target_value: number | null; target_unit: string | null; target_year: number | null }>(
     sql`SELECT title, status, target_value, target_unit, target_year
         FROM goals WHERE organisation_id = ${orgId}
         ORDER BY created_at DESC LIMIT 10`
   );
 
-  const [gov] = await db.execute<{
+  const { rows: [gov] } = await db.execute<{
     board_size: number | null; framework_alignment: string | null;
     has_tcfd_aligned: boolean | null; has_external_assurance: boolean | null;
     has_esg_risk_register: boolean | null;
@@ -248,7 +248,7 @@ router.get("/insights", requireAuth, requireOrgAccess, async (req: Request, res:
   const { orgId } = req.params;
 
   try {
-    const [cached] = await db.execute<{
+    const { rows: [cached] } = await db.execute<{
       insights_json: string;
       org_context_json: string;
       generated_at: string;
@@ -295,7 +295,7 @@ router.post("/insights/regenerate", requireAuth, requireOrgAccess, async (req: R
                 generated_by = EXCLUDED.generated_by`
     );
 
-    const [saved] = await db.execute<{ generated_at: string }>(
+    const { rows: [saved] } = await db.execute<{ generated_at: string }>(
       sql`SELECT generated_at FROM advisor_cache WHERE organisation_id = ${orgId} LIMIT 1`
     );
 
@@ -323,11 +323,11 @@ router.post("/ask", requireAuth, requireOrgAccess, async (req: Request, res: Res
   const { question } = parsed.data;
 
   try {
-    const [org] = await db.execute<{ name: string; industry: string | null }>(
+    const { rows: [org] } = await db.execute<{ name: string; industry: string | null }>(
       sql`SELECT name, industry FROM organisations WHERE id = ${orgId} LIMIT 1`
     );
 
-    const [snap] = await db.execute<{ fleet_co2: number; energy_co2: number }>(
+    const { rows: [snap] } = await db.execute<{ fleet_co2: number; energy_co2: number }>(
       sql`SELECT 
           COALESCE((SELECT SUM(co2e_kg) FROM fleet_events WHERE organisation_id = ${orgId}),0)::float as fleet_co2,
           COALESCE((SELECT SUM(co2e_kg) FROM energy_readings WHERE organisation_id = ${orgId}),0)::float as energy_co2`
