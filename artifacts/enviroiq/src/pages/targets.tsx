@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   Target, Plus, Trash2, Loader2, TrendingDown, Calendar,
-  CheckCircle2, AlertTriangle, ChevronRight,
+  CheckCircle2, AlertTriangle, ChevronRight, Sparkles, Wand2,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
@@ -32,11 +32,57 @@ interface TargetWithProgress extends EmissionTarget {
 
 const FRAMEWORKS = [
   { value: "", label: "Custom" },
-  { value: "SBTi", label: "Science-Based Target (SBTi)" },
+  { value: "SBTi-1.5", label: "Science-Based Target — 1.5°C aligned" },
+  { value: "SBTi-WB2", label: "Science-Based Target — Well-below 2°C" },
   { value: "NZ-ETS", label: "NZ ETS Commitment" },
-  { value: "CEMARS", label: "Toitū CEMARS" },
+  { value: "CEMARS", label: "Toitū carbonreduce / CEMARS" },
   { value: "NetZero", label: "Net Zero 2050" },
 ];
+
+// Framework-aligned defaults the assistant uses to suggest values.
+// SBTi 1.5°C requires ≥4.2% absolute reduction per year (linear).
+// SBTi WB2 requires ≥2.5% per year. Toitū carbonreduce requires ≥1% per year.
+// Net Zero 2050 means ~100% by 2050 with residual offsets.
+const FRAMEWORK_DEFAULTS: Record<
+  string,
+  { label: string; annualPct: number; suggestedTargetYear: (baseline: number) => number; minPct: number; note: string }
+> = {
+  "SBTi-1.5": {
+    label: "SBTi 1.5°C",
+    annualPct: 4.2,
+    suggestedTargetYear: (b) => b + 10,
+    minPct: 42,
+    note: "SBTi requires ≥4.2% absolute reduction per year for 1.5°C alignment. 42% by year 10 is the minimum.",
+  },
+  "SBTi-WB2": {
+    label: "SBTi Well-Below 2°C",
+    annualPct: 2.5,
+    suggestedTargetYear: (b) => b + 10,
+    minPct: 25,
+    note: "SBTi WB2 requires ≥2.5% absolute reduction per year. 25% by year 10 is the minimum.",
+  },
+  "NZ-ETS": {
+    label: "NZ ETS aligned",
+    annualPct: 2.0,
+    suggestedTargetYear: () => 2030,
+    minPct: 30,
+    note: "Aligned with NZ's NDC: 50% net by 2030 from gross 2005, ~30% gross from a 2025 baseline.",
+  },
+  "CEMARS": {
+    label: "Toitū carbonreduce",
+    annualPct: 1.0,
+    suggestedTargetYear: (b) => b + 5,
+    minPct: 5,
+    note: "Toitū carbonreduce requires a verified ≥1% absolute reduction per year against baseline.",
+  },
+  "NetZero": {
+    label: "Net Zero 2050",
+    annualPct: 3.6,
+    suggestedTargetYear: () => 2050,
+    minPct: 90,
+    note: "Net Zero 2050: ≥90% absolute reduction by 2050 with the residual offset by removals.",
+  },
+};
 
 function ProgressRing({ pct, size = 80 }: { pct: number; size?: number }) {
   const r = (size - 8) / 2;
@@ -95,6 +141,68 @@ export default function Targets() {
       return res.json();
     },
   });
+
+  // Last-12-month emissions — used by the Target Assistant to seed baseline
+  const { data: trailing12m, isLoading: trailing12mLoading } = useQuery<{ totalCo2eKg: number }>({
+    queryKey: ["org-summary-12m", orgId],
+    enabled: !!orgId,
+    queryFn: async () => {
+      const res = await fetch(`/api/organisations/${orgId}/summary?period=12m`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch 12-month summary");
+      return res.json();
+    },
+  });
+
+  // Target Assistant — fills in baseline + framework-aligned reduction & timeline.
+  function applyAssistantSuggestion(framework?: string) {
+    const baselineKg = trailing12m?.totalCo2eKg ?? 0;
+    const baselineYear = new Date().getFullYear() - 1; // most-recent complete year proxy
+    const fw = framework ?? form.framework;
+    const def = fw && FRAMEWORK_DEFAULTS[fw];
+
+    if (!baselineKg) {
+      toast({
+        variant: "destructive",
+        title: "No emissions data yet",
+        description: "Add fleet or energy data first so the assistant can calculate a baseline.",
+      });
+      return;
+    }
+
+    if (def) {
+      const targetYear = def.suggestedTargetYear(baselineYear);
+      const years = Math.max(1, targetYear - baselineYear);
+      // Linear annual reduction × years, capped at 100, with framework minimum.
+      const calculatedPct = Math.min(100, Math.round(def.annualPct * years));
+      const targetPctReduction = Math.max(def.minPct, calculatedPct);
+      setForm({
+        baselineYear,
+        baselineCo2eKg: String(Math.round(baselineKg)),
+        targetYear,
+        targetPctReduction: String(targetPctReduction),
+        label: `${def.label} commitment`,
+        framework: fw,
+      });
+      toast({
+        title: "Suggestion applied",
+        description: `${def.label}: ${targetPctReduction}% by ${targetYear}.`,
+      });
+    } else {
+      // Custom — sensible NZ default: 30% by year+5 from real baseline.
+      const targetYear = baselineYear + 5;
+      setForm((f) => ({
+        ...f,
+        baselineYear,
+        baselineCo2eKg: String(Math.round(baselineKg)),
+        targetYear,
+        targetPctReduction: f.targetPctReduction || "30",
+      }));
+      toast({
+        title: "Baseline filled",
+        description: "Used your last 12 months of emissions as the baseline.",
+      });
+    }
+  }
 
   const createMutation = useMutation({
     mutationFn: async () => {
@@ -282,6 +390,59 @@ export default function Targets() {
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 mt-2">
+            {/* Target Assistant — auto-fills baseline + framework defaults */}
+            <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
+              <div className="flex items-start gap-2.5">
+                <div className="mt-0.5 rounded-md bg-primary/15 p-1.5">
+                  <Sparkles className="w-4 h-4 text-primary" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-foreground">Target Assistant</p>
+                  <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">
+                    {trailing12mLoading
+                      ? "Reading your last 12 months of emissions…"
+                      : trailing12m?.totalCo2eKg
+                        ? <>Use your last 12 months ({Math.round(trailing12m.totalCo2eKg).toLocaleString()} kg CO₂e) as the baseline, then pick a framework for a science-aligned suggestion.</>
+                        : "Add fleet or energy data first so I can calculate a baseline from your real emissions."}
+                  </p>
+                  <div className="flex flex-wrap gap-1.5 mt-2.5">
+                    <Button
+                      size="sm" variant="outline"
+                      className="h-7 text-xs"
+                      onClick={() => applyAssistantSuggestion("SBTi-1.5")}
+                      disabled={!trailing12m?.totalCo2eKg}
+                    >
+                      <Wand2 className="w-3 h-3 mr-1" />SBTi 1.5°C
+                    </Button>
+                    <Button
+                      size="sm" variant="outline"
+                      className="h-7 text-xs"
+                      onClick={() => applyAssistantSuggestion("NetZero")}
+                      disabled={!trailing12m?.totalCo2eKg}
+                    >
+                      <Wand2 className="w-3 h-3 mr-1" />Net Zero 2050
+                    </Button>
+                    <Button
+                      size="sm" variant="outline"
+                      className="h-7 text-xs"
+                      onClick={() => applyAssistantSuggestion("NZ-ETS")}
+                      disabled={!trailing12m?.totalCo2eKg}
+                    >
+                      <Wand2 className="w-3 h-3 mr-1" />NZ ETS
+                    </Button>
+                    <Button
+                      size="sm" variant="outline"
+                      className="h-7 text-xs"
+                      onClick={() => applyAssistantSuggestion("CEMARS")}
+                      disabled={!trailing12m?.totalCo2eKg}
+                    >
+                      <Wand2 className="w-3 h-3 mr-1" />Toitū
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-sm font-medium text-muted-foreground">Baseline year</label>

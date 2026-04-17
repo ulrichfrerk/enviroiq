@@ -255,7 +255,7 @@ export function SecurityStatusWidget() {
                                 <span className="text-xs font-medium leading-tight">
                                   {check.label}
                                 </span>
-                                {severityBadge(check.severity)}
+                                {severityBadge(check.severity, check.status)}
                               </div>
                               <p className="text-[11px] leading-snug text-muted-foreground">
                                 {check.detail}
