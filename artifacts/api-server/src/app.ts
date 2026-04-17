@@ -7,6 +7,8 @@ import cookieParser from "cookie-parser";
 import session from "express-session";
 import ConnectPgSimple from "connect-pg-simple";
 import rateLimit from "express-rate-limit";
+import { clerkMiddleware } from "@clerk/express";
+import { CLERK_PROXY_PATH, clerkProxyMiddleware } from "./middlewares/clerkProxyMiddleware.js";
 import router from "./routes/index.js";
 import { logger } from "./lib/logger.js";
 import { logAudit } from "./lib/audit.js";
@@ -62,6 +64,10 @@ app.use((_req: Request, res: Response, next: NextFunction) => {
   );
   next();
 });
+
+// Clerk Frontend API proxy (production only). Must be mounted BEFORE
+// express.json() because the proxy streams raw bytes from the client to Clerk.
+app.use(CLERK_PROXY_PATH, clerkProxyMiddleware());
 
 // Logging
 app.use(
@@ -223,6 +229,9 @@ app.use(
     },
   }),
 );
+
+// Clerk auth context — populates getAuth(req) for downstream middleware
+app.use(clerkMiddleware());
 
 // Centralized audit middleware — logs all mutating API calls after response
 app.use("/api", (req: Request, res: Response, next: NextFunction) => {

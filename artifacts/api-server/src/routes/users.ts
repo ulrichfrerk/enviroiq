@@ -44,7 +44,7 @@ router.post("/", requireAuth, requireRole("super_admin", "org_admin"), requireOr
       return;
     }
 
-    const callerRole = req.session.role;
+    const callerRole = req.user?.role;
     const allowedRoles = resolveAllowedRoles(callerRole);
     if (!allowedRoles.includes(role as OrgRole)) {
       res.status(403).json({
@@ -100,7 +100,7 @@ router.patch("/:userId", requireAuth, requireRole("super_admin", "org_admin"), r
     const { name, role, isActive } = req.body;
 
     if (role !== undefined) {
-      const callerRole = req.session.role;
+      const callerRole = req.user?.role;
       const allowedRoles = resolveAllowedRoles(callerRole);
       if (!allowedRoles.includes(role as OrgRole)) {
         res.status(403).json({

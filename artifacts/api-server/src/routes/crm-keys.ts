@@ -2,7 +2,7 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
-import { requireRole } from "../lib/auth.js";
+import { requireAuth, requireRole } from "../lib/auth.js";
 import { logAudit } from "../lib/audit.js";
 import {
   CRM_API_SCOPES,
@@ -16,7 +16,7 @@ const router = Router();
 
 // All key-management endpoints require super-admin (these keys can act across
 // every customer organisation, so only the platform operator may issue them).
-router.use(requireRole("super_admin"));
+router.use(requireAuth, requireRole("super_admin"));
 
 // GET /api/crm-keys
 router.get("/", async (_req, res) => {

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { randomBytes } from "crypto";
-import { db, organisationsTable, usersTable, vehiclesTable, widgetConfigsTable, magicLinksTable } from "@workspace/db";
+import { db, organisationsTable, usersTable, vehiclesTable, widgetConfigsTable } from "@workspace/db";
 import { eq, count, sql } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
 import { requireAuth, requireRole, requireOrgAccess, requireOrgAdmin } from "../lib/auth.js";
@@ -29,7 +29,7 @@ function generateInboundEmail(slug: string): string {
 }
 
 // GET /organisations
-router.get("/", requireRole("super_admin"), async (req, res) => {
+router.get("/", requireAuth, requireRole("super_admin"), async (req, res) => {
   try {
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 20;
@@ -65,7 +65,7 @@ router.get("/", requireRole("super_admin"), async (req, res) => {
 });
 
 // POST /organisations
-router.post("/", requireRole("super_admin"), async (req, res) => {
+router.post("/", requireAuth, requireRole("super_admin"), async (req, res) => {
   try {
     const { name, industry, country, adminEmail, adminName, onboardingBrief } = req.body;
     if (!name || !adminEmail || !adminName) {
@@ -108,13 +108,11 @@ router.post("/", requireRole("super_admin"), async (req, res) => {
     // Create default widget config
     await db.insert(widgetConfigsTable).values({ organisationId: orgId }).onConflictDoNothing();
 
-    // Generate a 24-hour magic link so the admin can log in straight away
-    const token = randomBytes(32).toString("hex");
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    await db.insert(magicLinksTable).values({ id: uuidv4(), userId: adminUser.id, token, expiresAt });
-
+    // The admin will sign up via Clerk using this email; on first sign-in,
+    // requireAuth's resolver will match by email and link the Clerk user to
+    // the org_admin row we just created.
     const appBase = process.env.APP_BASE_URL || `https://${process.env.REPLIT_DOMAINS?.split(",")[0]?.trim()}/app`;
-    const magicUrl = `${appBase}/auth/verify?token=${token}`;
+    const magicUrl = `${appBase}/sign-up`;
 
     // Save onboarding brief if provided (from AI-guided setup wizard)
     if (onboardingBrief) {
@@ -197,7 +195,7 @@ router.patch("/:orgId", requireAuth, requireOrgAdmin, async (req, res) => {
 });
 
 // DELETE /organisations/:orgId
-router.delete("/:orgId", requireRole("super_admin"), async (req, res) => {
+router.delete("/:orgId", requireAuth, requireRole("super_admin"), async (req, res) => {
   try {
     await db.delete(organisationsTable).where(eq(organisationsTable.id, req.params.orgId as string));
     await logAudit({ req, action: "organisation.delete", resourceType: "organisation", resourceId: req.params.orgId as string });

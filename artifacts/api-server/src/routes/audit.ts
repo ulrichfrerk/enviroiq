@@ -37,7 +37,7 @@ router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
 });
 
 // GET /admin/audit-logs — super admin global view
-globalAuditRouter.get("/", requireRole("super_admin"), async (req, res) => {
+globalAuditRouter.get("/", requireAuth, requireRole("super_admin"), async (req, res) => {
   try {
     const { orgId } = req.query;
     const page = parseInt(req.query.page as string) || 1;

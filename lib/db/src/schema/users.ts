@@ -9,6 +9,12 @@ export const usersTable = pgTable("users", {
   role: text("role").notNull().default("org_viewer"),
   organisationId: text("organisation_id"),
   isActive: boolean("is_active").notNull().default(true),
+  /**
+   * Clerk user ID, set on a user's first sign-in via Clerk.
+   * Pre-existing (passkey-era) users have this NULL until they first sign in
+   * with Clerk; matching is then performed by email and this column is filled.
+   */
+  clerkUserId: text("clerk_user_id").unique(),
   lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

@@ -1,13 +1,16 @@
 import { Router } from "express";
 import { db, organisationsTable, usersTable, vehiclesTable, auditLogsTable, fleetEventsTable, energyReadingsTable } from "@workspace/db";
 import { count, eq, sql } from "drizzle-orm";
-import { requireRole } from "../lib/auth.js";
+import { requireAuth, requireRole } from "../lib/auth.js";
 import { sqlRow, sqlRows, numCol, intCol, strCol } from "../lib/sql-result.js";
 import { calcFleetCo2e, calcEnergyCo2e, resolveElectricityFactor } from "../lib/emissions.js";
 import { logAudit } from "../lib/audit.js";
 import { openai } from "@workspace/integrations-openai-ai-server";
 
 const router = Router();
+
+// All admin endpoints require authentication AND super_admin role.
+router.use(requireAuth);
 
 // GET /admin/stats
 router.get("/stats", requireRole("super_admin"), async (req, res) => {

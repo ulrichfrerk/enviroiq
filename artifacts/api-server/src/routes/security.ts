@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from "express";
 import { createHash } from "crypto";
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
-import { requireRole } from "../lib/auth.js";
+import { requireAuth, requireRole } from "../lib/auth.js";
 import { logger } from "../lib/logger.js";
 
 type CheckStatus = "pass" | "warn" | "fail";
@@ -332,6 +332,7 @@ const router = Router();
 // and would be cross-tenant information disclosure if exposed to org users/viewers.
 router.get(
   "/status",
+  requireAuth,
   requireRole("super_admin", "org_admin"),
   async (_req: Request, res: Response) => {
     try {
@@ -356,6 +357,7 @@ router.get(
 // Plaintext so it can be diff-ed across runs and pinned via the SHA-256 footer.
 router.get(
   "/pack.txt",
+  requireAuth,
   requireRole("super_admin", "org_admin"),
   async (req: Request, res: Response) => {
     try {

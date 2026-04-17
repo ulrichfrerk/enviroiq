@@ -2,7 +2,7 @@
 
 ## Overview
 
-Real-time multi-tenant ESG sustainability measurement platform. Companies track CO2 emissions from fleet vehicles (Navman, Blackhawk GPS integration) and energy consumption (PDF upload + inbound email bill parsing). Features passkey/WebAuthn authentication, super-admin portal, board-ready PDF reports, an embeddable public widget, full audit logging (SOC 2 mindset), and role-based access.
+Real-time multi-tenant ESG sustainability measurement platform. Companies track CO2 emissions from fleet vehicles (Navman, Blackhawk GPS integration) and energy consumption (PDF upload + inbound email bill parsing). Features Clerk-managed authentication (Google OAuth + email/password, with email-match migration of pre-existing passkey users), super-admin portal, board-ready PDF reports, an embeddable public widget, full audit logging (SOC 2 mindset), and role-based access.
 
 ### ESG Intelligence Features
 - **Maturity Scoring**: 4-dimension scoring (Foundation 40pt, Coverage 30pt, Quality 20pt, Governance 10pt) — grades: Foundation / Developing / Advanced / Leader
@@ -16,9 +16,9 @@ Real-time multi-tenant ESG sustainability measurement platform. Companies track 
 - **Node.js**: 24
 - **Package manager**: pnpm
 - **TypeScript**: 5.9
-- **API framework**: Express 5 + Helmet + express-rate-limit + express-session
+- **API framework**: Express 5 + Helmet + express-rate-limit
 - **Database**: PostgreSQL + Drizzle ORM
-- **Auth**: WebAuthn/Passkeys (@simplewebauthn/server) + magic link fallback
+- **Auth**: Clerk (whitelabel) — `@clerk/express` server middleware + `@clerk/react` client. Users matched to local `users` table by `clerk_user_id` (preferred) or email (back-fills `clerk_user_id` on first sign-in for migrated passkey users). Supplier portal still uses its own magic-link cookie flow.
 - **Validation**: Zod (zod/v4), drizzle-zod
 - **API codegen**: Orval (from OpenAPI spec)
 - **Frontend**: React + Vite + TanStack Query + Wouter + Recharts + shadcn/ui

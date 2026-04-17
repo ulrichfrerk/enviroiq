@@ -1,41 +1,48 @@
 import { useEffect, useState } from "react";
 import { useParams, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
-import { useRequestMagicLink } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
-import { Leaf, Fingerprint, Mail, Loader2, MailCheck, ShieldX, ArrowLeft } from "lucide-react";
-import { useToast } from "@/hooks/use-toast";
+import { Leaf, Loader2, ShieldX, ArrowRight } from "lucide-react";
+
 type OrgInfo = { id: string; name: string; slug: string; logoUrl?: string | null };
 
+/**
+ * Per-organisation white-label landing at `/:slug`.
+ *
+ * Post-Clerk migration this page no longer hosts the auth UI itself — it
+ * looks up the org by slug, shows a branded card, and (when the visitor is
+ * not yet authenticated) sends them to the central Clerk `/sign-in` flow.
+ * Once Clerk reports a session, requireAuth on the API server enforces
+ * organisation membership; here we simply route them to /dashboard if their
+ * Clerk-linked user belongs to this org (or is a super_admin).
+ */
 export default function OrgLogin() {
   const { slug } = useParams<{ slug: string }>();
-  const { session, loginPasskey, isAuthenticating } = useAuth();
-  const reqMagicLink = useRequestMagicLink();
+  const { session, isLoading } = useAuth();
   const [, setLocation] = useLocation();
-  const { toast } = useToast();
 
   const [orgInfo, setOrgInfo] = useState<OrgInfo | null>(null);
   const [orgLoading, setOrgLoading] = useState(true);
   const [orgNotFound, setOrgNotFound] = useState(false);
-  const [mode, setMode] = useState<"login" | "magic" | "magic-sent">("login");
-  const [email, setEmail] = useState("");
 
   useEffect(() => {
     if (!slug) return;
     setOrgLoading(true);
     fetch(`/api/organisations/public/${encodeURIComponent(slug)}`, { credentials: "include" })
       .then(async (res) => {
-        if (!res.ok) { setOrgNotFound(true); return; }
-        setOrgInfo(await res.json() as OrgInfo);
+        if (!res.ok) {
+          setOrgNotFound(true);
+          return;
+        }
+        setOrgInfo((await res.json()) as OrgInfo);
         setOrgNotFound(false);
       })
       .catch(() => setOrgNotFound(true))
       .finally(() => setOrgLoading(false));
   }, [slug]);
 
-  // If authenticated — check org membership
+  // Authenticated users that belong here go straight to the dashboard.
   useEffect(() => {
     if (!session?.isAuthenticated || !orgInfo) return;
     const isSuperAdmin = session.role === "super_admin";
@@ -43,28 +50,9 @@ export default function OrgLogin() {
     if (isSuperAdmin || belongsToOrg) {
       setLocation("/dashboard");
     }
-  }, [session, orgInfo]);
+  }, [session, orgInfo, setLocation]);
 
-  const handleMagicLink = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!email) return;
-    // Store the org portal URL so verify page brings user back here for membership check
-    localStorage.setItem("enviroiq_return_to", `/${slug}`);
-    try {
-      await reqMagicLink.mutateAsync({ data: { email } });
-      setMode("magic-sent");
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to send magic link.";
-      toast({ variant: "destructive", title: "Error", description: message });
-    }
-  };
-
-  const handlePasskey = async () => {
-    localStorage.setItem("enviroiq_return_to", `/${slug}`);
-    await loginPasskey();
-  };
-
-  if (orgLoading) {
+  if (orgLoading || isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <Loader2 className="w-8 h-8 animate-spin text-primary" />
@@ -79,18 +67,17 @@ export default function OrgLogin() {
           <ShieldX className="w-12 h-12 text-muted-foreground mx-auto" />
           <h2 className="text-xl font-bold text-foreground">Portal not found</h2>
           <p className="text-muted-foreground text-sm">
-            No organisation is registered at <span className="font-mono text-foreground">/{slug}</span>.
-            Check the URL or contact your account manager.
+            No organisation is registered at <span className="font-mono text-foreground">/{slug}</span>. Check the URL or contact your account manager.
           </p>
-          <Button variant="outline" className="gap-2" onClick={() => setLocation("/login")}>
-            <ArrowLeft className="w-4 h-4" /> Back to login
+          <Button variant="outline" onClick={() => setLocation("/sign-in")}>
+            Go to sign in
           </Button>
         </Card>
       </div>
     );
   }
 
-  // Authenticated but wrong org — access denied
+  // Authenticated but on the wrong org portal.
   if (session?.isAuthenticated && orgInfo && session.organisationId !== orgInfo.id && session.role !== "super_admin") {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
@@ -98,16 +85,18 @@ export default function OrgLogin() {
           <ShieldX className="w-12 h-12 text-destructive mx-auto" />
           <h2 className="text-xl font-bold text-foreground">Access Denied</h2>
           <p className="text-muted-foreground text-sm">
-            Your account doesn't have access to <span className="font-semibold">{orgInfo.name}</span>.
-            Contact your {orgInfo.name} administrator to be added.
+            Your account doesn't have access to <span className="font-semibold">{orgInfo.name}</span>. Contact your {orgInfo.name} administrator to be added.
           </p>
-          <Button variant="outline" className="gap-2" onClick={() => setLocation("/dashboard")}>
+          <Button variant="outline" onClick={() => setLocation("/dashboard")}>
             Go to your dashboard
           </Button>
         </Card>
       </div>
     );
   }
+
+  const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
+  const signInHref = `/sign-in?redirect_url=${encodeURIComponent(`${basePath}/${slug}`)}`;
 
   return (
     <div className="min-h-screen w-full flex items-center justify-center relative overflow-hidden bg-background">
@@ -129,65 +118,14 @@ export default function OrgLogin() {
           <p className="text-muted-foreground text-sm">Powered by EnviroIQ</p>
         </div>
 
-        {mode === "login" && (
-          <div className="space-y-6">
-            <Button
-              size="lg"
-              className="w-full h-14 text-base font-semibold shadow-lg shadow-primary/20 hover:-translate-y-0.5 transition-all"
-              onClick={handlePasskey}
-              disabled={isAuthenticating}
-            >
-              {isAuthenticating ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : <Fingerprint className="w-5 h-5 mr-2" />}
-              Login with Passkey
-            </Button>
-
-            <div className="relative">
-              <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-border" /></div>
-              <div className="relative flex justify-center text-xs uppercase"><span className="bg-card px-2 text-muted-foreground">Or</span></div>
-            </div>
-
-            <Button variant="outline" className="w-full h-12" onClick={() => setMode("magic")}>
-              <Mail className="w-4 h-4 mr-2" /> Continue with Email
-            </Button>
-          </div>
-        )}
-
-        {mode === "magic" && (
-          <form onSubmit={handleMagicLink} className="space-y-4 animate-in slide-in-from-left-4">
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-foreground">Work Email</label>
-              <Input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@company.com"
-                className="h-12 bg-background/50"
-                required
-              />
-            </div>
-            <Button type="submit" className="w-full h-12 mt-2" disabled={reqMagicLink.isPending || !email}>
-              {reqMagicLink.isPending ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : <Mail className="w-5 h-5 mr-2" />}
-              Send Magic Link
-            </Button>
-            <Button type="button" variant="ghost" className="w-full" onClick={() => setMode("login")}>Back</Button>
-          </form>
-        )}
-
-        {mode === "magic-sent" && (
-          <div className="flex flex-col items-center gap-4 animate-in fade-in">
-            <div className="w-14 h-14 rounded-full bg-emerald-500/10 flex items-center justify-center">
-              <MailCheck className="w-7 h-7 text-emerald-500" />
-            </div>
-            <div className="text-center space-y-2">
-              <p className="font-semibold text-foreground">Check your email</p>
-              <p className="text-sm text-muted-foreground">
-                We sent a magic link to <span className="font-medium text-foreground">{email}</span>.
-              </p>
-              <p className="text-xs text-muted-foreground pt-1">The link expires in 15 minutes.</p>
-            </div>
-            <Button variant="ghost" className="w-full mt-2" onClick={() => setMode("magic")}>Try a different email</Button>
-          </div>
-        )}
+        <Button
+          size="lg"
+          className="w-full h-14 text-base font-semibold shadow-lg shadow-primary/20 hover:-translate-y-0.5 transition-all"
+          onClick={() => setLocation(signInHref)}
+        >
+          Sign in to {orgInfo?.name}
+          <ArrowRight className="w-5 h-5 ml-2" />
+        </Button>
       </Card>
     </div>
   );
