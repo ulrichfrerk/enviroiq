@@ -18,6 +18,12 @@ import {
   NZ_GRID_INTENSITY_KG_PER_KWH,
   NZ_RETAIL_KWH_NZD,
 } from "../lib/recommendations-catalogue.js";
+import {
+  buildRolloutPlan,
+  type Aggressiveness,
+} from "../lib/recommendations-planner.js";
+
+const VALID_AGGRESSIVENESS: Aggressiveness[] = ["conservative", "moderate", "aggressive"];
 
 const router = Router({ mergeParams: true });
 
@@ -74,6 +80,11 @@ router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
   try {
     const orgId = req.params.orgId as string;
     const since = new Date(Date.now() - ONE_YEAR_MS);
+
+    const aggressivenessParam = String(req.query.aggressiveness ?? "moderate") as Aggressiveness;
+    const aggressiveness: Aggressiveness = VALID_AGGRESSIVENESS.includes(aggressivenessParam)
+      ? aggressivenessParam
+      : "moderate";
 
     // 1. Fetch fleet vehicles + per-vehicle 12-month sums
     const vehicles = await db
@@ -359,8 +370,27 @@ router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
       };
     }
 
+    // ── Multi-year roll-out plan ────────────────────────────────────────────
+    const plan = buildRolloutPlan(
+      recommendations.map((r) => ({
+        id: r.id,
+        title: r.title,
+        category: r.category,
+        annualCo2eSavingKg: r.annualCo2eSavingKg,
+        annualCostSavingNzd: r.annualCostSavingNzd,
+        estimatedCapexNzd: r.estimatedCapexNzd,
+        effort: r.effort,
+      })),
+      grandTotalKg,
+      aggressiveness,
+      activeTarget
+        ? { targetYear: activeTarget.targetYear, targetPctReduction: activeTarget.targetPctReduction }
+        : null,
+    );
+
     res.json({
       generatedAt: new Date().toISOString(),
+      aggressiveness,
       baseline: {
         totalCo2eKg: Math.round(grandTotalKg),
         fleetCo2eKg: Math.round(fleetTotalKg),
@@ -374,6 +404,7 @@ router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
           grandTotalKg > 0 ? Math.round((totalSavingKg / grandTotalKg) * 1000) / 10 : 0,
       },
       targetGap,
+      plan,
       items: recommendations,
     });
   } catch (err) {

@@ -7,8 +7,44 @@ import { Button } from "@/components/ui/button";
 import {
   Lightbulb, TrendingDown, Loader2, Car, Zap, Sun, Building2, Wrench,
   Plug, AlertCircle, ChevronRight, Target, ExternalLink, DollarSign,
-  Clock, ArrowRight, ChevronDown, Award,
+  Clock, ArrowRight, ChevronDown, Award, CalendarDays, TrendingUp, Wallet,
 } from "lucide-react";
+
+type Aggressiveness = "conservative" | "moderate" | "aggressive";
+
+interface PlanYear {
+  year: number;
+  yearOffset: number;
+  capexNzd: number;
+  cumulativeCapexNzd: number;
+  annualSavingNzdRunRate: number;
+  cumulativeSavingNzd: number;
+  annualCo2eReductionKg: number;
+  residualCo2eKg: number;
+  reductionPctOfBaseline: number;
+  items: { id: string; title: string; category: string; capexNzd: number; annualCo2eSavingKg: number; annualCostSavingNzd: number }[];
+}
+
+interface RolloutPlan {
+  aggressiveness: Aggressiveness;
+  horizonYears: number;
+  startYear: number;
+  baselineCo2eKg: number;
+  totalCapexNzd: number;
+  matureAnnualSavingNzd: number;
+  matureAnnualCo2eReductionKg: number;
+  matureReductionPct: number;
+  simplePaybackYears: number | null;
+  years: PlanYear[];
+  targetAlignment?: {
+    targetYear: number;
+    targetPctReduction: number;
+    targetCo2eKg: number;
+    planResidualInTargetYearKg: number;
+    onTrack: boolean;
+    shortfallKg: number;
+  };
+}
 
 type RecCategory = "fleet" | "energy" | "solar" | "supplier" | "building" | "operations";
 type RecPriority = "high" | "medium" | "low";
@@ -58,6 +94,7 @@ interface Recommendation {
 
 interface RecommendationsResponse {
   generatedAt: string;
+  aggressiveness: Aggressiveness;
   baseline: { totalCo2eKg: number; fleetCo2eKg: number; energyCo2eKg: number };
   totals: {
     count: number;
@@ -75,8 +112,15 @@ interface RecommendationsResponse {
     requiredAnnualReductionKg: number;
     coveredByRecommendationsPct: number;
   } | null;
+  plan: RolloutPlan;
   items: Recommendation[];
 }
+
+const AGGRESSIVENESS_META: Record<Aggressiveness, { label: string; sub: string; horizon: number; color: string }> = {
+  conservative: { label: "Conservative", sub: "7-year roll-out · low capex first", horizon: 7, color: "border-sky-500 bg-sky-950/30 text-sky-200" },
+  moderate:     { label: "Moderate",     sub: "5-year roll-out · best ROI first", horizon: 5, color: "border-emerald-500 bg-emerald-950/30 text-emerald-200" },
+  aggressive:   { label: "Aggressive",   sub: "3-year roll-out · max impact first", horizon: 3, color: "border-amber-500 bg-amber-950/30 text-amber-200" },
+};
 
 const CATEGORY_META: Record<RecCategory, { label: string; icon: any; color: string; bg: string; border: string }> = {
   fleet:       { label: "Fleet",        icon: Car,        color: "text-blue-400",    bg: "bg-blue-900/15",    border: "border-blue-800/30" },
@@ -218,12 +262,16 @@ export default function Recommendations() {
   const { session } = useAuth();
   const orgId = session?.organisationId;
   const [filter, setFilter] = useState<"all" | RecCategory>("all");
+  const [aggressiveness, setAggressiveness] = useState<Aggressiveness>("moderate");
 
   const { data, isLoading, error } = useQuery<RecommendationsResponse>({
-    queryKey: ["recommendations", orgId],
+    queryKey: ["recommendations", orgId, aggressiveness],
     enabled: !!orgId,
     queryFn: async () => {
-      const res = await fetch(`/api/organisations/${orgId}/recommendations`, { credentials: "include" });
+      const res = await fetch(
+        `/api/organisations/${orgId}/recommendations?aggressiveness=${aggressiveness}`,
+        { credentials: "include" },
+      );
       if (!res.ok) throw new Error("Failed to fetch recommendations");
       return res.json();
     },
@@ -342,6 +390,192 @@ export default function Recommendations() {
                   style={{ width: `${Math.min(100, data.targetGap.coveredByRecommendationsPct)}%` }}
                 />
               </div>
+            </Card>
+          )}
+
+          {/* ── Multi-year roll-out plan ────────────────────────────────── */}
+          {data.plan && data.plan.years.length > 0 && (
+            <Card className="p-5 border-border/50 bg-gradient-to-br from-secondary/20 to-transparent">
+              <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4 mb-5">
+                <div className="min-w-0">
+                  <h2 className="text-lg font-semibold text-foreground flex items-center gap-2">
+                    <CalendarDays className="w-5 h-5 text-primary" />
+                    Year-by-year roll-out plan
+                  </h2>
+                  <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
+                    Choose how aggressively to schedule these recommendations. Capex hits in the install year;
+                    savings accrue from then on. Cumulative columns show total spend and CO₂e progress to date.
+                  </p>
+                </div>
+
+                {/* Aggressiveness selector */}
+                <div className="flex flex-col sm:flex-row gap-2 shrink-0">
+                  {(["conservative", "moderate", "aggressive"] as Aggressiveness[]).map(level => {
+                    const meta = AGGRESSIVENESS_META[level];
+                    const active = aggressiveness === level;
+                    return (
+                      <button
+                        key={level}
+                        onClick={() => setAggressiveness(level)}
+                        className={`text-left px-3 py-2 rounded-lg border-2 transition-all ${
+                          active
+                            ? meta.color
+                            : "border-border/40 bg-card text-muted-foreground hover:border-border hover:text-foreground"
+                        }`}
+                      >
+                        <p className="text-xs font-bold uppercase tracking-wider">{meta.label}</p>
+                        <p className="text-[10px] mt-0.5 opacity-90">{meta.sub}</p>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Plan totals strip */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+                <div className="rounded-lg border border-border/40 bg-background/40 px-3 py-2.5">
+                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold flex items-center gap-1">
+                    <Wallet className="w-3 h-3" /> Total capex ({data.plan.horizonYears}-yr plan)
+                  </p>
+                  <p className="text-xl font-bold tabular-nums text-foreground mt-0.5">{fmtNzd(data.plan.totalCapexNzd)}</p>
+                </div>
+                <div className="rounded-lg border border-border/40 bg-background/40 px-3 py-2.5">
+                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold flex items-center gap-1">
+                    <DollarSign className="w-3 h-3" /> Mature annual saving
+                  </p>
+                  <p className="text-xl font-bold tabular-nums text-foreground mt-0.5">{fmtNzd(data.plan.matureAnnualSavingNzd)}</p>
+                </div>
+                <div className="rounded-lg border border-border/40 bg-background/40 px-3 py-2.5">
+                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold flex items-center gap-1">
+                    <TrendingDown className="w-3 h-3" /> Mature CO₂e cut
+                  </p>
+                  <p className="text-xl font-bold tabular-nums text-emerald-300 mt-0.5">
+                    {fmtKg(data.plan.matureAnnualCo2eReductionKg)}
+                  </p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">{data.plan.matureReductionPct}% of baseline</p>
+                </div>
+                <div className="rounded-lg border border-border/40 bg-background/40 px-3 py-2.5">
+                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold flex items-center gap-1">
+                    <Clock className="w-3 h-3" /> Simple payback
+                  </p>
+                  <p className="text-xl font-bold tabular-nums text-foreground mt-0.5">
+                    {data.plan.simplePaybackYears != null ? `${data.plan.simplePaybackYears} yr` : "—"}
+                  </p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">Capex ÷ mature savings</p>
+                </div>
+              </div>
+
+              {/* Target alignment */}
+              {data.plan.targetAlignment && (
+                <div className={`rounded-lg border px-3 py-2.5 mb-5 ${
+                  data.plan.targetAlignment.onTrack
+                    ? "border-emerald-700/40 bg-emerald-950/20"
+                    : "border-rose-800/40 bg-rose-950/20"
+                }`}>
+                  <p className="text-sm">
+                    <span className="font-semibold text-foreground">
+                      {data.plan.targetAlignment.onTrack ? "On track" : "Falls short"}
+                    </span>
+                    <span className="text-muted-foreground"> of your ↓{data.plan.targetAlignment.targetPctReduction}% by {data.plan.targetAlignment.targetYear} target.</span>
+                    <span className="text-muted-foreground">
+                      {" "}This plan reaches <span className="font-semibold text-foreground">{fmtKg(data.plan.targetAlignment.planResidualInTargetYearKg)}</span> by {data.plan.targetAlignment.targetYear} vs target of {fmtKg(data.plan.targetAlignment.targetCo2eKg)}.
+                    </span>
+                    {!data.plan.targetAlignment.onTrack && (
+                      <span className="text-rose-300"> Shortfall: {fmtKg(data.plan.targetAlignment.shortfallKg)}.</span>
+                    )}
+                  </p>
+                </div>
+              )}
+
+              {/* Year-by-year table */}
+              <div className="overflow-x-auto -mx-5 px-5">
+                <table className="w-full text-xs border-collapse">
+                  <thead>
+                    <tr className="text-left text-[10px] uppercase tracking-wider text-muted-foreground border-b border-border/30">
+                      <th className="py-2 pr-3 font-semibold">Year</th>
+                      <th className="py-2 px-2 font-semibold text-right">Items installed</th>
+                      <th className="py-2 px-2 font-semibold text-right">Capex this yr</th>
+                      <th className="py-2 px-2 font-semibold text-right">Cumulative capex</th>
+                      <th className="py-2 px-2 font-semibold text-right">Annual saving (run-rate)</th>
+                      <th className="py-2 px-2 font-semibold text-right">Cumulative cash saved</th>
+                      <th className="py-2 px-2 font-semibold text-right">CO₂e cut (annual)</th>
+                      <th className="py-2 pl-2 font-semibold text-right">Residual / % cut</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.plan.years.map(y => {
+                      const isInstallYear = y.items.length > 0;
+                      return (
+                        <tr key={y.year} className="border-b border-border/20 last:border-0 align-top">
+                          <td className="py-3 pr-3">
+                            <p className="font-bold tabular-nums text-foreground">{y.year}</p>
+                            <p className="text-[10px] text-muted-foreground">Y{y.yearOffset + 1}</p>
+                          </td>
+                          <td className="py-3 px-2 text-right">
+                            {isInstallYear ? (
+                              <details className="text-right">
+                                <summary className="cursor-pointer tabular-nums text-foreground hover:text-primary">
+                                  {y.items.length} {y.items.length === 1 ? "item" : "items"}
+                                </summary>
+                                <ul className="mt-1.5 space-y-0.5 text-[11px] text-muted-foreground text-left list-disc list-inside marker:text-muted-foreground/40">
+                                  {y.items.map(it => (
+                                    <li key={it.id} className="leading-snug">{it.title}</li>
+                                  ))}
+                                </ul>
+                              </details>
+                            ) : (
+                              <span className="text-muted-foreground/50">—</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-2 text-right tabular-nums text-foreground">
+                            {y.capexNzd > 0 ? fmtNzd(y.capexNzd) : <span className="text-muted-foreground/50">—</span>}
+                          </td>
+                          <td className="py-3 px-2 text-right tabular-nums text-muted-foreground">
+                            {fmtNzd(y.cumulativeCapexNzd)}
+                          </td>
+                          <td className="py-3 px-2 text-right tabular-nums text-foreground">
+                            {y.annualSavingNzdRunRate > 0 ? fmtNzd(y.annualSavingNzdRunRate) : <span className="text-muted-foreground/50">—</span>}
+                          </td>
+                          <td className="py-3 px-2 text-right tabular-nums text-emerald-300/90">
+                            {fmtNzd(y.cumulativeSavingNzd)}
+                          </td>
+                          <td className="py-3 px-2 text-right tabular-nums text-emerald-300/90">
+                            {fmtKg(y.annualCo2eReductionKg)}
+                          </td>
+                          <td className="py-3 pl-2 text-right">
+                            <p className="tabular-nums text-foreground font-medium">{fmtKg(y.residualCo2eKg)}</p>
+                            <p className="text-[10px] text-muted-foreground tabular-nums">↓{y.reductionPctOfBaseline}%</p>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                  <tfoot>
+                    <tr className="border-t-2 border-border/40 bg-secondary/20">
+                      <td className="py-2.5 pr-3 text-[10px] uppercase tracking-wider font-bold text-muted-foreground">Total</td>
+                      <td className="py-2.5 px-2 text-right tabular-nums text-foreground font-semibold">{data.totals.count}</td>
+                      <td className="py-2.5 px-2 text-right tabular-nums text-foreground font-bold">{fmtNzd(data.plan.totalCapexNzd)}</td>
+                      <td className="py-2.5 px-2"></td>
+                      <td className="py-2.5 px-2 text-right tabular-nums text-foreground font-semibold">{fmtNzd(data.plan.matureAnnualSavingNzd)}</td>
+                      <td className="py-2.5 px-2 text-right tabular-nums text-emerald-300 font-bold">
+                        {fmtNzd(data.plan.years[data.plan.years.length - 1]?.cumulativeSavingNzd ?? 0)}
+                      </td>
+                      <td className="py-2.5 px-2 text-right tabular-nums text-emerald-300 font-bold">
+                        {fmtKg(data.plan.matureAnnualCo2eReductionKg)}
+                      </td>
+                      <td className="py-2.5 pl-2 text-right tabular-nums text-emerald-300 font-bold">
+                        {data.plan.matureReductionPct}%
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+
+              <p className="text-[11px] text-muted-foreground mt-3 leading-relaxed">
+                <TrendingUp className="w-3 h-3 inline mr-0.5" />
+                "Run-rate" = annualised saving once installed measures have been operating a full year. Cumulative cash saved
+                assumes savings start the year of install. Capex figures are NZ market estimates — validate with quotes.
+              </p>
             </Card>
           )}
 
