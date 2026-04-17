@@ -154,11 +154,8 @@ router.post("/customers", requireCrmApiKey("customers:write"), async (req, res) 
         .where(eq(usersTable.id, adminUser.id));
     }
 
-    // Optional plan column (column may not exist on older DBs — best-effort)
     if (plan) {
-      await db
-        .execute(sql`UPDATE organisations SET plan = ${plan} WHERE id = ${orgId}`)
-        .catch(() => undefined);
+      await db.update(organisationsTable).set({ plan, updatedAt: new Date() }).where(eq(organisationsTable.id, orgId));
     }
 
     // Generate magic link so the CRM can deliver the welcome email or hand it back
@@ -605,20 +602,19 @@ router.get("/customers/:id/audits", requireCrmApiKey("audits:read"), async (req,
 router.get("/customers/:id/billing", requireCrmApiKey("billing:read"), async (req, res) => {
   try {
     const { id } = req.params as { id: string };
-    const result = await db
-      .execute(sql`SELECT plan, billing_status FROM organisations WHERE id = ${id}`)
-      .catch(() => ({ rows: [] }));
-    const row = ((result as { rows?: Array<{ plan: string | null; billing_status: string | null }> }).rows ?? [])[0];
-    if (!row) {
+    const org = await db.query.organisationsTable.findFirst({ where: eq(organisationsTable.id, id) });
+    if (!org) {
       res.status(404).json({ error: "Not Found", message: "Customer not found" });
       return;
     }
     res.json({
       organisationId: id,
-      plan: row.plan ?? null,
-      billingStatus: row.billing_status ?? "active",
+      plan: org.plan ?? null,
+      billingStatus: org.billingStatus ?? "active",
+      isActive: org.isActive,
     });
   } catch (err) {
+    req.log.error({ err }, "CRM billing read failed");
     res.status(500).json({ error: "Internal Server Error" });
   }
 });
@@ -640,14 +636,25 @@ router.patch("/customers/:id/billing", requireCrmApiKey("billing:write"), async 
       return;
     }
 
-    if (plan) {
-      await db.execute(sql`UPDATE organisations SET plan = ${plan} WHERE id = ${id}`);
+    // 404 on unknown customer — never silently succeed.
+    const existing = await db.query.organisationsTable.findFirst({ where: eq(organisationsTable.id, id) });
+    if (!existing) {
+      res.status(404).json({ error: "Not Found", message: "Customer not found" });
+      return;
     }
+
+    const patch: Partial<typeof organisationsTable.$inferInsert> = { updatedAt: new Date() };
+    if (plan) patch.plan = plan;
     if (billingStatus) {
-      await db.execute(
-        sql`UPDATE organisations SET billing_status = ${billingStatus}, is_active = ${billingStatus !== "suspended"} WHERE id = ${id}`,
-      );
+      patch.billingStatus = billingStatus;
+      patch.isActive = billingStatus !== "suspended";
     }
+
+    const [updated] = await db
+      .update(organisationsTable)
+      .set(patch)
+      .where(eq(organisationsTable.id, id))
+      .returning();
 
     await logAudit({
       req,
@@ -658,7 +665,12 @@ router.patch("/customers/:id/billing", requireCrmApiKey("billing:write"), async 
       details: { keyPrefix: req.crmApiKey?.prefix, plan, billingStatus },
     });
 
-    res.json({ organisationId: id, plan: plan ?? null, billingStatus: billingStatus ?? null });
+    res.json({
+      organisationId: id,
+      plan: updated.plan ?? null,
+      billingStatus: updated.billingStatus ?? "active",
+      isActive: updated.isActive,
+    });
   } catch (err) {
     req.log.error({ err }, "CRM billing update failed");
     res.status(500).json({ error: "Internal Server Error" });
@@ -669,10 +681,7 @@ router.patch("/customers/:id/billing", requireCrmApiKey("billing:write"), async 
 /* Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
-function serializeCustomer(o: typeof organisationsTable.$inferSelect & {
-  plan?: string | null;
-  billingStatus?: string | null;
-}) {
+function serializeCustomer(o: typeof organisationsTable.$inferSelect) {
   return {
     id: o.id,
     name: o.name,
@@ -683,8 +692,8 @@ function serializeCustomer(o: typeof organisationsTable.$inferSelect & {
     dataResidency: o.dataResidency,
     requireMfa: o.requireMfa,
     inboundEmailAddress: o.inboundEmailAddress,
-    plan: (o as { plan?: string | null }).plan ?? null,
-    billingStatus: (o as { billingStatus?: string | null }).billingStatus ?? null,
+    plan: o.plan ?? null,
+    billingStatus: o.billingStatus ?? "active",
     sustainabilityScore: o.esgSustainabilityScore,
     totalCo2eKg: o.esgTotalCo2eKg,
     createdAt: o.createdAt,

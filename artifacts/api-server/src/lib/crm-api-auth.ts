@@ -2,7 +2,7 @@ import type { Request, Response, NextFunction } from "express";
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
-import { sha256Hex, parseScopes, type CrmApiScope } from "./crm-api-keys.js";
+import { sha256Hex, safeEqualHex, parseScopes, type CrmApiScope } from "./crm-api-keys.js";
 
 declare module "express-serve-static-core" {
   interface Request {
@@ -49,26 +49,42 @@ export function requireCrmApiKey(...requiredScopes: CrmApiScope[]) {
       return;
     }
 
+    // Look up candidates by indexed PUBLIC prefix (the first 17 chars of the key
+    // — `eiq_live_` + 8 hex chars of the secret). The prefix is shown to the
+    // operator and is not a secret. The actual SHA-256 hash is then compared
+    // in constant time with `safeEqualHex` to prevent timing attacks.
+    const prefix = token.slice(0, 17);
     const keyHash = sha256Hex(token);
     const result = await db.execute(sql`
-      SELECT id, name, prefix, scopes, revoked_at, expires_at
+      SELECT id, name, prefix, scopes, key_hash, revoked_at, expires_at
       FROM crm_api_keys
-      WHERE key_hash = ${keyHash}
-      LIMIT 1
+      WHERE prefix = ${prefix}
     `);
-    const row = (result.rows ?? result)[0] as
-      | {
-          id: string;
-          name: string;
-          prefix: string;
-          scopes: string;
-          revoked_at: Date | string | null;
-          expires_at: Date | string | null;
-        }
-      | undefined;
+    const candidates = ((result as { rows?: Array<{
+      id: string;
+      name: string;
+      prefix: string;
+      scopes: string;
+      key_hash: string;
+      revoked_at: Date | string | null;
+      expires_at: Date | string | null;
+    }> }).rows ?? []) as Array<{
+      id: string;
+      name: string;
+      prefix: string;
+      scopes: string;
+      key_hash: string;
+      revoked_at: Date | string | null;
+      expires_at: Date | string | null;
+    }>;
+
+    let row: typeof candidates[number] | undefined;
+    for (const c of candidates) {
+      if (safeEqualHex(c.key_hash, keyHash)) { row = c; break; }
+    }
 
     if (!row) {
-      req.log.warn({ ip: clientIp(req), path: req.path }, "CRM API key auth failed: unknown key");
+      req.log.warn({ ip: clientIp(req), path: req.path, prefix }, "CRM API key auth failed: unknown key");
       res.status(401).json({ error: "Unauthorized", message: "Invalid API key" });
       return;
     }

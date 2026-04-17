@@ -165,9 +165,14 @@ account-health scores and reminder workflows.
 GET   /v1/customers/{id}/billing
 PATCH /v1/customers/{id}/billing  { plan?, billingStatus? }
 ```
+Both endpoints return `{ organisationId, plan, billingStatus, isActive }`.
 - `plan` ∈ `operate | assure | enterprise`
 - `billingStatus` ∈ `active | trialing | past_due | suspended`
-- Setting `billingStatus = suspended` also locks the account (`isActive=false`).
+- Setting `billingStatus = suspended` also locks the account (`isActive=false`)
+  AND immediately blocks all logins for users in that organisation — the next
+  authenticated request returns `403 Forbidden { reason: "suspended" }` and the
+  existing session is destroyed.
+- `PATCH` returns `404 Not Found` if the customer ID does not exist.
 
 ---
 

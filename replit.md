@@ -94,6 +94,20 @@ All under `/api`:
 - `GET /organisations/:orgId/audit-logs`
 - `GET /admin/stats` — super_admin only
 
+### CRM Integration API (`/api/v1/*`)
+Bearer-key authenticated surface for the sister CRM (also on Replit) to provision EnviroIQ
+customers, manage users, lock accounts, update billing and pull live ESG + supplier audit metrics.
+- Keys issued from Super Admin → "CRM API & Keys" (`/api-keys`); SHA-256 hashed only,
+  shown to operator exactly once at creation; per-call audit log (`crm_api_key_usage`).
+- Auth flow: lookup by indexed public prefix → constant-time hash compare (`safeEqualHex`).
+- Scopes: `customers|users|metrics|audits|billing × read|write` — enforced per route.
+- Suspending/locking a customer (`PATCH /v1/customers/:id/billing` `billingStatus=suspended`
+  or `POST /v1/customers/:id/lock`) immediately blocks all logins for that org's users
+  via `lib/org-active-guard.ts` (called from session, passkey-authenticate, magic-link verify).
+- Spec: `GET /api/v1/openapi.json` (OpenAPI 3.1) + `/crm-api-spec.md` (human brief).
+- `organisations.plan` (`operate|assure|enterprise`) and `organisations.billing_status`
+  (`active|trialing|past_due|suspended`) are CRM-managed; in Drizzle schema.
+
 ## Key Environment Variables
 
 - `DATABASE_URL` — PostgreSQL connection (auto-set by Replit)

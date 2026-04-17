@@ -17,6 +17,7 @@ import {
 type AuthenticatorTransportFuture = "ble" | "cable" | "hybrid" | "internal" | "nfc" | "smart-card" | "usb";
 import { logAudit } from "../lib/audit.js";
 import { sendMagicLinkEmail } from "../lib/mailer.js";
+import { checkOrgLoginAllowed } from "../lib/org-active-guard.js";
 
 const router = Router();
 
@@ -74,6 +75,13 @@ router.get("/session", async (req, res) => {
     if (!user || !user.isActive) {
       req.session.destroy(() => {});
       res.status(401).json({ error: "Unauthorized", message: "Not authenticated" });
+      return;
+    }
+    // Block existing sessions when the organisation is locked or billing is suspended.
+    const orgCheck = await checkOrgLoginAllowed(user.organisationId);
+    if (!orgCheck.ok) {
+      req.session.destroy(() => {});
+      res.status(403).json({ error: "Forbidden", message: orgCheck.message, reason: orgCheck.reason });
       return;
     }
     // Keep session in sync so middleware (requireOrgAdmin etc.) also sees the fresh role
@@ -389,6 +397,12 @@ router.post("/passkey/authenticate/complete", async (req, res) => {
       res.status(401).json({ error: "Unauthorized", message: "User not found or inactive" });
       return;
     }
+    const orgCheckPk = await checkOrgLoginAllowed(user.organisationId);
+    if (!orgCheckPk.ok) {
+      await logAudit({ req, action: "passkey.authenticate", outcome: "failure", userId: user.id, userEmail: user.email, details: { reason: orgCheckPk.reason } });
+      res.status(403).json({ error: "Forbidden", message: orgCheckPk.message, reason: orgCheckPk.reason });
+      return;
+    }
 
     await db.update(usersTable).set({ lastLoginAt: new Date() }).where(eq(usersTable.id, user.id));
 
@@ -497,6 +511,12 @@ router.post("/magic-link/verify", async (req, res) => {
     if (!user || !user.isActive) {
       await logAudit({ req, action: "magic_link.verify", outcome: "failure", userId: link.userId });
       res.status(401).json({ error: "Unauthorized", message: "User not found" });
+      return;
+    }
+    const orgCheckMl = await checkOrgLoginAllowed(user.organisationId);
+    if (!orgCheckMl.ok) {
+      await logAudit({ req, action: "magic_link.verify", outcome: "failure", userId: user.id, userEmail: user.email, details: { reason: orgCheckMl.reason } });
+      res.status(403).json({ error: "Forbidden", message: orgCheckMl.message, reason: orgCheckMl.reason });
       return;
     }
 

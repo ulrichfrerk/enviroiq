@@ -23,6 +23,9 @@ export const organisationsTable = pgTable("organisations", {
   esgEnergyKwh: real("esg_energy_kwh"),
   esgSustainabilityScore: real("esg_sustainability_score"),
   esgComputedAt: timestamp("esg_computed_at", { withTimezone: true }),
+  // CRM-managed billing surface (kept in sync by the sister CRM via /api/v1)
+  plan: text("plan"),
+  billingStatus: text("billing_status").notNull().default("active"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
