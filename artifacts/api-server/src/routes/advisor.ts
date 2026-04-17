@@ -94,7 +94,10 @@ async function gatherOrgContext(orgId: string) {
   );
 
   const vehicleRows = await db.execute<{ make: string; model: string; fuel_type: string; year: number | null; status: string }>(
-    sql`SELECT make, model, fuel_type, year, status FROM vehicles WHERE organisation_id = ${orgId} ORDER BY status, fuel_type`
+    sql`SELECT make, model, fuel_type, year,
+               CASE WHEN is_active THEN 'active' ELSE 'inactive' END AS status
+        FROM vehicles WHERE organisation_id = ${orgId}
+        ORDER BY is_active DESC, fuel_type`
   );
 
   const energyRows = await db.execute<{ utility_type: string; bills: number; total_kwh: number; total_mj: number; total_co2e: number }>(
@@ -105,8 +108,10 @@ async function gatherOrgContext(orgId: string) {
       FROM energy_readings WHERE organisation_id = ${orgId} GROUP BY utility_type ORDER BY total_co2e DESC`
   );
 
-  const goalRows = await db.execute<{ title: string; status: string; target_co2e_kg: number | null }>(
-    sql`SELECT title, status, target_co2e_kg FROM goals WHERE organisation_id = ${orgId} ORDER BY created_at DESC LIMIT 10`
+  const goalRows = await db.execute<{ title: string; status: string; target_value: number | null; target_unit: string | null; target_year: number | null }>(
+    sql`SELECT title, status, target_value, target_unit, target_year
+        FROM goals WHERE organisation_id = ${orgId}
+        ORDER BY created_at DESC LIMIT 10`
   );
 
   const [gov] = await db.execute<{
