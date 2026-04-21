@@ -1,4 +1,5 @@
 import React from "react";
+// build-marker: 2026-04-21T22:00 forcing rebuild to pick up new VITE_CLERK_PUBLISHABLE_KEY
 import { Switch, Route, Router as WouterRouter, Redirect, useLocation } from "wouter";
 import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { ClerkProvider, SignIn, SignUp, Show, useClerk } from "@clerk/react";
