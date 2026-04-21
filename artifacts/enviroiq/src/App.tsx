@@ -1,5 +1,11 @@
 import React from "react";
-// build-marker: 2026-04-21T22:00 forcing rebuild to pick up new VITE_CLERK_PUBLISHABLE_KEY
+
+const __CLERK_PK_DEBUG__ = (import.meta.env.VITE_CLERK_PUBLISHABLE_KEY || "MISSING") as string;
+if (typeof window !== "undefined") {
+  // eslint-disable-next-line no-console
+  console.log("[clerk-debug] VITE_CLERK_PUBLISHABLE_KEY at build time:", __CLERK_PK_DEBUG__);
+  (window as unknown as { __CLERK_PK_DEBUG__: string }).__CLERK_PK_DEBUG__ = __CLERK_PK_DEBUG__;
+}
 import { Switch, Route, Router as WouterRouter, Redirect, useLocation } from "wouter";
 import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { ClerkProvider, SignIn, SignUp, Show, useClerk } from "@clerk/react";
