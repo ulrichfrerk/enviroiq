@@ -34,6 +34,7 @@ import crmRouter from "./crm.js";
 import crmEntitiesRouter from "./crm-entities.js";
 import crmKeysRouter from "./crm-keys.js";
 import crmOpenapiRouter from "./crm-openapi.js";
+import crmManagementRouter from "./crm-management.js";
 import { fgcErrorHandler } from "../lib/api-response.js";
 import securityRouter from "./security.js";
 import compliancePublicRouter from "./compliance-public.js";
@@ -100,6 +101,11 @@ router.use("/v1", crmRouter);
 router.use("/v1", crmEntitiesRouter);
 // FGC error envelope handler — must be LAST under /v1
 router.use("/v1", fgcErrorHandler);
+
+// Management API — URL-compatible alias for external CRMs that expect the
+// conventional /management/tenants surface. Mirrors /v1/customers.
+router.use("/management", crmManagementRouter);
+router.use("/management", fgcErrorHandler);
 
 // Public grid intensity (no auth, open CORS handled in app.ts)
 router.use("/grid", gridRouter);
