@@ -12,7 +12,7 @@ import { useAuthContext } from "@/providers/auth-provider";
  *  - logout()  : POST /auth/logout, clear caches, redirect to /sign-in
  */
 export function useAuth() {
-  const { user, isLoading, isSignedIn, error, signOut } = useAuthContext();
+  const { user, isLoading, isSignedIn, error, signOut, refresh } = useAuthContext();
 
   return {
     session: user,
@@ -20,5 +20,6 @@ export function useAuth() {
     isSignedIn,
     sessionError: error,
     logout: signOut,
+    refresh,
   };
 }

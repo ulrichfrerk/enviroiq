@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { Loader2, Mail, KeyRound, CheckCircle2, AlertCircle } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
@@ -14,16 +14,33 @@ const ERRORS: Record<string, string> = {
 
 export default function SignInPage() {
   const [, setLocation] = useLocation();
-  const { refresh } = (() => {
-    // Pull refresh through the context without forcing a re-import shape change.
-    // (useAuth doesn't currently expose refresh; we re-fetch via reload after passkey.)
-    return { refresh: async () => window.location.reload() };
-  })();
-  void useAuth(); // keep hook usage stable
+  const { isSignedIn, isLoading, refresh } = useAuth();
 
   const params = new URLSearchParams(window.location.search);
   const errorCode = params.get("error");
   const initialError = errorCode ? ERRORS[errorCode] || ERRORS.server_error : null;
+  const redirectTarget = (() => {
+    const r = params.get("redirect_url");
+    if (!r) return "/dashboard";
+    // Only allow same-origin paths under /app to avoid open-redirect.
+    try {
+      const url = new URL(r, window.location.origin);
+      if (url.origin !== window.location.origin) return "/dashboard";
+      const path = url.pathname.replace(/^\/app/, "") || "/dashboard";
+      return path + url.search;
+    } catch {
+      return "/dashboard";
+    }
+  })();
+
+  // If the user is already signed in (e.g. landed here after a successful magic-link
+  // verify, or after a passkey sign-in that just refreshed the session), redirect them
+  // out of the sign-in page so they don't get stuck in a loop.
+  useEffect(() => {
+    if (!isLoading && isSignedIn) {
+      setLocation(redirectTarget);
+    }
+  }, [isSignedIn, isLoading, setLocation, redirectTarget]);
 
   const [email, setEmail] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -59,8 +76,10 @@ export default function SignInPage() {
     setPasskeyBusy(true);
     try {
       await signInWithPasskey(email.trim().toLowerCase() || undefined);
+      // Re-fetch the session so the AuthProvider updates, then navigate. The
+      // useEffect above will also catch isSignedIn flipping to true and redirect.
       await refresh();
-      setLocation("/dashboard");
+      setLocation(redirectTarget);
     } catch (e) {
       const msg = (e as Error).message;
       // User-cancelled or no-credentials errors come through as DOM exceptions.
@@ -80,8 +99,44 @@ export default function SignInPage() {
       <div className="absolute bottom-[-20%] right-[-10%] w-[40%] h-[40%] bg-emerald-500/8 blur-[100px] rounded-full pointer-events-none" />
       <div className="relative z-10 w-full max-w-md">
         <div className="rounded-2xl border border-border/60 bg-card shadow-2xl shadow-primary/10 p-8">
-          <div className="flex justify-center mb-6">
-            <img src="/app/logo.svg" alt="EnviroIQ" className="h-10" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+          <div className="flex justify-center mb-6 text-foreground" aria-label="EnviroIQ">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 240 64"
+              className="h-10 w-auto"
+              role="img"
+              aria-hidden="true"
+            >
+              <defs>
+                <linearGradient id="eiqGradSignin" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0%" stopColor="#10b981" />
+                  <stop offset="100%" stopColor="#22c55e" />
+                </linearGradient>
+              </defs>
+              <g transform="translate(8 12)">
+                <circle cx="20" cy="20" r="18" fill="none" stroke="url(#eiqGradSignin)" strokeWidth="3" />
+                <path
+                  d="M12 24 L20 16 L28 22 L34 14"
+                  fill="none"
+                  stroke="url(#eiqGradSignin)"
+                  strokeWidth="3"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <circle cx="34" cy="14" r="2.5" fill="url(#eiqGradSignin)" />
+              </g>
+              <text
+                x="60"
+                y="40"
+                fontFamily="Inter, system-ui, -apple-system, sans-serif"
+                fontSize="22"
+                fontWeight="700"
+                fill="currentColor"
+              >
+                Enviro
+                <tspan fill="url(#eiqGradSignin)">IQ</tspan>
+              </text>
+            </svg>
           </div>
           <h1 className="text-2xl font-bold text-center text-foreground mb-2">Sign in to EnviroIQ</h1>
           <p className="text-center text-muted-foreground text-sm mb-6">

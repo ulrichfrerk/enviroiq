@@ -10,7 +10,7 @@
     <path d="M12 24 L20 16 L28 22 L34 14" fill="none" stroke="url(#eiqGrad)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
     <circle cx="34" cy="14" r="2.5" fill="url(#eiqGrad)"/>
   </g>
-  <text x="60" y="40" font-family="Inter, system-ui, -apple-system, sans-serif" font-size="22" font-weight="700" fill="#0f172a">
+  <text x="60" y="40" font-family="Inter, system-ui, -apple-system, sans-serif" font-size="22" font-weight="700" fill="currentColor">
     Enviro<tspan fill="url(#eiqGrad)">IQ</tspan>
   </text>
 </svg>
