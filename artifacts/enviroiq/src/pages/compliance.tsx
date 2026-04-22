@@ -42,7 +42,12 @@ export default function Compliance() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!orgId) return;
+    if (!orgId) {
+      // Super admins (and anyone else without an organisation context) shouldn't
+      // sit on a perpetual spinner — clear loading and let the no-org UI render.
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     apiClient(`/organisations/${orgId}/compliance/summary`)
       .then((d) => setSummary(d as ComplianceSummary))
@@ -80,6 +85,27 @@ export default function Compliance() {
 
   if (loading) {
     return <div className="p-8 flex justify-center"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
+  }
+
+  if (!orgId) {
+    return (
+      <div className="space-y-8 pb-10">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight text-foreground">Compliance & Evidence</h1>
+          <p className="text-muted-foreground mt-1">
+            Trust controls, audit posture, and one-click evidence pack export for SOC 2, ISO 27001, and external audit review.
+          </p>
+        </div>
+        <Card className="p-8 text-center">
+          <AlertCircle className="w-10 h-10 mx-auto mb-3 text-muted-foreground/50" />
+          <h2 className="text-lg font-semibold text-foreground mb-1">No organisation selected</h2>
+          <p className="text-sm text-muted-foreground max-w-md mx-auto">
+            Compliance posture and evidence packs are scoped to a specific organisation.
+            Sign in as a member of an organisation, or use the Admin console to act on behalf of one.
+          </p>
+        </Card>
+      </div>
+    );
   }
 
   return (
