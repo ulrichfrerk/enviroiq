@@ -2,7 +2,7 @@
 
 ## Overview
 
-Real-time multi-tenant ESG sustainability measurement platform. Companies track CO2 emissions from fleet vehicles (Navman, Blackhawk GPS integration) and energy consumption (PDF upload + inbound email bill parsing). Features Clerk-managed authentication (Google OAuth + email/password, with email-match migration of pre-existing passkey users), super-admin portal, board-ready PDF reports, an embeddable public widget, full audit logging (SOC 2 mindset), and role-based access.
+Real-time multi-tenant ESG sustainability measurement platform. Companies track CO2 emissions from fleet vehicles (Navman, Blackhawk GPS integration) and energy consumption (PDF upload + inbound email bill parsing). Features custom passwordless authentication (email magic links via Resend + WebAuthn passkeys), super-admin portal, board-ready PDF reports, an embeddable public widget, full audit logging (SOC 2 mindset), and role-based access.
 
 ### ESG Intelligence Features
 - **Maturity Scoring**: 4-dimension scoring (Foundation 40pt, Coverage 30pt, Quality 20pt, Governance 10pt) — grades: Foundation / Developing / Advanced / Leader
@@ -18,7 +18,10 @@ Real-time multi-tenant ESG sustainability measurement platform. Companies track 
 - **TypeScript**: 5.9
 - **API framework**: Express 5 + Helmet + express-rate-limit
 - **Database**: PostgreSQL + Drizzle ORM
-- **Auth**: Clerk (whitelabel) — `@clerk/express` server middleware + `@clerk/react` client. Users matched to local `users` table by `clerk_user_id` (preferred) or email (back-fills `clerk_user_id` on first sign-in for migrated passkey users). Supplier portal still uses its own magic-link cookie flow.
+- **Auth**: Custom passwordless — `express-session` (Postgres store, cookie `eiq.sid`) keyed on `req.session.userId`. Two sign-in surfaces:
+  1. **Magic link** — `POST /api/auth/magic-link/request` issues a one-shot token (15-min TTL) emailed via Resend; `GET /api/auth/magic-link/verify?token=...` consumes it, establishes the session, then redirects users without a passkey to `?enroll_passkey=1` to enrol one.
+  2. **Passkey (WebAuthn)** — `@simplewebauthn/server` v13 on the API, `@simplewebauthn/browser` v13 on the client. `POST /api/auth/passkey/{login,register}/{options,verify}` for both ceremonies. `rpID` is derived from the request hostname so the same code works on `enviroiq.net` and on Replit dev preview domains.
+  Tables: `users`, `passkeys`, `magic_links`, `webauthn_challenges`. The supplier portal keeps its own separate magic-link cookie flow.
 - **Validation**: Zod (zod/v4), drizzle-zod
 - **API codegen**: Orval (from OpenAPI spec)
 - **Frontend**: React + Vite + TanStack Query + Wouter + Recharts + shadcn/ui
@@ -38,7 +41,7 @@ The database has been seeded with:
 - **Viewer**: `james@acmelogistics.co.nz`
 - **Organisation**: Acme Logistics Ltd (4 vehicles, 30 fleet events, 12 energy readings, 3 goals, 1 report)
 
-Login via "Continue with Email" → magic link flow (tokens are logged in API server console in dev)
+Login at `/app/sign-in` — enter email, click the magic link from the email (Resend in production, console-logged in dev when `RESEND_API_KEY` is unset).
 
 ## Emission Factors
 

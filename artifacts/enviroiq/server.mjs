@@ -46,13 +46,13 @@ const IMMUTABLE_EXTS = new Set([".js", ".mjs", ".css", ".woff", ".woff2", ".png"
 
 const CSP = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' https://*.clerk.accounts.dev https://*.clerk.com https://*.clerk.dev https://clerk.enviroiq.net",
+  "script-src 'self' 'unsafe-inline'",
   "style-src 'self' https://fonts.googleapis.com 'unsafe-inline'",
   "font-src 'self' https://fonts.gstatic.com data:",
-  "img-src 'self' data: blob: https://*.clerk.com https://img.clerk.com https://clerk.enviroiq.net",
-  "connect-src 'self' https://4layers.net https://*.clerk.accounts.dev https://*.clerk.com https://*.clerk.dev https://clerk.enviroiq.net",
+  "img-src 'self' data: blob:",
+  "connect-src 'self' https://4layers.net",
   "worker-src 'self' blob:",
-  "frame-src 'self' https://*.clerk.accounts.dev https://*.clerk.com https://clerk.enviroiq.net",
+  "frame-src 'self'",
   "frame-ancestors 'none'",
   "base-uri 'self'",
   "form-action 'self'",

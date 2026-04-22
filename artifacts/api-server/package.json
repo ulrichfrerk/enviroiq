@@ -10,7 +10,6 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@clerk/express": "^2.1.4",
     "@simplewebauthn/server": "^13.3.0",
     "@types/express-session": "^1.18.2",
     "@types/multer": "^2.1.0",

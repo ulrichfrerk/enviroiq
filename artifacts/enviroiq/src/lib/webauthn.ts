@@ -1,21 +1,56 @@
-// Helper functions for base64url encoding/decoding required by WebAuthn
-export function bufferDecode(value: string): ArrayBuffer {
-  const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
-  const pad = base64.length % 4;
-  const padded = pad ? base64 + "=".repeat(4 - pad) : base64;
-  const binary = atob(padded);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
+/**
+ * WebAuthn passkey helpers — wraps @simplewebauthn/browser and talks to
+ * /api/auth/passkey/* on our api-server. Uses session cookies (credentials: include).
+ */
+import {
+  startRegistration,
+  startAuthentication,
+} from "@simplewebauthn/browser";
+import type {
+  PublicKeyCredentialCreationOptionsJSON,
+  PublicKeyCredentialRequestOptionsJSON,
+} from "@simplewebauthn/browser";
+
+const API = "/api/auth/passkey";
+
+async function jsonFetch<T>(url: string, body?: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: body ? JSON.stringify(body) : "{}",
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { error?: string }).error || `Request failed: ${res.status}`);
   }
-  return bytes.buffer;
+  return (await res.json()) as T;
 }
 
-export function bufferEncode(value: ArrayBuffer): string {
-  const bytes = new Uint8Array(value);
-  let binary = "";
-  for (let i = 0; i < bytes.byteLength; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+export function isPasskeySupported(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.PublicKeyCredential !== "undefined" &&
+    typeof navigator !== "undefined" &&
+    typeof navigator.credentials !== "undefined"
+  );
+}
+
+/** Begin + complete passkey enrolment for the current session user. */
+export async function enrollPasskey(): Promise<void> {
+  const options = await jsonFetch<PublicKeyCredentialCreationOptionsJSON>(
+    `${API}/register/options`,
+  );
+  const credential = await startRegistration({ optionsJSON: options });
+  await jsonFetch(`${API}/register/verify`, credential);
+}
+
+/** Sign in via passkey. If `email` provided we narrow allowCredentials. */
+export async function signInWithPasskey(email?: string): Promise<void> {
+  const options = await jsonFetch<PublicKeyCredentialRequestOptionsJSON>(
+    `${API}/login/options`,
+    email ? { email } : undefined,
+  );
+  const credential = await startAuthentication({ optionsJSON: options });
+  await jsonFetch(`${API}/login/verify`, credential);
 }

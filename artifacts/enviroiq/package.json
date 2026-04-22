@@ -75,7 +75,7 @@
     "zod": "catalog:"
   },
   "dependencies": {
-    "@clerk/react": "^6.4.2",
+    "@simplewebauthn/browser": "^13.1.0",
     "react-dropzone": "^15.0.0",
     "xlsx": "^0.18.5"
   }
