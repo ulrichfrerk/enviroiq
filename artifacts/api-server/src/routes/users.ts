@@ -11,8 +11,10 @@ const VALID_ORG_ROLES = ["org_admin", "org_viewer"] as const;
 type OrgRole = (typeof VALID_ORG_ROLES)[number];
 
 function resolveAllowedRoles(callerRole: string | undefined): OrgRole[] {
+  // Super admins and org admins can both invite/promote users to any in-org role.
+  // Viewers and other read-only roles cannot manage users at all.
   if (callerRole === "super_admin") return ["org_admin", "org_viewer"];
-  if (callerRole === "org_admin") return ["org_viewer"];
+  if (callerRole === "org_admin")   return ["org_admin", "org_viewer"];
   return [];
 }
 
