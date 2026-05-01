@@ -534,9 +534,51 @@ router.post("/passkey/login/verify", async (req, res) => {
   }
 });
 
-/** GET /auth/passkeys — list current user's passkeys (id + metadata only). */
+/**
+ * Resolve the target user for a "view another user" admin lookup.
+ * - If `targetUserId` is missing or matches the caller, returns the caller's id (self).
+ * - Otherwise the caller must be a super_admin OR an org_admin in the same org as the target.
+ *
+ * Returns either { ok: true, userId, isSelf } or { ok: false, status, message } so callers
+ * can short-circuit with the right HTTP response.
+ */
+async function resolveTargetUserId(
+  req: Request,
+  targetUserId: string | undefined,
+): Promise<
+  | { ok: true; userId: string; isSelf: boolean }
+  | { ok: false; status: number; message: string }
+> {
+  const caller = req.user!;
+  if (!targetUserId || targetUserId === caller.id) {
+    return { ok: true, userId: caller.id, isSelf: true };
+  }
+  if (caller.role === "super_admin") {
+    return { ok: true, userId: targetUserId, isSelf: false };
+  }
+  if (caller.role !== "org_admin") {
+    return { ok: false, status: 403, message: "Admin access required to view another user." };
+  }
+  const target = await db.query.usersTable.findFirst({ where: eq(usersTable.id, targetUserId) });
+  if (!target) return { ok: false, status: 404, message: "User not found" };
+  if (target.organisationId !== caller.organisationId) {
+    return { ok: false, status: 403, message: "Cannot view a user outside your organisation." };
+  }
+  return { ok: true, userId: target.id, isSelf: false };
+}
+
+/**
+ * GET /auth/passkeys — list passkeys (id + metadata only).
+ * Defaults to the current user. An `org_admin`/`super_admin` may pass `?userId=`
+ * to view another in-org user's passkeys (read-only — deletion is owner-only).
+ */
 router.get("/passkeys", requireAuth, async (req, res) => {
-  const passkeys = await db.query.passkeysTable.findMany({ where: eq(passkeysTable.userId, req.user!.id) });
+  const target = await resolveTargetUserId(req, typeof req.query.userId === "string" ? req.query.userId : undefined);
+  if (!target.ok) {
+    res.status(target.status).json({ error: target.message });
+    return;
+  }
+  const passkeys = await db.query.passkeysTable.findMany({ where: eq(passkeysTable.userId, target.userId) });
   res.json(
     passkeys.map((p) => ({
       id: p.id,
@@ -547,9 +589,9 @@ router.get("/passkeys", requireAuth, async (req, res) => {
   );
 });
 
-/** DELETE /auth/passkeys/:id — remove a passkey (requires session). */
+/** DELETE /auth/passkeys/:id — remove a passkey (owner only). */
 router.delete("/passkeys/:id", requireAuth, async (req, res) => {
-  const { id } = req.params;
+  const id = req.params.id as string;
   const passkey = await db.query.passkeysTable.findFirst({ where: eq(passkeysTable.id, id) });
   if (!passkey || passkey.userId !== req.user!.id) {
     res.status(404).json({ error: "Not found" });
@@ -557,6 +599,98 @@ router.delete("/passkeys/:id", requireAuth, async (req, res) => {
   }
   await db.delete(passkeysTable).where(eq(passkeysTable.id, id));
   await logAudit({ req, action: "auth.passkey.delete", outcome: "success", userId: req.user!.id, details: { passkeyId: id } });
+  res.json({ ok: true });
+});
+
+/**
+ * GET /auth/sso/identities — list linked SSO identities (provider, providerEmail,
+ * linkedAt, lastUsedAt). Defaults to the current user; an `org_admin`/`super_admin`
+ * may pass `?userId=` to view another in-org user's identities.
+ */
+router.get("/sso/identities", requireAuth, async (req, res) => {
+  const target = await resolveTargetUserId(
+    req,
+    typeof req.query.userId === "string" ? req.query.userId : undefined,
+  );
+  if (!target.ok) {
+    res.status(target.status).json({ error: target.message });
+    return;
+  }
+  const identities = await db.query.ssoIdentitiesTable.findMany({
+    where: eq(ssoIdentitiesTable.userId, target.userId),
+  });
+  res.json(
+    identities.map((i) => ({
+      id: i.id,
+      provider: i.provider,
+      providerEmail: i.providerEmail,
+      linkedAt: i.linkedAt,
+      lastUsedAt: i.lastUsedAt,
+    })),
+  );
+});
+
+/**
+ * DELETE /auth/sso/identities/:id — unlink a linked Google/Microsoft identity.
+ * Owner-only. Refuses to remove the user's *only* strong sign-in path
+ * (i.e. when removing this identity would leave them with no passkeys and no
+ * other SSO identities). Magic-link recovery via verified email remains
+ * available even after unlinking, but we never strand a user with zero strong
+ * factors.
+ */
+router.delete("/sso/identities/:id", requireAuth, async (req, res) => {
+  const userId = req.user!.id;
+  const id = req.params.id as string;
+
+  const identity = await db.query.ssoIdentitiesTable.findFirst({
+    where: eq(ssoIdentitiesTable.id, id),
+  });
+  if (!identity || identity.userId !== userId) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+
+  // Compute remaining sign-in factors AFTER this delete.
+  const [remainingIdentities, remainingPasskeys] = await Promise.all([
+    db.query.ssoIdentitiesTable.findMany({ where: eq(ssoIdentitiesTable.userId, userId) }),
+    db.query.passkeysTable.findMany({ where: eq(passkeysTable.userId, userId) }),
+  ]);
+  const otherIdentitiesCount = remainingIdentities.filter((r) => r.id !== id).length;
+  const passkeyCount = remainingPasskeys.length;
+
+  if (otherIdentitiesCount === 0 && passkeyCount === 0) {
+    await logAudit({
+      req,
+      action: "sso.identity.unlinked",
+      outcome: "failure",
+      userId,
+      details: {
+        identityId: id,
+        provider: identity.provider,
+        reason: "would_leave_no_sign_in_path",
+      },
+    });
+    res.status(409).json({
+      error: "last_sign_in_path",
+      message:
+        "This is your only sign-in method. Add a passkey or link another SSO provider before unlinking it.",
+    });
+    return;
+  }
+
+  await db.delete(ssoIdentitiesTable).where(eq(ssoIdentitiesTable.id, id));
+  await logAudit({
+    req,
+    action: "sso.identity.unlinked",
+    outcome: "success",
+    userId,
+    userEmail: identity.providerEmail,
+    details: {
+      identityId: id,
+      provider: identity.provider,
+      providerEmail: identity.providerEmail,
+    },
+  });
   res.json({ ok: true });
 });
 

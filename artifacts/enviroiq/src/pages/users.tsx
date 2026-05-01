@@ -5,10 +5,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Users as UsersIcon, UserPlus, Trash2, Shield, Loader2, Lock, AlertCircle } from "lucide-react";
+import { Users as UsersIcon, UserPlus, Trash2, Shield, Loader2, Lock, AlertCircle, Eye } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { format } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
+import { useLocation } from "wouter";
 
 type SignInMethod = "magic_link" | "passkey" | "google_sso" | "microsoft_sso";
 type RequiredProvider = "none" | "google" | "microsoft" | null;
@@ -252,6 +253,7 @@ export default function Users() {
   const { session } = useAuth();
   const orgId = session?.organisationId;
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
   const [isOpen, setIsOpen] = useState(false);
   // Currently-edited user for the Sign-in restrictions dialog.
   const [restrictionsUser, setRestrictionsUser] = useState<{ id: string; name: string; email: string } | null>(null);
@@ -376,6 +378,18 @@ export default function Users() {
                   </td>
                   <td className="px-6 py-4 text-right">
                     <div className="flex items-center justify-end gap-1">
+                      {isAdmin && user.id !== session?.userId && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => setLocation(`/account?userId=${encodeURIComponent(user.id)}`)}
+                          className="text-muted-foreground hover:text-foreground"
+                          title="View sign-in methods"
+                          data-testid={`button-view-${user.id}`}
+                        >
+                          <Eye className="w-4 h-4" />
+                        </Button>
+                      )}
                       {isAdmin && (
                         <Button
                           variant="ghost"
