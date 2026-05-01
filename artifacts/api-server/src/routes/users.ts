@@ -1,6 +1,6 @@
 import { Router } from "express";
-import { db, usersTable, magicLinksTable, organisationsTable } from "@workspace/db";
-import { eq, and, count } from "drizzle-orm";
+import { db, usersTable, magicLinksTable, organisationsTable, auditLogsTable } from "@workspace/db";
+import { eq, and, count, desc } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
 import { randomBytes, createHash } from "node:crypto";
 import { requireAuth, requireOrgAccess, requireRole } from "../lib/auth.js";
@@ -451,6 +451,67 @@ router.get("/:userId/sign-in-policy", requireAuth, requireRole("super_admin", "o
     res.status(500).json({ error: "Internal Server Error", message: "Failed to load sign-in policy" });
   }
 });
+
+// GET /organisations/:orgId/users/:userId/sign-in-policy/history
+// Returns recent `user.sign_in_policy.changed` audit entries for this user, so
+// the admin UI can render a timeline of who changed what and when without
+// jumping to the global audit log page.
+router.get(
+  "/:userId/sign-in-policy/history",
+  requireAuth,
+  requireRole("super_admin", "org_admin"),
+  requireOrgAccess,
+  async (req, res) => {
+    try {
+      const orgId = req.params.orgId as string;
+      const userId = req.params.userId as string;
+      // Accept ?limit but clamp to a sane positive range so a negative or
+      // garbage value can't blow up the SQL driver.
+      const rawLimit = parseInt(req.query.limit as string);
+      const limit = Math.min(Math.max(Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 25, 1), 100);
+
+      // Confirm the user exists in this org so we don't leak audit data for
+      // users belonging to a different organisation.
+      const user = await db.query.usersTable.findFirst({
+        where: and(eq(usersTable.id, userId), eq(usersTable.organisationId, orgId)),
+      });
+      if (!user) {
+        res.status(404).json({ error: "Not Found", message: "User not found" });
+        return;
+      }
+
+      const items = await db
+        .select({
+          id: auditLogsTable.id,
+          createdAt: auditLogsTable.createdAt,
+          actorUserId: auditLogsTable.userId,
+          actorEmail: auditLogsTable.userEmail,
+          actorType: auditLogsTable.actorType,
+          previousValue: auditLogsTable.previousValue,
+          newValue: auditLogsTable.newValue,
+        })
+        .from(auditLogsTable)
+        .where(
+          and(
+            eq(auditLogsTable.organisationId, orgId),
+            eq(auditLogsTable.action, "user.sign_in_policy.changed"),
+            eq(auditLogsTable.resourceType, "user"),
+            eq(auditLogsTable.resourceId, userId),
+          ),
+        )
+        .orderBy(desc(auditLogsTable.createdAt))
+        .limit(limit);
+
+      res.json({ items });
+    } catch (err) {
+      req.log.error({ err }, "Get user sign-in policy history failed");
+      res.status(500).json({
+        error: "Internal Server Error",
+        message: "Failed to load sign-in policy history",
+      });
+    }
+  },
+);
 
 // PATCH /organisations/:orgId/users/:userId/sign-in-policy
 // Accepts { requiredSignInProvider, allowedSignInMethods }. Either field may be:

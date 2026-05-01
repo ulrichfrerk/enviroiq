@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Users as UsersIcon, UserPlus, Trash2, Shield, Loader2, Lock, AlertCircle, Eye, X, CheckCircle2 } from "lucide-react";
+import { Users as UsersIcon, UserPlus, Trash2, Shield, Loader2, Lock, AlertCircle, Eye, X, CheckCircle2, History } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { format } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
@@ -26,6 +26,22 @@ interface UserSignInPolicy {
   };
 }
 
+interface SignInPolicyHistoryEntry {
+  id: string;
+  createdAt: string;
+  actorUserId: string | null;
+  actorEmail: string | null;
+  actorType: string | null;
+  previousValue: {
+    requiredSignInProvider?: RequiredProvider;
+    allowedSignInMethods?: SignInMethod[] | null;
+  } | null;
+  newValue: {
+    requiredSignInProvider?: RequiredProvider;
+    allowedSignInMethods?: SignInMethod[] | null;
+  } | null;
+}
+
 const METHOD_LABELS: Record<SignInMethod, string> = {
   magic_link: "Email magic link",
   passkey: "Passkey",
@@ -36,6 +52,60 @@ const METHOD_LABELS: Record<SignInMethod, string> = {
 function describeOrgRequired(p: "google" | "microsoft" | null): string {
   if (!p) return "None (org default)";
   return p === "google" ? "Google only (org default)" : "Microsoft only (org default)";
+}
+
+function describeRequired(v: RequiredProvider | undefined): string {
+  if (v === undefined || v === null) return "inherit org";
+  if (v === "none") return "no requirement";
+  if (v === "google") return "Google";
+  if (v === "microsoft") return "Microsoft";
+  return String(v);
+}
+
+function describeAllowed(v: SignInMethod[] | null | undefined): string {
+  if (v === undefined || v === null) return "inherit org";
+  if (v.length === 0) return "(none)";
+  return v.map((m) => METHOD_LABELS[m] ?? m).join(", ");
+}
+
+function diffSignInPolicy(entry: SignInPolicyHistoryEntry): string[] {
+  const lines: string[] = [];
+  const prev = entry.previousValue ?? {};
+  const next = entry.newValue ?? {};
+  const prevReq = prev.requiredSignInProvider ?? null;
+  const nextReq = next.requiredSignInProvider ?? null;
+  if (prevReq !== nextReq) {
+    lines.push(
+      `Required provider: ${describeRequired(prevReq)} → ${describeRequired(nextReq)}`,
+    );
+  }
+  const prevAllowed = prev.allowedSignInMethods ?? null;
+  const nextAllowed = next.allowedSignInMethods ?? null;
+  const sameAllowed =
+    (prevAllowed === null && nextAllowed === null) ||
+    (Array.isArray(prevAllowed) &&
+      Array.isArray(nextAllowed) &&
+      prevAllowed.length === nextAllowed.length &&
+      prevAllowed.every((m) => nextAllowed.includes(m)));
+  if (!sameAllowed) {
+    lines.push(
+      `Allowed methods: ${describeAllowed(prevAllowed)} → ${describeAllowed(nextAllowed)}`,
+    );
+  }
+  if (lines.length === 0) lines.push("No effective change");
+  return lines;
+}
+
+function describeActor(entry: SignInPolicyHistoryEntry): string {
+  if (entry.actorEmail) return entry.actorEmail;
+  if (entry.actorType === "system") return "System";
+  if (entry.actorType === "scheduler") return "Scheduler";
+  if (entry.actorType === "api_key") return "API key";
+  if (entry.actorType === "webhook") return "Webhook";
+  // Legacy or system entries may have a user id but no captured email —
+  // fall back to the id so the row is still useful for auditing.
+  if (entry.actorUserId) return `User ${entry.actorUserId}`;
+  return "Unknown";
 }
 
 function SignInRestrictionsDialog({
@@ -59,6 +129,19 @@ function SignInRestrictionsDialog({
         credentials: "include",
       });
       if (!res.ok) throw new Error("Failed to load sign-in policy");
+      return res.json();
+    },
+    enabled: open,
+  });
+
+  const historyQuery = useQuery<{ items: SignInPolicyHistoryEntry[] }>({
+    queryKey: ["userSignInPolicyHistory", orgId, user.id],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/organisations/${orgId}/users/${user.id}/sign-in-policy/history`,
+        { credentials: "include" },
+      );
+      if (!res.ok) throw new Error("Failed to load sign-in policy history");
       return res.json();
     },
     enabled: open,
@@ -96,6 +179,8 @@ function SignInRestrictionsDialog({
     },
     onSuccess: (next) => {
       queryClient.setQueryData(["userSignInPolicy", orgId, user.id], next);
+      // Make sure the history list reflects the change next time the dialog opens.
+      queryClient.invalidateQueries({ queryKey: ["userSignInPolicyHistory", orgId, user.id] });
       toast({ title: "Sign-in restrictions updated" });
       onOpenChange(false);
     },
@@ -124,7 +209,7 @@ function SignInRestrictionsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-card border-border max-w-lg">
+      <DialogContent className="bg-card border-border max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Lock className="w-4 h-4 text-primary" />
@@ -228,6 +313,60 @@ function SignInRestrictionsDialog({
                 <p className="text-sm text-destructive-foreground">{validationError}</p>
               </div>
             )}
+
+            {/* Change history — answers "why is this user restricted?" without
+                forcing the admin to leave the page for the audit log. */}
+            <div className="space-y-2 pt-2 border-t border-border" data-testid="sign-in-policy-history">
+              <div className="flex items-center gap-2">
+                <History className="w-3.5 h-3.5 text-muted-foreground" />
+                <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                  History
+                </h3>
+              </div>
+              {historyQuery.isLoading ? (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+                  <Loader2 className="w-3 h-3 animate-spin" /> Loading history…
+                </div>
+              ) : historyQuery.isError ? (
+                <p className="text-xs text-destructive">Could not load history.</p>
+              ) : (historyQuery.data?.items?.length ?? 0) === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  No restriction changes recorded for this user yet.
+                </p>
+              ) : (
+                <ul className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                  {historyQuery.data!.items.map((entry) => {
+                    const lines = diffSignInPolicy(entry);
+                    const when = (() => {
+                      try {
+                        return format(new Date(entry.createdAt), "PPpp");
+                      } catch {
+                        return entry.createdAt;
+                      }
+                    })();
+                    return (
+                      <li
+                        key={entry.id}
+                        className="rounded-md border border-border bg-secondary/20 px-3 py-2 text-xs space-y-1"
+                        data-testid={`sign-in-policy-history-entry-${entry.id}`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-medium text-foreground truncate">
+                            {describeActor(entry)}
+                          </span>
+                          <time className="text-muted-foreground whitespace-nowrap">{when}</time>
+                        </div>
+                        <ul className="text-muted-foreground space-y-0.5">
+                          {lines.map((line, i) => (
+                            <li key={i}>{line}</li>
+                          ))}
+                        </ul>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
 
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="outline" onClick={() => onOpenChange(false)} disabled={mutate.isPending}>
