@@ -10,6 +10,13 @@ import { htmlToPdf } from "../lib/pdf.js";
 
 const router = Router({ mergeParams: true });
 
+// NZ pump-price averages used to derive fuel cost when fuel-card data is
+// missing. Conservative national averages (NZ MfE / MBIE weekly fuel
+// monitoring 2025/26). Kept at module scope so both the snapshot generator
+// (POST) and the report renderer (GET) reference the same numbers.
+const NZ_DIESEL_PRICE  = 2.20;
+const NZ_PETROL_PRICE  = 2.85;
+
 // Escape user-controlled strings to prevent stored XSS in rendered HTML
 function esc(str: string | null | undefined): string {
   if (str == null) return "";
@@ -133,9 +140,25 @@ router.post("/", requireAuth, requireOrgAdmin, async (req, res) => {
           db.execute(sql`SELECT COALESCE(SUM(co2e_kg),0)::float as co2e, COALESCE(SUM(usage_kwh),0)::float as kwh FROM energy_readings WHERE organisation_id = ${orgId} AND period_start >= ${from} AND period_end <= ${to}`),
           db.execute(sql`SELECT COALESCE(SUM(co2e_kg),0)::float as co2e, COALESCE(SUM(distance_km),0)::float as dist FROM fleet_events WHERE organisation_id = ${orgId} AND recorded_at >= ${pyFrom} AND recorded_at <= ${pyTo}`),
           db.execute(sql`SELECT COALESCE(SUM(co2e_kg),0)::float as co2e, COALESCE(SUM(usage_kwh),0)::float as kwh FROM energy_readings WHERE organisation_id = ${orgId} AND period_start >= ${pyFrom} AND period_end <= ${pyTo}`),
-          db.execute(sql`SELECT TO_CHAR(DATE_TRUNC('month', recorded_at),'YYYY-MM') as month, COALESCE(SUM(co2e_kg),0)::float as co2e, COALESCE(SUM(distance_km),0)::float as km FROM fleet_events WHERE organisation_id = ${orgId} AND recorded_at >= ${from} AND recorded_at <= ${to} GROUP BY 1 ORDER BY 1`),
-          db.execute(sql`SELECT TO_CHAR(DATE_TRUNC('month', period_start),'YYYY-MM') as month, COALESCE(SUM(co2e_kg),0)::float as co2e, COALESCE(SUM(usage_kwh),0)::float as kwh FROM energy_readings WHERE organisation_id = ${orgId} AND period_start >= ${from} AND period_end <= ${to} GROUP BY 1 ORDER BY 1`),
-          db.execute(sql`SELECT v.name, v.registration, v.make, v.model, COALESCE(SUM(fe.co2e_kg),0)::float as co2e, COALESCE(SUM(fe.distance_km),0)::float as km FROM fleet_events fe JOIN vehicles v ON v.id = fe.vehicle_id WHERE fe.organisation_id = ${orgId} AND fe.recorded_at >= ${from} AND fe.recorded_at <= ${to} GROUP BY v.id, v.name, v.registration, v.make, v.model ORDER BY co2e DESC LIMIT 10`),
+          db.execute(sql`SELECT TO_CHAR(DATE_TRUNC('month', recorded_at),'YYYY-MM') as month, COALESCE(SUM(co2e_kg),0)::float as co2e, COALESCE(SUM(distance_km),0)::float as km, COALESCE(SUM(fuel_litres),0)::float as litres, COALESCE(SUM(cost_nzd),0)::float as cost_actual, COUNT(cost_nzd)::int as cost_event_count, COUNT(*)::int as event_count FROM fleet_events WHERE organisation_id = ${orgId} AND recorded_at >= ${from} AND recorded_at <= ${to} GROUP BY 1 ORDER BY 1`),
+          db.execute(sql`SELECT TO_CHAR(DATE_TRUNC('month', period_start),'YYYY-MM') as month, COALESCE(SUM(co2e_kg),0)::float as co2e, COALESCE(SUM(usage_kwh),0)::float as kwh, COUNT(*)::int as readings FROM energy_readings WHERE organisation_id = ${orgId} AND period_start >= ${from} AND period_end <= ${to} GROUP BY 1 ORDER BY 1`),
+          db.execute(sql`
+            SELECT v.name, v.registration, v.make, v.model, v.fuel_type,
+                   v.fuel_consumption_l_per_100km AS lp100,
+                   COALESCE(SUM(fe.co2e_kg),0)::float       AS co2e,
+                   COALESCE(SUM(fe.distance_km),0)::float   AS km,
+                   COALESCE(SUM(fe.fuel_litres),0)::float   AS litres,
+                   COALESCE(SUM(fe.cost_nzd),0)::float      AS cost_actual,
+                   COUNT(fe.cost_nzd)::int                  AS cost_event_count,
+                   COUNT(fe.id)::int                        AS event_count
+              FROM fleet_events fe
+              JOIN vehicles v ON v.id = fe.vehicle_id
+             WHERE fe.organisation_id = ${orgId}
+               AND fe.recorded_at >= ${from} AND fe.recorded_at <= ${to}
+             GROUP BY v.id, v.name, v.registration, v.make, v.model, v.fuel_type, v.fuel_consumption_l_per_100km
+             ORDER BY co2e DESC
+             LIMIT 10
+          `),
         ]);
 
         const fr = sqlRow(fleetResult);
@@ -159,20 +182,161 @@ router.post("/", requireAuth, requireOrgAdmin, async (req, res) => {
           totalGoals: goals.length,
         });
 
-        // Build monthly table merging fleet + energy
-        const monthMap: Record<string, { month: string; fleetCo2e: number; energyCo2e: number; fleetKm: number; energyKwh: number }> = {};
+        // Used as a fallback so a business owner still sees a $ figure even
+        // before fuel-card or bowser receipts are integrated. Estimated
+        // values are flagged in the rendered report so the board knows
+        // they're not invoiced. See module-level NZ_*_PRICE constants.
+        // Covers the actual fuel_type values stored on `vehicles` (diesel,
+        // petrol, hybrid, electric) plus a few common synonyms.
+        const NZ_PUMP_PRICE: Record<string, number> = {
+          diesel:   NZ_DIESEL_PRICE,
+          petrol:   NZ_PETROL_PRICE,
+          hybrid:   NZ_PETROL_PRICE, // Hybrid burns petrol
+          phev:     NZ_PETROL_PRICE,
+          electric: 0,               // Electricity cost belongs in Scope 2
+          ev:       0,
+          lpg:      1.40,            // NZ LPG bowser avg 2025/26
+          hydrogen: 0,               // Sold per kg, not L — no comparable estimate
+          other:    0,               // Unknown fuel — refuse to estimate
+        };
+        // Returns -1 to mean "no defensible estimate" so the caller can render
+        // "—" instead of fabricating a diesel price for, say, an electric van.
+        const fuelPriceFor = (fuelType: string): number => {
+          const key = (fuelType || "").toLowerCase();
+          return key in NZ_PUMP_PRICE ? NZ_PUMP_PRICE[key] : -1;
+        };
+
+        // Build monthly table merging fleet + energy.
+        //   energyHasReadings: did the organisation actually upload a power
+        //   bill / meter reading covering this month? When false, we render
+        //   "Awaiting bill" instead of "0 kWh / 0 kg" so a board reader can
+        //   tell the difference between "consumed nothing" and "data missing".
+        type MonthAgg = {
+          month: string;
+          fleetCo2e: number; energyCo2e: number;
+          fleetKm: number; energyKwh: number;
+          fleetFuelCostNzd: number; fleetFuelCostEstimated: boolean;
+          energyHasReadings: boolean;
+        };
+        const monthMap: Record<string, MonthAgg> = {};
         for (const r of sqlRows(monthlyFleet)) {
           const m = strCol(r, "month");
-          monthMap[m] = monthMap[m] ?? { month: m, fleetCo2e: 0, energyCo2e: 0, fleetKm: 0, energyKwh: 0 };
+          monthMap[m] = monthMap[m] ?? {
+            month: m, fleetCo2e: 0, energyCo2e: 0, fleetKm: 0, energyKwh: 0,
+            fleetFuelCostNzd: 0, fleetFuelCostEstimated: false, energyHasReadings: false,
+          };
           monthMap[m].fleetCo2e = numCol(r, "co2e");
           monthMap[m].fleetKm   = numCol(r, "km");
+          // Cost: combine actual (where the org has invoiced figures) with an
+          // estimate for the remaining (uncosted) events, prorated by event
+          // count so we don't double-count litres that already had a cost
+          // associated with them. We don't know fuel type at month-level so
+          // use diesel as the conservative default (matches Acme-class
+          // plumbing fleets where ~90% of vehicles are diesel utes).
+          const actualCost = numCol(r, "cost_actual");
+          const litres     = numCol(r, "litres");
+          const eventsWithCost = numCol(r, "cost_event_count");
+          const eventsTotal    = numCol(r, "event_count");
+          const uncostedShare  = eventsTotal > 0
+            ? Math.max(0, eventsTotal - eventsWithCost) / eventsTotal
+            : 0;
+          if (actualCost > 0 && eventsWithCost === eventsTotal) {
+            monthMap[m].fleetFuelCostNzd = actualCost;
+          } else if (litres > 0) {
+            const estimatedPart = litres * uncostedShare * NZ_DIESEL_PRICE;
+            monthMap[m].fleetFuelCostNzd = actualCost + estimatedPart;
+            monthMap[m].fleetFuelCostEstimated = estimatedPart > 0;
+          } else if (actualCost > 0) {
+            // Have cost but no litres — trust the actual figure.
+            monthMap[m].fleetFuelCostNzd = actualCost;
+          }
         }
         for (const r of sqlRows(monthlyEnergy)) {
           const m = strCol(r, "month");
-          monthMap[m] = monthMap[m] ?? { month: m, fleetCo2e: 0, energyCo2e: 0, fleetKm: 0, energyKwh: 0 };
+          monthMap[m] = monthMap[m] ?? {
+            month: m, fleetCo2e: 0, energyCo2e: 0, fleetKm: 0, energyKwh: 0,
+            fleetFuelCostNzd: 0, fleetFuelCostEstimated: false, energyHasReadings: false,
+          };
           monthMap[m].energyCo2e = numCol(r, "co2e");
           monthMap[m].energyKwh  = numCol(r, "kwh");
+          monthMap[m].energyHasReadings = numCol(r, "readings") > 0;
         }
+
+        // Derive top emitters with cost estimation per vehicle.
+        //
+        // 3-tier fallback (board-pack rules):
+        //   1. Every event has a real fuel-card / bowser cost → trust the sum.
+        //   2. We have litres → trust the actual cost portion AND estimate the
+        //      uncovered portion by prorating litres against the share of
+        //      events that lacked a cost. This avoids double-counting litres
+        //      already represented in `actualCost`.
+        //   3. Last-resort: derive litres from `km × lp100/100` and price it
+        //      at the pump average for the vehicle's fuel type.
+        //
+        // For electric / hydrogen / other (price=0) we leave fuelCostNzd
+        // undefined (their fuel cost legitimately doesn't show on a bowser
+        // invoice), and the renderer prints "—" — honest about missing data.
+        // For unknown fuel types (price=-1 from fuelPriceFor) we also render
+        // "—" rather than fabricate a diesel estimate.
+        type EmitterAgg = {
+          name: string; registration: string; make: string; model: string;
+          co2e: number; km: number;
+          fuelCostNzd?: number; fuelCostEstimated: boolean;
+        };
+        const topEmittersOut: EmitterAgg[] = sqlRows(topEmitters).map(r => {
+          const fuelType = strCol(r, "fuel_type") || "diesel";
+          const price    = fuelPriceFor(fuelType);
+          const km       = numCol(r, "km");
+          const litres   = numCol(r, "litres");
+          const lp100    = numCol(r, "lp100"); // L per 100km from vehicle
+          const actualCost     = numCol(r, "cost_actual");
+          const eventsWithCost = numCol(r, "cost_event_count");
+          const eventsTotal    = numCol(r, "event_count");
+          const uncostedShare  = eventsTotal > 0
+            ? Math.max(0, eventsTotal - eventsWithCost) / eventsTotal
+            : 0;
+
+          let fuelCostNzd: number | null = null;
+          let fuelCostEstimated = false;
+
+          if (actualCost > 0 && eventsWithCost === eventsTotal) {
+            fuelCostNzd = actualCost;
+          } else if (litres > 0 && price > 0) {
+            // Some-or-no real cost, but we have litres → estimate the
+            // uncosted portion only (litres × uncostedShare × pump price)
+            // and add it on top of the actual cost so we never drop or
+            // double-count what the org already invoiced.
+            const estimatedPart = litres * uncostedShare * price;
+            fuelCostNzd = actualCost + estimatedPart;
+            fuelCostEstimated = estimatedPart > 0;
+          } else if (lp100 > 0 && km > 0 && price > 0) {
+            // No litres at all → derive litres from km × lp100 and price
+            // them, but again only estimate the uncosted share so any real
+            // actualCost is preserved.
+            const estimatedPart = (km * lp100 / 100) * uncostedShare * price;
+            fuelCostNzd = actualCost + estimatedPart;
+            fuelCostEstimated = estimatedPart > 0;
+          } else if (actualCost > 0) {
+            fuelCostNzd = actualCost;
+          }
+
+          return {
+            name:         strCol(r, "name"),
+            registration: strCol(r, "registration"),
+            make:         strCol(r, "make"),
+            model:        strCol(r, "model"),
+            co2e:         numCol(r, "co2e"),
+            km,
+            fuelCostNzd:  fuelCostNzd == null ? undefined : Math.round(fuelCostNzd),
+            fuelCostEstimated,
+          };
+        });
+
+        // Roll up totals + period coverage flags for the cover page / banners.
+        const totalFuelCostNzd = topEmittersOut.reduce((s, e) => s + (e.fuelCostNzd ?? 0), 0);
+        const anyFuelCostEstimated = topEmittersOut.some(e => e.fuelCostEstimated);
+        const monthsInPeriod = Object.keys(monthMap).length;
+        const monthsMissingEnergy = Object.values(monthMap).filter(m => !m.energyHasReadings).length;
 
         const snapshot = {
           summary: {
@@ -185,16 +349,13 @@ router.post("/", requireAuth, requireOrgAdmin, async (req, res) => {
             priorYearCo2eKg: pyTotal,
             priorYearFleetKm: numCol(pyFr, "dist"),
             yoyChangePct: yoyPct,
+            totalFuelCostNzd,
+            anyFuelCostEstimated,
+            monthsInPeriod,
+            monthsMissingEnergy,
           },
           monthly: Object.values(monthMap).sort((a, b) => a.month.localeCompare(b.month)),
-          topEmitters: sqlRows(topEmitters).map(r => ({
-            name: strCol(r, "name"),
-            registration: strCol(r, "registration"),
-            make: strCol(r, "make"),
-            model: strCol(r, "model"),
-            co2e: numCol(r, "co2e"),
-            km: numCol(r, "km"),
-          })),
+          topEmitters: topEmittersOut,
           goals: goals.map((g) => ({ title: g.title, status: g.status, targetValue: g.targetValue, targetUnit: g.targetUnit })),
         };
 
@@ -262,10 +423,33 @@ router.get("/:reportId/pdf", requireAuth, requireOrgAccess, async (req, res) => 
 
     const orgName = esc(String((sqlRows(orgRows)[0] as Record<string, unknown>)?.name ?? "Organisation"));
 
-    type MonthRow = { month: string; fleetCo2e: number; energyCo2e: number; fleetKm: number; energyKwh: number };
-    type EmitterRow = { name: string; registration: string; make: string; model: string; co2e: number; km: number };
+    type MonthRow = {
+      month: string;
+      fleetCo2e: number; energyCo2e: number;
+      fleetKm: number; energyKwh: number;
+      // Fields below were added to fix the "Mar 2026: 0 / 0" silent-gap bug
+      // and the missing-fuel-cost board complaint. They're optional so old
+      // snapshots (generated before the fix) still render without exceptions.
+      fleetFuelCostNzd?: number;
+      fleetFuelCostEstimated?: boolean;
+      energyHasReadings?: boolean;
+    };
+    type EmitterRow = {
+      name: string; registration: string; make: string; model: string;
+      co2e: number; km: number;
+      fuelCostNzd?: number;          // Optional — see MonthRow comment above.
+      fuelCostEstimated?: boolean;
+    };
     type GoalRow = { title: string; status: string; targetValue: number | null; targetUnit: string | null };
-    type SnapshotSummary = { totalCo2eKg?: number; fleetCo2eKg?: number; energyCo2eKg?: number; totalEnergyKwh?: number; fleetKm?: number; sustainabilityScore?: number; priorYearCo2eKg?: number; priorYearFleetKm?: number; yoyChangePct?: number | null };
+    type SnapshotSummary = {
+      totalCo2eKg?: number; fleetCo2eKg?: number; energyCo2eKg?: number;
+      totalEnergyKwh?: number; fleetKm?: number; sustainabilityScore?: number;
+      priorYearCo2eKg?: number; priorYearFleetKm?: number; yoyChangePct?: number | null;
+      totalFuelCostNzd?: number;
+      anyFuelCostEstimated?: boolean;
+      monthsInPeriod?: number;
+      monthsMissingEnergy?: number;
+    };
     const s = report.dataSnapshot ? (JSON.parse(report.dataSnapshot) as { summary?: SnapshotSummary; monthly?: MonthRow[]; topEmitters?: EmitterRow[]; goals?: GoalRow[] }) : {};
     const summary = s.summary || {};
     const monthly = s.monthly || [];
@@ -339,21 +523,54 @@ router.get("/:reportId/pdf", requireAuth, requireOrgAccess, async (req, res) => 
     const outlook = `${yoy != null && yoy < 0 ? `The downward emissions trajectory is encouraging` : `Stabilising and then reducing the emissions profile should be the near-term priority`}. ${score >= 60 ? `The current ESG score of ${score}/100 positions ${orgName} in the Moderate to Good range` : `The ESG score of ${score}/100 indicates significant improvement is required`}. The next reporting cycle should focus on: ${fleetPct > 75 ? "fleet decarbonisation strategy" : "balanced Scope 1 and Scope 2 reduction"}, goal formalisation, and data completeness for independent assurance. Proactive action now will strengthen the organisation's position ahead of any future regulatory requirements under New Zealand's climate disclosure framework.`;
 
     // ── Monthly table HTML ───────────────────────────────────────────────────
+    // Old snapshots (pre fuel-cost / energy-gap fix) won't have
+    // `energyHasReadings` set. We treat that legacy case as "data unknown" —
+    // i.e. fall back to "≥0 kWh implies bill present" which matches the
+    // pre-fix behaviour for already-generated reports.
+    const fmtMoney = (n: number | undefined | null) =>
+      typeof n === "number" ? `$${n.toLocaleString("en-NZ", { maximumFractionDigits: 0 })}` : "—";
+
     const monthlyHtml = monthly.length
       ? monthly.map((m, i) => {
-          const total = m.fleetCo2e + m.energyCo2e;
+          const energyMissing = m.energyHasReadings === false;
+          const energyKwhCell  = energyMissing
+            ? `<span style="color:#b45309;font-style:italic;">Awaiting bill</span>`
+            : fmt(m.energyKwh, 0);
+          const energyCo2eCell = energyMissing ? `<span style="color:#9ca3af;">—</span>` : fmt(m.energyCo2e, 0);
+          // Total — only fleet when energy is missing, so we don't pretend a
+          // missing bill = zero consumption.
+          const total = energyMissing ? m.fleetCo2e : (m.fleetCo2e + m.energyCo2e);
+          const totalCell = energyMissing
+            ? `${fmt(total, 0)}<span style="color:#b45309;font-size:9px;font-weight:600;"> *</span>`
+            : `${fmt(total, 0)}`;
+          // Fleet cost — show whatever the snapshot has; star it if estimated.
+          const costCell = (typeof m.fleetFuelCostNzd === "number" && m.fleetFuelCostNzd > 0)
+            ? `${fmtMoney(m.fleetFuelCostNzd)}${m.fleetFuelCostEstimated ? `<span style="color:#6b7280;font-size:9px;font-weight:600;"> *</span>` : ""}`
+            : `<span style="color:#9ca3af;">—</span>`;
           const label = (() => { const [y, mo] = m.month.split("-"); return new Date(+y, +mo - 1, 1).toLocaleDateString("en-NZ", { month: "short", year: "numeric" }); })();
           const bg = i % 2 === 0 ? "#fff" : "#f9fafb";
           return `<tr style="background:${bg};">
             <td style="padding:7px 12px;">${esc(label)}</td>
             <td style="padding:7px 12px;text-align:right;">${fmt(m.fleetKm, 0)}</td>
             <td style="padding:7px 12px;text-align:right;">${fmt(m.fleetCo2e, 0)}</td>
-            <td style="padding:7px 12px;text-align:right;">${fmt(m.energyKwh, 0)}</td>
-            <td style="padding:7px 12px;text-align:right;">${fmt(m.energyCo2e, 0)}</td>
-            <td style="padding:7px 12px;text-align:right;font-weight:700;">${fmt(total, 0)}</td>
+            <td style="padding:7px 12px;text-align:right;">${costCell}</td>
+            <td style="padding:7px 12px;text-align:right;">${energyKwhCell}</td>
+            <td style="padding:7px 12px;text-align:right;">${energyCo2eCell}</td>
+            <td style="padding:7px 12px;text-align:right;font-weight:700;">${totalCell}</td>
           </tr>`;
         }).join("")
-      : `<tr><td colspan="6" style="padding:14px;text-align:center;color:#9ca3af;">No monthly data available for this period</td></tr>`;
+      : `<tr><td colspan="7" style="padding:14px;text-align:center;color:#9ca3af;">No monthly data available for this period</td></tr>`;
+
+    // Footnote — only render when at least one row needed an asterisk so we
+    // don't clutter clean reports.
+    const monthlyHasEnergyGap = monthly.some(m => m.energyHasReadings === false);
+    const monthlyHasEstimatedCost = monthly.some(m => m.fleetFuelCostEstimated);
+    const monthlyFootnoteHtml = (monthlyHasEnergyGap || monthlyHasEstimatedCost)
+      ? `<div style="margin-top:8px;font-size:10px;color:#6b7280;line-height:1.6;">
+          ${monthlyHasEnergyGap        ? `<div><span style="color:#b45309;font-weight:600;">*</span> Power bill not yet uploaded for this month — Scope 2 figure excludes the gap rather than recording it as zero. Total is fleet-only.</div>` : ""}
+          ${monthlyHasEstimatedCost    ? `<div><span style="color:#6b7280;font-weight:600;">*</span> Fuel cost estimated from litres × NZ pump average (diesel $${NZ_DIESEL_PRICE.toFixed(2)}/L). Connect a fuel card or bowser receipt feed for invoiced figures.</div>` : ""}
+        </div>`
+      : "";
 
     // ── Emitters table HTML ──────────────────────────────────────────────────
     const maxCo2e = topEmitters[0]?.co2e || 1;
@@ -361,11 +578,20 @@ router.get("/:reportId/pdf", requireAuth, requireOrgAccess, async (req, res) => 
       ? topEmitters.map((e, i) => {
           const barW = Math.round((e.co2e / maxCo2e) * 100);
           const bg = i % 2 === 0 ? "#fff" : "#f9fafb";
+          // Fuel cost — show "$X" when available; star it if estimated (so the
+          // board reader can see at a glance which figures came from a fuel
+          // card vs. derived from litres × NZ pump average). Show "—" when
+          // we have neither cost nor litres nor consumption-l-per-100km, so
+          // the cell is honest about missing data.
+          const costCell = (typeof e.fuelCostNzd === "number" && e.fuelCostNzd > 0)
+            ? `${fmtMoney(e.fuelCostNzd)}${e.fuelCostEstimated ? `<span style="color:#6b7280;font-size:9px;font-weight:600;"> *</span>` : ""}`
+            : `<span style="color:#9ca3af;">—</span>`;
           return `<tr style="background:${bg};">
             <td style="padding:8px 12px;font-weight:700;color:#9ca3af;width:32px;">${i + 1}</td>
             <td style="padding:8px 12px;font-family:monospace;font-weight:800;font-size:12px;">${esc(e.name)}</td>
             <td style="padding:8px 12px;color:#6b7280;font-size:11px;">${esc([e.make, e.model].filter(Boolean).join(" "))}</td>
             <td style="padding:8px 12px;text-align:right;">${fmt(e.km, 0)} km</td>
+            <td style="padding:8px 12px;text-align:right;font-weight:600;white-space:nowrap;">${costCell}</td>
             <td style="padding:8px 12px;min-width:120px;">
               <div style="display:flex;align-items:center;gap:8px;">
                 <div style="flex:1;height:6px;background:#e5e7eb;border-radius:3px;overflow:hidden;"><div style="width:${barW}%;height:100%;background:#3b82f6;border-radius:3px;"></div></div>
@@ -374,7 +600,14 @@ router.get("/:reportId/pdf", requireAuth, requireOrgAccess, async (req, res) => 
             </td>
           </tr>`;
         }).join("")
-      : `<tr><td colspan="5" style="padding:14px;text-align:center;color:#9ca3af;">No fleet data available for this period</td></tr>`;
+      : `<tr><td colspan="6" style="padding:14px;text-align:center;color:#9ca3af;">No fleet data available for this period</td></tr>`;
+
+    const emittersHasEstimatedCost = topEmitters.some(e => e.fuelCostEstimated);
+    const emittersFootnoteHtml = emittersHasEstimatedCost
+      ? `<div style="margin-top:8px;font-size:10px;color:#6b7280;line-height:1.6;">
+          <span style="color:#6b7280;font-weight:600;">*</span> Fuel cost estimated from litres × NZ pump average (diesel $${NZ_DIESEL_PRICE.toFixed(2)}/L · petrol $${NZ_PETROL_PRICE.toFixed(2)}/L). Connect a fuel card or upload bowser receipts for invoiced figures.
+        </div>`
+      : "";
 
     // ── Goals HTML ───────────────────────────────────────────────────────────
     const goalStatusMap: Record<string, { bg: string; color: string; label: string }> = {
@@ -743,9 +976,17 @@ router.get("/:reportId/pdf", requireAuth, requireOrgAccess, async (req, res) => 
 
     <h2>Top Fleet Emitters</h2>
     <table>
-      <thead><tr><th style="width:28px;">#</th><th>Vehicle</th><th>Make / Model</th><th class="r">Distance</th><th>CO₂e</th></tr></thead>
+      <thead><tr>
+        <th style="width:28px;">#</th>
+        <th>Vehicle</th>
+        <th>Make / Model</th>
+        <th class="r">Distance</th>
+        <th class="r">Fuel cost</th>
+        <th>CO₂e</th>
+      </tr></thead>
       <tbody>${emittersHtml}</tbody>
     </table>
+    ${emittersFootnoteHtml}
 
     ${interpBar(Math.max(10, 100 - fleetPct))}
   </div>
@@ -803,17 +1044,24 @@ router.get("/:reportId/pdf", requireAuth, requireOrgAccess, async (req, res) => 
     </div>
 
     <h2>Monthly Emissions Breakdown</h2>
+    ${(typeof summary.monthsMissingEnergy === "number" && summary.monthsMissingEnergy > 0)
+      ? `<div style="margin:0 0 10px;padding:10px 14px;border-left:3px solid #b45309;background:#fffbeb;font-size:11px;color:#78350f;line-height:1.5;border-radius:0 4px 4px 0;">
+          <strong>Data completeness:</strong> ${summary.monthsMissingEnergy} of ${summary.monthsInPeriod ?? monthly.length} month${(summary.monthsInPeriod ?? monthly.length) === 1 ? "" : "s"} in this period have no power bill on file. Those months are shown as <em>"Awaiting bill"</em> in the table below — Scope 2 totals exclude them rather than recording zero. Upload the missing bills under <strong>Energy</strong> to firm up the figures.
+        </div>`
+      : ""}
     <table>
       <thead><tr>
         <th>Month</th>
         <th class="r">Fleet km</th>
         <th class="r">Fleet CO₂e (kg)</th>
+        <th class="r">Fuel cost</th>
         <th class="r">Energy kWh</th>
         <th class="r">Energy CO₂e (kg)</th>
         <th class="r">Total CO₂e (kg)</th>
       </tr></thead>
       <tbody>${monthlyHtml}</tbody>
     </table>
+    ${monthlyFootnoteHtml}
 
     ${interpBar(Math.max(10, 100 - energyPct * 2))}
   </div>
