@@ -11,7 +11,7 @@ import {
   suppliersTable,
 } from "@workspace/db";
 import { and, eq, isNull, or } from "drizzle-orm";
-import { requireAuth, requireOrgAdmin, requireOrgAccess } from "../lib/auth.js";
+import { requireAuth, requireOrgAdmin } from "../lib/auth.js";
 import { logAudit } from "../lib/audit.js";
 import {
   deleteOverride,
@@ -57,7 +57,9 @@ const querySchema = z.object({
 
 // GET — list overrides for org. Optional ?supplierId= scopes to that supplier
 // (and still includes the org-level rows).
-router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
+// Admin-only: override rows expose admin-supplied reasons and rationale
+// snapshots that should not be visible to general org members.
+router.get("/", requireAuth, requireOrgAdmin, async (req, res) => {
   try {
     const orgId = req.params.orgId as string;
     const parsed = querySchema.safeParse(req.query);

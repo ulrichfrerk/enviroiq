@@ -18,7 +18,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { AlertTriangle, Info, Loader2, ShieldCheck } from "lucide-react";
+import { AlertTriangle, History, Info, Loader2, ShieldCheck } from "lucide-react";
+import { Link } from "wouter";
 
 interface TemplateQuestion {
   id: string; text: string; type: string; weight: number; rationale: string;
@@ -49,12 +50,12 @@ export default function AuditCustomisationPage() {
 
   const { data: templates } = useQuery({
     queryKey: ["supplier-audit-templates", orgId],
-    queryFn: () => apiClient<{ templates: Array<{ id: string; isDefault: boolean }> }>(
+    queryFn: () => apiClient<Array<{ id: string; isDefault: boolean }>>(
       `/organisations/${orgId}/supplier-audit-templates`,
     ),
     enabled: !!orgId,
   });
-  const defaultId = templates?.templates?.find((t) => t.isDefault)?.id;
+  const defaultId = templates?.find((t) => t.isDefault)?.id;
 
   const { data: template, isLoading: tplLoading } = useQuery({
     queryKey: ["supplier-audit-template", orgId, defaultId],
@@ -141,11 +142,18 @@ export default function AuditCustomisationPage() {
 
   return (
     <div className="space-y-8 pb-10">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight text-foreground">Audit customisation</h1>
-        <p className="text-muted-foreground mt-1">
-          Right-size your supplier audit. Turn off questions that don't apply org-wide; per-supplier exceptions live on each supplier's detail card.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight text-foreground">Audit customisation</h1>
+          <p className="text-muted-foreground mt-1">
+            Right-size your supplier audit. Turn off questions that don't apply org-wide; per-supplier exceptions live on each supplier's detail card.
+          </p>
+        </div>
+        <Link href="/audit?action=supplier_audit_question_override">
+          <Button variant="outline" size="sm" className="shrink-0 mt-1">
+            <History className="h-3.5 w-3.5 mr-1.5" /> View change history
+          </Button>
+        </Link>
       </div>
 
       <Card className="p-4 border-primary/30 bg-primary/5">

@@ -55,11 +55,11 @@ router.get("/:auditId/:token", async (req, res) => {
     const fullSchema = JSON.parse(template.schema) as TemplateSchema;
     const snapshot = (audit.questionsSnapshot as string[] | null) ?? null;
     const effectiveSchema = filterSchemaToEffective(fullSchema, snapshot);
-    const customised = !!snapshot && (() => {
-      let totalQ = 0;
-      for (const s of fullSchema.sections) totalQ += s.questions.length;
-      return snapshot.length < totalQ;
-    })();
+    let totalQuestions = 0;
+    for (const s of fullSchema.sections) totalQuestions += s.questions.length;
+    const effectiveQuestions = snapshot ? snapshot.length : totalQuestions;
+    const disabledCount = Math.max(0, totalQuestions - effectiveQuestions);
+    const customised = !!snapshot && disabledCount > 0;
 
     res.json({
       audit: {
@@ -87,6 +87,9 @@ router.get("/:auditId/:token", async (req, res) => {
         },
         schema: effectiveSchema,
         customised,
+        totalQuestions,
+        effectiveQuestions,
+        disabledCount,
       },
       files: files.map((f) => ({ id: f.id, questionId: f.questionId, filename: f.filename, sizeBytes: f.sizeBytes, mimeType: f.mimeType })),
     });

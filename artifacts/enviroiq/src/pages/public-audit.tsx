@@ -25,7 +25,7 @@ interface AuditPayload {
   };
   organisation: { name: string; logoUrl?: string };
   supplier: { id: string; legalName: string; tradingName?: string };
-  template: { id: string; name: string; version: number; weights: { environmental: number; social: number; governance: number; supplyChain: number }; schema: TemplateSchema; customised?: boolean };
+  template: { id: string; name: string; version: number; weights: { environmental: number; social: number; governance: number; supplyChain: number }; schema: TemplateSchema; customised?: boolean; totalQuestions?: number; effectiveQuestions?: number; disabledCount?: number };
   files: Array<{ id: string; questionId?: string; filename: string; sizeBytes: number; mimeType?: string }>;
 }
 
@@ -196,8 +196,18 @@ export default function PublicAuditPage() {
             <h1 className="text-2xl font-bold">Hi {data.audit.recipientName || data.supplier.legalName} 👋</h1>
             <p className="text-muted-foreground">{data.template.schema.intro}</p>
             {data.template.customised && (
-              <div className="mt-3 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm text-foreground">
-                <span className="font-medium">{data.organisation.name}</span> has tailored this audit — you only see the questions that apply to your relationship with them.
+              <div className="mt-3 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm text-foreground space-y-1">
+                <p>
+                  <span className="font-medium">{data.organisation.name}</span> has tailored this audit for you.
+                  You're seeing <span className="font-medium">{data.template.effectiveQuestions ?? data.template.schema.sections.reduce((n, s) => n + s.questions.length, 0)}</span>
+                  {" "}of {data.template.totalQuestions ?? "—"} questions
+                  {typeof data.template.disabledCount === "number" && data.template.disabledCount > 0
+                    ? ` (${data.template.disabledCount} turned off as not applicable)`
+                    : ""}.
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Your final score is normalised across the questions you do answer, so disabled questions don't count against you.
+                </p>
               </div>
             )}
           </div>

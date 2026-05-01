@@ -20,7 +20,10 @@ export default function Audit() {
 
   const { data: logs, isLoading } = useListAuditLogs(orgId!, undefined, { query: { enabled: !!orgId } });
 
-  const [actionFilter, setActionFilter] = useState("");
+  const [actionFilter, setActionFilter] = useState(() => {
+    if (typeof window === "undefined") return "";
+    return new URLSearchParams(window.location.search).get("action") ?? "";
+  });
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [outcome, setOutcome] = useState<"all" | "success" | "failure">("all");

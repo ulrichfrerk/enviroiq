@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Plus, Pencil, Trash2, Send, RefreshCw, FileText, ShieldCheck, AlertTriangle, Building2, Mail, Eye, Loader2, Sliders } from "lucide-react";
+import { Plus, Pencil, Trash2, Send, RefreshCw, FileText, ShieldCheck, AlertTriangle, Building2, Mail, Eye, Loader2, Sliders, History } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { Link } from "wouter";
@@ -573,11 +573,11 @@ function SupplierOverridesPanel({ supplier, orgId }: { supplier: Supplier; orgId
 
   const { data: tplListData } = useQuery({
     queryKey: ["supplier-audit-templates", orgId],
-    queryFn: () => apiClient<{ templates: Array<{ id: string; isDefault: boolean }> }>(
+    queryFn: () => apiClient<Array<{ id: string; isDefault: boolean }>>(
       `/organisations/${orgId}/supplier-audit-templates`,
     ),
   });
-  const tplId = tplListData?.templates?.find((t) => t.isDefault)?.id;
+  const tplId = tplListData?.find((t) => t.isDefault)?.id;
   const { data: tpl } = useQuery({
     queryKey: ["supplier-audit-template", orgId, tplId],
     queryFn: () => apiClient<{ schema: { sections: TplSection[] } }>(`/organisations/${orgId}/supplier-audit-templates/${tplId}`),
@@ -683,9 +683,16 @@ function SupplierOverridesPanel({ supplier, orgId }: { supplier: Supplier; orgId
             <div className="flex justify-center py-6"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
           ) : (
             <>
-              <p className="text-xs text-muted-foreground">
-                Per-supplier exceptions win over the org-wide setting. Only changes to <em>this</em> supplier get a per-supplier exception; everything else follows org-wide.
-              </p>
+              <div className="flex items-start justify-between gap-3">
+                <p className="text-xs text-muted-foreground flex-1">
+                  Per-supplier exceptions win over the org-wide setting. Only changes to <em>this</em> supplier get a per-supplier exception; everything else follows org-wide.
+                </p>
+                <Link href="/audit?action=supplier_audit_question_override">
+                  <Button variant="ghost" size="sm" className="text-xs h-7 shrink-0">
+                    <History className="h-3 w-3 mr-1" /> Change history
+                  </Button>
+                </Link>
+              </div>
               {tpl.schema.sections.map((sec) => (
                 <div key={sec.id} className="rounded-md border border-border/50">
                   <div className="px-3 py-2 bg-secondary/30 text-xs font-semibold text-foreground/90 flex items-center justify-between">
