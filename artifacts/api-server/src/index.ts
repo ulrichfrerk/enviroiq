@@ -94,6 +94,16 @@ async function ensureSsoSchema(): Promise<void> {
   await db.execute(
     sql`ALTER TABLE organisations ADD COLUMN IF NOT EXISTS required_sso_provider text`,
   );
+  // Per-user sign-in policy override columns (lib/db/src/schema/users.ts).
+  // Added as part of the per-user "Sign-in restrictions" feature; required by
+  // both the per-user PATCH /:userId/sign-in-policy endpoint and the bulk
+  // POST /users/sign-in-policy/bulk endpoint.
+  await db.execute(
+    sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS required_sign_in_provider text`,
+  );
+  await db.execute(
+    sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS allowed_sign_in_methods jsonb`,
+  );
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS sso_identities (
       id              text PRIMARY KEY,
@@ -110,14 +120,6 @@ async function ensureSsoSchema(): Promise<void> {
   );
   await db.execute(
     sql`CREATE INDEX IF NOT EXISTS sso_identities_user_idx ON sso_identities (user_id)`,
-  );
-  // Per-user sign-in policy override columns (Task #9). When set on a user
-  // row these supersede the org-level policy.
-  await db.execute(
-    sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS required_sign_in_provider text`,
-  );
-  await db.execute(
-    sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS allowed_sign_in_methods jsonb`,
   );
   logger.info("SSO schema ready");
 }

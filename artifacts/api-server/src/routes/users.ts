@@ -202,6 +202,222 @@ router.patch("/:userId", requireAuth, requireRole("super_admin", "org_admin"), r
   }
 });
 
+// POST /organisations/:orgId/users/sign-in-policy/bulk
+// Apply the same sign-in restriction override to many users at once.
+// Body: { userIds: string[], requiredSignInProvider?: ..., allowedSignInMethods?: ... }
+// - Either field may be omitted, explicitly null (clear override → inherit), or a value.
+// - Lock-out validation runs per user; users that would be locked out are reported in `skipped`.
+// - One `user.sign_in_policy.changed` audit event is emitted per successfully-updated user
+//   (with details.bulk = true and details.batchSize), matching the per-user PATCH format.
+// NOTE: Path placed before /:userId/* routes — Express matches literal segments first so
+// "sign-in-policy" cannot collide with the :userId param (different second segment).
+router.post(
+  "/sign-in-policy/bulk",
+  requireAuth,
+  requireRole("super_admin", "org_admin"),
+  requireOrgAccess,
+  async (req, res) => {
+    try {
+      const orgId = req.params.orgId as string;
+      const body = req.body as {
+        userIds?: unknown;
+        requiredSignInProvider?: unknown;
+        allowedSignInMethods?: unknown;
+      };
+
+      if (
+        !Array.isArray(body.userIds) ||
+        body.userIds.length === 0 ||
+        !body.userIds.every((id) => typeof id === "string" && id.length > 0)
+      ) {
+        res.status(400).json({
+          error: "Bad Request",
+          message: "userIds must be a non-empty array of user id strings",
+        });
+        return;
+      }
+      const userIds = Array.from(new Set(body.userIds as string[]));
+
+      // Same field validation as the per-user PATCH /:userId/sign-in-policy.
+      const update: { requiredSignInProvider?: string | null; allowedSignInMethods?: ValidSignInMethod[] | null } = {};
+      const hasRequiredField = Object.prototype.hasOwnProperty.call(body, "requiredSignInProvider");
+      const hasAllowedField = Object.prototype.hasOwnProperty.call(body, "allowedSignInMethods");
+
+      if (hasRequiredField) {
+        const v = body.requiredSignInProvider;
+        if (v !== null && (typeof v !== "string" || !(VALID_REQUIRED_PROVIDERS as readonly string[]).includes(v))) {
+          res.status(400).json({
+            error: "Bad Request",
+            message: "requiredSignInProvider must be null, 'none', 'google', or 'microsoft'",
+          });
+          return;
+        }
+        update.requiredSignInProvider = v as string | null;
+      }
+
+      if (hasAllowedField) {
+        const v = body.allowedSignInMethods;
+        if (v !== null) {
+          if (
+            !Array.isArray(v) ||
+            v.length === 0 ||
+            !v.every(
+              (m): m is ValidSignInMethod =>
+                typeof m === "string" && (VALID_SIGN_IN_METHODS as readonly string[]).includes(m),
+            )
+          ) {
+            res.status(400).json({
+              error: "Bad Request",
+              message:
+                "allowedSignInMethods must be null (inherit) or a non-empty array of: " +
+                VALID_SIGN_IN_METHODS.join(", "),
+            });
+            return;
+          }
+          update.allowedSignInMethods = Array.from(new Set(v)) as ValidSignInMethod[];
+        } else {
+          update.allowedSignInMethods = null;
+        }
+      }
+
+      if (!hasRequiredField && !hasAllowedField) {
+        res.status(400).json({
+          error: "Bad Request",
+          message: "Provide at least one of requiredSignInProvider or allowedSignInMethods to apply.",
+        });
+        return;
+      }
+
+      const org = await db.query.organisationsTable.findFirst({
+        where: eq(organisationsTable.id, orgId),
+      });
+      if (!org) {
+        res.status(404).json({ error: "Not Found", message: "Organisation not found" });
+        return;
+      }
+
+      const updated: Array<{
+        userId: string;
+        email: string;
+        name: string | null;
+        requiredSignInProvider: string | null;
+        allowedSignInMethods: ValidSignInMethod[] | null;
+      }> = [];
+      const skipped: Array<{
+        userId: string;
+        email?: string;
+        name?: string | null;
+        reason: "not_found" | "would_lock_out";
+        message: string;
+      }> = [];
+
+      for (const userId of userIds) {
+        const previous = await db.query.usersTable.findFirst({
+          where: and(eq(usersTable.id, userId), eq(usersTable.organisationId, orgId)),
+        });
+        if (!previous) {
+          skipped.push({
+            userId,
+            reason: "not_found",
+            message: "User not found in this organisation",
+          });
+          continue;
+        }
+
+        // Effective-usability invariant — identical to per-user PATCH so behaviour matches.
+        const nextRequired =
+          (hasRequiredField
+            ? (update.requiredSignInProvider as string | null)
+            : (previous.requiredSignInProvider as string | null)) ?? null;
+        const nextAllowedRaw = hasAllowedField
+          ? (update.allowedSignInMethods as ValidSignInMethod[] | null)
+          : (previous.allowedSignInMethods as ValidSignInMethod[] | null);
+        const effectiveRequired: "google" | "microsoft" | null =
+          nextRequired === "google" || nextRequired === "microsoft"
+            ? nextRequired
+            : nextRequired === "none"
+              ? null
+              : ((org.requiredSsoProvider as "google" | "microsoft" | null) ?? null);
+        const effectiveAllowed: ValidSignInMethod[] =
+          nextAllowedRaw && nextAllowedRaw.length > 0
+            ? nextAllowedRaw
+            : ((org.allowedSignInMethods as ValidSignInMethod[] | null) ?? [...VALID_SIGN_IN_METHODS]);
+
+        const usable = effectiveAllowed.filter((m) => {
+          if (m === "magic_link" || m === "passkey") return effectiveRequired === null;
+          if (m === "google_sso") return org.googleSsoEnabled && (effectiveRequired ?? "google") === "google";
+          if (m === "microsoft_sso") return org.microsoftSsoEnabled && (effectiveRequired ?? "microsoft") === "microsoft";
+          return false;
+        });
+
+        if (usable.length === 0 && previous.role !== "org_admin" && previous.role !== "super_admin") {
+          skipped.push({
+            userId,
+            email: previous.email,
+            name: previous.name,
+            reason: "would_lock_out",
+            message:
+              "These restrictions would lock this user out — at least one allowed sign-in method must be effectively reachable.",
+          });
+          continue;
+        }
+
+        const setFields: Record<string, unknown> = { updatedAt: new Date() };
+        if (hasRequiredField) setFields.requiredSignInProvider = update.requiredSignInProvider;
+        if (hasAllowedField) setFields.allowedSignInMethods = update.allowedSignInMethods;
+
+        const [u] = await db
+          .update(usersTable)
+          .set(setFields)
+          .where(and(eq(usersTable.id, userId), eq(usersTable.organisationId, orgId)))
+          .returning();
+
+        await logAudit({
+          req,
+          action: "user.sign_in_policy.changed",
+          resourceType: "user",
+          resourceId: userId,
+          previousValue: {
+            requiredSignInProvider: previous.requiredSignInProvider,
+            allowedSignInMethods: previous.allowedSignInMethods,
+          },
+          newValue: {
+            requiredSignInProvider: u.requiredSignInProvider,
+            allowedSignInMethods: u.allowedSignInMethods,
+          },
+          details: { bulk: true, batchSize: userIds.length },
+        });
+
+        updated.push({
+          userId: u.id,
+          email: u.email,
+          name: u.name,
+          requiredSignInProvider: u.requiredSignInProvider as string | null,
+          allowedSignInMethods: u.allowedSignInMethods as ValidSignInMethod[] | null,
+        });
+      }
+
+      res.json({
+        updated,
+        skipped,
+        requested: userIds.length,
+        orgPolicy: {
+          googleSsoEnabled: org.googleSsoEnabled,
+          microsoftSsoEnabled: org.microsoftSsoEnabled,
+          allowedSignInMethods: org.allowedSignInMethods ?? [],
+          requiredSsoProvider: org.requiredSsoProvider,
+        },
+      });
+    } catch (err) {
+      req.log.error({ err }, "Bulk update user sign-in policy failed");
+      res.status(500).json({
+        error: "Internal Server Error",
+        message: "Failed to bulk-update sign-in policy",
+      });
+    }
+  },
+);
+
 // GET /organisations/:orgId/users/:userId/sign-in-policy
 // Returns the per-user override (NULLs mean "inherit org") plus the org policy
 // snapshot, so the admin UI can render the inherited values as placeholders.

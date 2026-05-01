@@ -1,11 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
-import { useListUsers, useCreateUser, useDeleteUser, CreateUserRequestRole } from "@workspace/api-client-react";
+import { useListUsers, useCreateUser, useDeleteUser, CreateUserRequestRole, getListUsersQueryKey } from "@workspace/api-client-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Users as UsersIcon, UserPlus, Trash2, Shield, Loader2, Lock, AlertCircle, Eye } from "lucide-react";
+import { Users as UsersIcon, UserPlus, Trash2, Shield, Loader2, Lock, AlertCircle, Eye, X, CheckCircle2 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { format } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
@@ -249,6 +249,347 @@ function SignInRestrictionsDialog({
   );
 }
 
+interface BulkPolicyTarget {
+  id: string;
+  name: string;
+  email: string;
+}
+
+interface BulkPolicyResponse {
+  updated: Array<{
+    userId: string;
+    email: string;
+    name: string | null;
+    requiredSignInProvider: string | null;
+    allowedSignInMethods: SignInMethod[] | null;
+  }>;
+  skipped: Array<{
+    userId: string;
+    email?: string;
+    name?: string | null;
+    reason: "not_found" | "would_lock_out";
+    message: string;
+  }>;
+  requested: number;
+  orgPolicy: UserSignInPolicy["orgPolicy"];
+}
+
+function BulkSignInRestrictionsDialog({
+  orgId,
+  targets,
+  open,
+  onOpenChange,
+  onApplied,
+}: {
+  orgId: string;
+  targets: BulkPolicyTarget[];
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  onApplied: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  // Org policy snapshot (used to render placeholders for "inherit"). We borrow
+  // the per-user GET endpoint by asking for an arbitrary selected user — its
+  // response includes the org policy block we need.
+  const probeUserId = targets[0]?.id;
+  const { data: probe } = useQuery<UserSignInPolicy>({
+    queryKey: ["userSignInPolicy", orgId, probeUserId],
+    queryFn: async () => {
+      const res = await fetch(`/api/organisations/${orgId}/users/${probeUserId}/sign-in-policy`, {
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Failed to load org policy snapshot");
+      return res.json();
+    },
+    enabled: open && !!probeUserId,
+  });
+
+  // Each field has three explicit modes:
+  //   "unchanged" — don't send the field; existing per-user overrides preserved
+  //   "clear"     — send null; existing per-user overrides removed (inherit org)
+  //   "set"       — send a concrete value (provider name OR custom method list)
+  // This makes the admin's intent unambiguous and matches the backend's
+  // "at least one field provided" requirement.
+  type RequiredMode = "unchanged" | "clear" | "set";
+  type AllowedMode = "unchanged" | "clear" | "set";
+  const [requiredMode, setRequiredMode] = useState<RequiredMode>("unchanged");
+  const [requiredValue, setRequiredValue] = useState<Exclude<RequiredProvider, null>>("none");
+  const [allowedMode, setAllowedMode] = useState<AllowedMode>("unchanged");
+  const [allowed, setAllowed] = useState<SignInMethod[]>([]);
+  const [result, setResult] = useState<BulkPolicyResponse | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      setRequiredMode("unchanged");
+      setRequiredValue("none");
+      setAllowedMode("unchanged");
+      setAllowed([]);
+      setResult(null);
+    }
+  }, [open]);
+
+  const noFieldChosen = requiredMode === "unchanged" && allowedMode === "unchanged";
+  const validationError =
+    allowedMode === "set" && allowed.length === 0
+      ? "If you set a custom allow list, it must include at least one method."
+      : null;
+
+  const toggleMethod = (m: SignInMethod) => {
+    setAllowed((cur) => (cur.includes(m) ? cur.filter((x) => x !== m) : [...cur, m]));
+  };
+
+  const mutate = useMutation({
+    mutationFn: async () => {
+      const body: {
+        userIds: string[];
+        requiredSignInProvider?: RequiredProvider;
+        allowedSignInMethods?: SignInMethod[] | null;
+      } = { userIds: targets.map((t) => t.id) };
+      if (requiredMode === "clear") body.requiredSignInProvider = null;
+      else if (requiredMode === "set") body.requiredSignInProvider = requiredValue;
+      if (allowedMode === "clear") body.allowedSignInMethods = null;
+      else if (allowedMode === "set") body.allowedSignInMethods = allowed;
+      const res = await fetch(`/api/organisations/${orgId}/users/sign-in-policy/bulk`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { message?: string };
+        throw new Error(err.message || "Bulk update failed");
+      }
+      return (await res.json()) as BulkPolicyResponse;
+    },
+    onSuccess: (data) => {
+      // Invalidate per-user policy caches so the per-user dialog reflects bulk changes.
+      for (const u of data.updated) {
+        queryClient.invalidateQueries({ queryKey: ["userSignInPolicy", orgId, u.userId] });
+      }
+      setResult(data);
+      const updatedCount = data.updated.length;
+      const skippedCount = data.skipped.length;
+      toast({
+        title:
+          skippedCount === 0
+            ? `Sign-in restrictions applied to ${updatedCount} user${updatedCount === 1 ? "" : "s"}`
+            : `Applied to ${updatedCount}, skipped ${skippedCount}`,
+        description:
+          skippedCount === 0
+            ? undefined
+            : "Some users were skipped because the new restrictions would lock them out.",
+        variant: skippedCount === 0 ? "default" : "destructive",
+      });
+      if (skippedCount === 0) {
+        onApplied();
+        onOpenChange(false);
+      }
+    },
+    onError: (e: unknown) => {
+      toast({
+        variant: "destructive",
+        title: "Could not save",
+        description: e instanceof Error ? e.message : "Unknown error",
+      });
+    },
+  });
+
+  const orgPolicy = probe?.orgPolicy;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="bg-card border-border max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Lock className="w-4 h-4 text-primary" />
+            Apply sign-in restrictions to {targets.length} user{targets.length === 1 ? "" : "s"}
+          </DialogTitle>
+        </DialogHeader>
+
+        {result ? (
+          <div className="space-y-4 pt-2" data-testid="bulk-sign-in-result">
+            <div className="rounded-md border border-border bg-secondary/20 px-3 py-2 text-sm">
+              <div className="flex items-center gap-2 text-foreground">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                Applied to <strong>{result.updated.length}</strong> of {result.requested} selected user
+                {result.requested === 1 ? "" : "s"}.
+              </div>
+            </div>
+            {result.skipped.length > 0 && (
+              <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3">
+                <div className="flex items-center gap-2 text-sm text-destructive-foreground font-medium mb-2">
+                  <AlertCircle className="h-4 w-4 text-destructive" />
+                  Skipped {result.skipped.length} user{result.skipped.length === 1 ? "" : "s"}
+                </div>
+                <ul className="text-xs text-muted-foreground space-y-1.5 max-h-40 overflow-auto">
+                  {result.skipped.map((s) => (
+                    <li key={s.userId} data-testid={`bulk-skipped-${s.userId}`}>
+                      <span className="text-foreground">{s.name || s.email || s.userId}</span>
+                      {" — "}
+                      {s.reason === "would_lock_out" ? "would be locked out" : "user not found"}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <div className="flex justify-end pt-2">
+              <Button
+                onClick={() => {
+                  onApplied();
+                  onOpenChange(false);
+                }}
+                data-testid="button-bulk-close"
+              >
+                Done
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-6 pt-2">
+            <p className="text-xs text-muted-foreground">
+              These overrides will be applied to <strong>each selected user</strong> and supersede the
+              organisation-wide sign-in policy. Leave blank to inherit the org default. Users that would
+              be locked out by the new restrictions are reported and skipped.
+            </p>
+
+            <div className="rounded-md border border-border bg-secondary/20 px-3 py-2 max-h-32 overflow-auto">
+              <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1">
+                Selected users
+              </div>
+              <div className="text-xs text-foreground space-y-0.5">
+                {targets.map((t) => (
+                  <div key={t.id} data-testid={`bulk-target-${t.id}`}>
+                    {t.name || t.email}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                Required SSO provider
+              </label>
+              <select
+                value={
+                  requiredMode === "unchanged"
+                    ? "__unchanged__"
+                    : requiredMode === "clear"
+                      ? "__clear__"
+                      : requiredValue
+                }
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v === "__unchanged__") setRequiredMode("unchanged");
+                  else if (v === "__clear__") setRequiredMode("clear");
+                  else {
+                    setRequiredMode("set");
+                    setRequiredValue(v as Exclude<RequiredProvider, null>);
+                  }
+                }}
+                className="w-full h-10 px-3 rounded-md bg-background border border-input text-sm"
+                data-testid="select-bulk-required-provider"
+              >
+                <option value="__unchanged__">Don't change (keep each user's existing setting)</option>
+                <option value="__clear__">
+                  Clear override → inherit org default ({describeOrgRequired(orgPolicy?.requiredSsoProvider ?? null)})
+                </option>
+                <option value="none">Set: no requirement (override org)</option>
+                <option value="google">Set: must use Google</option>
+                <option value="microsoft">Set: must use Microsoft</option>
+              </select>
+            </div>
+
+            <div className="space-y-3">
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                Allowed sign-in methods
+              </label>
+              <select
+                value={allowedMode}
+                onChange={(e) => setAllowedMode(e.target.value as AllowedMode)}
+                className="w-full h-10 px-3 rounded-md bg-background border border-input text-sm"
+                data-testid="select-bulk-allowed-mode"
+              >
+                <option value="unchanged">Don't change (keep each user's existing setting)</option>
+                <option value="clear">
+                  Clear override → inherit org default (
+                  {!orgPolicy || orgPolicy.allowedSignInMethods.length === 0
+                    ? "none"
+                    : orgPolicy.allowedSignInMethods.map((m) => METHOD_LABELS[m]).join(", ")}
+                  )
+                </option>
+                <option value="set">Set a custom allow list (override org)</option>
+              </select>
+
+              {/* Backwards-compat alias for the prior override checkbox testid: checking
+                  switches mode to "set", unchecking switches to "unchanged". */}
+              <label className="hidden">
+                <input
+                  type="checkbox"
+                  checked={allowedMode === "set"}
+                  onChange={(e) => setAllowedMode(e.target.checked ? "set" : "unchanged")}
+                  data-testid="checkbox-bulk-override-allowed-methods"
+                />
+              </label>
+
+              {allowedMode === "set" && (
+                <div className="grid sm:grid-cols-2 gap-2">
+                  {(Object.keys(METHOD_LABELS) as SignInMethod[]).map((m) => (
+                    <label
+                      key={m}
+                      className="flex items-center gap-3 px-3 py-2 rounded-md border border-border bg-background cursor-pointer text-sm"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={allowed.includes(m)}
+                        onChange={() => toggleMethod(m)}
+                        className="h-4 w-4 accent-primary"
+                        data-testid={`checkbox-bulk-method-${m}`}
+                      />
+                      <span className="text-foreground">{METHOD_LABELS[m]}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+              <p className="text-xs text-muted-foreground">
+                Org admins always retain a magic-link break-glass path even if magic-link is removed
+                here.
+              </p>
+            </div>
+
+            {validationError && (
+              <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 flex gap-2 items-start">
+                <AlertCircle className="h-4 w-4 text-destructive flex-shrink-0 mt-0.5" />
+                <p className="text-sm text-destructive-foreground">{validationError}</p>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" onClick={() => onOpenChange(false)} disabled={mutate.isPending}>
+                Cancel
+              </Button>
+              <Button
+                disabled={!!validationError || noFieldChosen || mutate.isPending}
+                onClick={() => mutate.mutate()}
+                data-testid="button-apply-bulk-sign-in-policy"
+                title={
+                  noFieldChosen
+                    ? "Choose a required SSO provider or override the allowed sign-in methods to apply changes."
+                    : undefined
+                }
+              >
+                {mutate.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                Apply to {targets.length} user{targets.length === 1 ? "" : "s"}
+              </Button>
+            </div>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function Users() {
   const { session } = useAuth();
   const orgId = session?.organisationId;
@@ -259,6 +600,7 @@ export default function Users() {
   const [restrictionsUser, setRestrictionsUser] = useState<{ id: string; name: string; email: string } | null>(null);
   const isAdmin = session?.role === "org_admin" || session?.role === "super_admin";
 
+  const queryClient = useQueryClient();
   const { data: users, isLoading } = useListUsers(orgId!, { query: { enabled: !!orgId } });
   const createUser = useCreateUser();
   const deleteUser = useDeleteUser();
@@ -266,6 +608,59 @@ export default function Users() {
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [role, setRole] = useState<keyof typeof CreateUserRequestRole>("org_viewer");
+
+  // Multi-select state for bulk sign-in restriction action. We store ids in a Set
+  // and prune any that disappear from the list (e.g. after a user is removed).
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkOpen, setBulkOpen] = useState(false);
+
+  const userItems = users?.items ?? [];
+  // Admins cannot bulk-edit themselves (avoids self-lockout footguns and matches
+  // the per-row UI that hides destructive actions on the current user).
+  const selectableUsers = useMemo(
+    () => userItems.filter((u) => u.id !== session?.userId),
+    [userItems, session?.userId],
+  );
+
+  useEffect(() => {
+    setSelectedIds((prev) => {
+      const valid = new Set(selectableUsers.map((u) => u.id));
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (valid.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [selectableUsers]);
+
+  const allSelectableSelected =
+    selectableUsers.length > 0 && selectableUsers.every((u) => selectedIds.has(u.id));
+  const someSelected = selectedIds.size > 0 && !allSelectableSelected;
+
+  const toggleOne = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const toggleAll = () => {
+    setSelectedIds((prev) => {
+      if (prev.size === selectableUsers.length && selectableUsers.length > 0) return new Set();
+      return new Set(selectableUsers.map((u) => u.id));
+    });
+  };
+
+  const bulkTargets: BulkPolicyTarget[] = useMemo(
+    () =>
+      selectableUsers
+        .filter((u) => selectedIds.has(u.id))
+        .map((u) => ({ id: u.id, name: u.name ?? "", email: u.email })),
+    [selectableUsers, selectedIds],
+  );
 
   const handleInvite = async () => {
     try {
@@ -336,11 +731,56 @@ export default function Users() {
         </Dialog>
       </div>
 
+      {isAdmin && selectedIds.size > 0 && (
+        <Card
+          className="border-primary/40 bg-primary/5 px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"
+          data-testid="bulk-action-bar"
+        >
+          <div className="flex items-center gap-3 text-sm">
+            <span className="font-medium text-foreground">
+              {selectedIds.size} user{selectedIds.size === 1 ? "" : "s"} selected
+            </span>
+            <button
+              type="button"
+              onClick={() => setSelectedIds(new Set())}
+              className="text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
+              data-testid="button-bulk-clear"
+            >
+              <X className="w-3 h-3" /> Clear selection
+            </button>
+          </div>
+          <Button
+            onClick={() => setBulkOpen(true)}
+            className="gap-2"
+            data-testid="button-bulk-sign-in-restrictions"
+          >
+            <Lock className="w-4 h-4" />
+            Apply sign-in restrictions
+          </Button>
+        </Card>
+      )}
+
       <Card className="border-border/50 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm text-left">
             <thead className="bg-secondary/30 text-muted-foreground uppercase text-xs font-semibold">
               <tr>
+                {isAdmin && (
+                  <th className="px-4 py-4 w-10">
+                    <input
+                      type="checkbox"
+                      aria-label="Select all users"
+                      checked={allSelectableSelected}
+                      ref={(el) => {
+                        if (el) el.indeterminate = someSelected;
+                      }}
+                      onChange={toggleAll}
+                      disabled={selectableUsers.length === 0}
+                      className="h-4 w-4 accent-primary cursor-pointer disabled:cursor-not-allowed"
+                      data-testid="checkbox-select-all-users"
+                    />
+                  </th>
+                )}
                 <th className="px-6 py-4">User</th>
                 <th className="px-6 py-4">Role</th>
                 <th className="px-6 py-4">Status</th>
@@ -351,6 +791,22 @@ export default function Users() {
             <tbody className="divide-y divide-border/50">
               {users?.items.map((user) => (
                 <tr key={user.id} className="hover:bg-secondary/20 transition-colors">
+                  {isAdmin && (
+                    <td className="px-4 py-4 w-10">
+                      {user.id !== session?.userId ? (
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${user.name || user.email}`}
+                          checked={selectedIds.has(user.id)}
+                          onChange={() => toggleOne(user.id)}
+                          className="h-4 w-4 accent-primary cursor-pointer"
+                          data-testid={`checkbox-select-user-${user.id}`}
+                        />
+                      ) : (
+                        <span className="inline-block w-4 h-4" aria-hidden="true" />
+                      )}
+                    </td>
+                  )}
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center text-foreground font-bold font-display">
@@ -423,6 +879,21 @@ export default function Users() {
           user={restrictionsUser}
           open={!!restrictionsUser}
           onOpenChange={(v) => { if (!v) setRestrictionsUser(null); }}
+        />
+      )}
+
+      {orgId && bulkOpen && bulkTargets.length > 0 && (
+        <BulkSignInRestrictionsDialog
+          orgId={orgId}
+          targets={bulkTargets}
+          open={bulkOpen}
+          onOpenChange={setBulkOpen}
+          onApplied={() => {
+            setSelectedIds(new Set());
+            // Refresh the user list view so any downstream UI tied to the cache
+            // (e.g. a future per-user "has override" badge) reflects updates.
+            queryClient.invalidateQueries({ queryKey: getListUsersQueryKey(orgId!) });
+          }}
         />
       )}
     </div>
