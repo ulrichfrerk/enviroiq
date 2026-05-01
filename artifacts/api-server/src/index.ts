@@ -268,7 +268,10 @@ ensureSessionTable()
     });
   })
   .catch((err) => {
-    logger.error({ err }, "Startup failed — could not ensure session table");
+    logger.error(
+      { err },
+      "Startup failed — one of the ensure*/verify-schema steps threw before the server could bind",
+    );
     process.exit(1);
   });
 
