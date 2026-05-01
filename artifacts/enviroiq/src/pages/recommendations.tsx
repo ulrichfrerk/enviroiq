@@ -8,7 +8,9 @@ import {
   Lightbulb, TrendingDown, Loader2, Car, Zap, Sun, Building2, Wrench,
   Plug, AlertCircle, ChevronRight, Target, ExternalLink, DollarSign,
   Clock, ArrowRight, ChevronDown, Award, CalendarDays, TrendingUp, Wallet,
+  Info,
 } from "lucide-react";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 
 type Aggressiveness = "conservative" | "moderate" | "aggressive";
 
@@ -179,15 +181,31 @@ function VehicleScoringTable({ scoring }: { scoring: NonNullable<Recommendation[
 
       {open && (
         <div className="px-3 pb-3 pt-1 space-y-3">
-          <p className="text-[11px] text-muted-foreground leading-relaxed">
-            Each candidate is scored out of 100 against this vehicle's actual annual km and current fuel use. Top score wins.
-            <span className="block mt-1">
-              <span className="font-semibold text-foreground">Emissions /40</span> · % CO₂e cut ·{" "}
-              <span className="font-semibold text-foreground">5-yr TCO /30</span> · capex + 5yr running vs business-as-usual ·{" "}
-              <span className="font-semibold text-foreground">Suitability /20</span> · tow / payload / range fit ·{" "}
-              <span className="font-semibold text-foreground">Availability /10</span> · NZ supply now
-            </span>
-          </p>
+          <div className="rounded-md border border-border/40 bg-secondary/20 p-3 space-y-2">
+            <p className="text-[11px] text-muted-foreground">
+              Each candidate is scored out of <span className="font-semibold text-foreground">100</span> against this vehicle's
+              actual annual km and current fuel use. Top score wins.
+            </p>
+            <ul className="text-[11px] text-muted-foreground space-y-1.5 leading-relaxed">
+              <li>
+                <span className="font-semibold text-foreground">Emissions · /40</span> — share of this vehicle's CO₂e the
+                replacement removes. Linear: a 50% cut scores 20, a 100% cut scores 40.
+              </li>
+              <li>
+                <span className="font-semibold text-foreground">5-yr TCO · /30</span> — capex + 5 years of running cost vs
+                continuing to fuel the existing vehicle. Cheaper than business-as-usual = full marks. 2.5× more expensive = 0.
+              </li>
+              <li>
+                <span className="font-semibold text-foreground">Suitability · /20</span> — fit for this vehicle's actual job.
+                Loses points for tow / payload shortfalls vs the segment median, and for BEV range that's tight for the typical
+                daily km.
+              </li>
+              <li>
+                <span className="font-semibold text-foreground">Availability · /10</span> — NZ supply right now. On lots = 10,
+                preorder = 5, limited / special-order = 3.
+              </li>
+            </ul>
+          </div>
 
           <div className="overflow-x-auto -mx-3 px-3">
             <table className="w-full text-xs border-collapse">
@@ -195,7 +213,26 @@ function VehicleScoringTable({ scoring }: { scoring: NonNullable<Recommendation[
                 <tr className="text-left text-[10px] uppercase tracking-wider text-muted-foreground border-b border-border/30">
                   <th className="py-2 pr-3 font-semibold">Vehicle</th>
                   <th className="py-2 px-2 font-semibold text-right">Score</th>
-                  <th className="py-2 px-2 font-semibold text-right" title="Emissions / TCO / Suitability / Availability">Em · TCO · Fit · Avail</th>
+                  <th className="py-2 px-2 font-semibold text-right">
+                    <HoverCard openDelay={150}>
+                      <HoverCardTrigger asChild>
+                        <span className="inline-flex items-center gap-1 cursor-help">
+                          Em · TCO · Fit · Avail
+                          <Info className="w-3 h-3 text-muted-foreground/70" />
+                        </span>
+                      </HoverCardTrigger>
+                      <HoverCardContent side="top" className="w-72 text-xs leading-relaxed">
+                        <p className="font-semibold mb-2">Score breakdown</p>
+                        <ul className="space-y-1.5 text-muted-foreground">
+                          <li><span className="font-medium text-foreground">Em /40</span> — % CO₂e cut vs current vehicle</li>
+                          <li><span className="font-medium text-foreground">TCO /30</span> — 5-yr cost vs business-as-usual</li>
+                          <li><span className="font-medium text-foreground">Fit /20</span> — tow / payload / EV range fit</li>
+                          <li><span className="font-medium text-foreground">Avail /10</span> — NZ supply now</li>
+                        </ul>
+                        <p className="mt-2 text-[10px] text-muted-foreground/80">Sum of all four = total score out of 100.</p>
+                      </HoverCardContent>
+                    </HoverCard>
+                  </th>
                   <th className="py-2 px-2 font-semibold text-right">CO₂e saved /yr</th>
                   <th className="py-2 px-2 font-semibold text-right">5-yr TCO</th>
                   <th className="py-2 px-2 font-semibold text-right">Capex</th>
@@ -227,7 +264,23 @@ function VehicleScoringTable({ scoring }: { scoring: NonNullable<Recommendation[
                         {c.score}
                       </td>
                       <td className="py-2.5 px-2 text-right tabular-nums text-[11px] text-muted-foreground">
-                        {c.breakdown.emissions} · {c.breakdown.tco} · {c.breakdown.suitability} · {c.breakdown.availability}
+                        <HoverCard openDelay={200}>
+                          <HoverCardTrigger asChild>
+                            <span className="cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-2">
+                              {c.breakdown.emissions} · {c.breakdown.tco} · {c.breakdown.suitability} · {c.breakdown.availability}
+                            </span>
+                          </HoverCardTrigger>
+                          <HoverCardContent side="left" className="w-64 text-xs leading-relaxed">
+                            <p className="font-semibold mb-2">{c.name}</p>
+                            <ul className="space-y-1 text-muted-foreground">
+                              <li className="flex justify-between"><span>Emissions</span><span className="tabular-nums text-foreground">{c.breakdown.emissions} / 40</span></li>
+                              <li className="flex justify-between"><span>5-yr TCO</span><span className="tabular-nums text-foreground">{c.breakdown.tco} / 30</span></li>
+                              <li className="flex justify-between"><span>Suitability</span><span className="tabular-nums text-foreground">{c.breakdown.suitability} / 20</span></li>
+                              <li className="flex justify-between"><span>Availability</span><span className="tabular-nums text-foreground">{c.breakdown.availability} / 10</span></li>
+                              <li className="flex justify-between border-t border-border/40 pt-1 mt-1"><span className="font-medium text-foreground">Total</span><span className="tabular-nums font-semibold text-foreground">{c.score} / 100</span></li>
+                            </ul>
+                          </HoverCardContent>
+                        </HoverCard>
                       </td>
                       <td className="py-2.5 px-2 text-right tabular-nums text-emerald-300/90">
                         {c.annualCo2eSavingKg >= 1000 ? `${(c.annualCo2eSavingKg / 1000).toFixed(1)} t` : `${c.annualCo2eSavingKg} kg`}
