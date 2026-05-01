@@ -1,11 +1,29 @@
 import { Router } from "express";
-import { db, usersTable } from "@workspace/db";
+import { db, usersTable, magicLinksTable, organisationsTable } from "@workspace/db";
 import { eq, and, count } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
+import { randomBytes, createHash } from "node:crypto";
 import { requireAuth, requireOrgAccess, requireRole } from "../lib/auth.js";
 import { logAudit } from "../lib/audit.js";
+import { sendInviteEmail } from "../lib/mailer.js";
 
 const router = Router({ mergeParams: true });
+
+const INVITE_LINK_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours — matches invite email copy.
+
+function newToken(bytes = 32): string {
+  return randomBytes(bytes).toString("base64url");
+}
+
+function hashToken(token: string): string {
+  return createHash("sha256").update(token).digest("base64url");
+}
+
+function appBaseUrl(req: { get(name: string): string | undefined; protocol: string; headers: Record<string, unknown> }): string {
+  const host = req.get("host");
+  const proto = (req.headers["x-forwarded-proto"] as string) || req.protocol || "https";
+  return `${proto}://${host}`;
+}
 
 const VALID_ORG_ROLES = ["org_admin", "org_viewer"] as const;
 type OrgRole = (typeof VALID_ORG_ROLES)[number];
@@ -68,7 +86,51 @@ router.post("/", requireAuth, requireRole("super_admin", "org_admin"), requireOr
       .returning();
 
     await logAudit({ req, action: "user.create", resourceType: "user", resourceId: user.id, details: { email, role } });
-    res.status(201).json(user);
+
+    // Issue an invite magic-link and email it. Failure here must NOT roll back
+    // the user record (the admin can re-trigger by inviting again or the user
+    // can request a sign-in link themselves), but we surface the email status
+    // in the response so the UI can show "invite sent" vs "user created — email failed".
+    let inviteEmailSent = false;
+    let inviteEmailError: string | null = null;
+    try {
+      const org = await db.query.organisationsTable.findFirst({
+        where: eq(organisationsTable.id, orgId),
+      });
+      const orgName = org?.name || "your organisation";
+
+      const token = newToken(32);
+      const expiresAt = new Date(Date.now() + INVITE_LINK_TTL_MS);
+      await db.insert(magicLinksTable).values({
+        id: uuidv4(),
+        userId: user.id,
+        token: hashToken(token),
+        expiresAt,
+      });
+
+      const url = `${appBaseUrl(req)}/api/auth/magic-link/verify?token=${encodeURIComponent(token)}`;
+      const result = await sendInviteEmail(email, name, orgName, url);
+      inviteEmailSent = result.sent;
+      await logAudit({
+        req,
+        action: "user.invite_email",
+        outcome: result.sent ? "success" : "failure",
+        userId: user.id,
+        details: { devMode: result.devMode },
+      });
+    } catch (err) {
+      inviteEmailError = err instanceof Error ? err.message : "unknown";
+      req.log.error({ err, userId: user.id, email }, "Invite email send failed");
+      await logAudit({
+        req,
+        action: "user.invite_email",
+        outcome: "failure",
+        userId: user.id,
+        details: { error: inviteEmailError },
+      });
+    }
+
+    res.status(201).json({ ...user, inviteEmailSent, inviteEmailError });
   } catch (err) {
     req.log.error({ err }, "Create user failed");
     res.status(500).json({ error: "Internal Server Error", message: "Failed to create user" });
