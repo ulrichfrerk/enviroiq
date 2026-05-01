@@ -110,6 +110,12 @@ async function ensureSsoSchema(): Promise<void> {
   await db.execute(
     sql`ALTER TABLE passkeys ADD COLUMN IF NOT EXISTS last_used_at timestamptz`,
   );
+  // User-supplied friendly name for a passkey (lib/db/src/schema/users.ts).
+  // Nullable — pre-existing rows stay un-labelled and the UI falls back to
+  // the deviceType-derived default until the user renames the device.
+  await db.execute(
+    sql`ALTER TABLE passkeys ADD COLUMN IF NOT EXISTS label text`,
+  );
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS sso_identities (
       id              text PRIMARY KEY,

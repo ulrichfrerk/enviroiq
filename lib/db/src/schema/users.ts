@@ -55,6 +55,11 @@ export const passkeysTable = pgTable("passkeys", {
   // has been enrolled but never used to sign in — surfaced on the Account
   // page so users can spot and remove stale or unused devices.
   lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+  // User-supplied friendly name (e.g. "MacBook Pro", "iPhone 15"). Nullable
+  // because passkeys enrolled before this column existed have no label —
+  // the UI falls back to the deviceType-derived default ("Device passkey" /
+  // "Synced passkey") in that case.
+  label: text("label"),
 });
 
 export const magicLinksTable = pgTable("magic_links", {

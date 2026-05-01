@@ -607,6 +607,7 @@ router.get("/passkeys", requireAuth, async (req, res) => {
       backedUp: p.backedUp,
       createdAt: p.createdAt,
       lastUsedAt: p.lastUsedAt,
+      label: p.label,
     })),
   );
 });
@@ -622,6 +623,71 @@ router.delete("/passkeys/:id", requireAuth, async (req, res) => {
   await db.delete(passkeysTable).where(eq(passkeysTable.id, id));
   await logAudit({ req, action: "auth.passkey.delete", outcome: "success", userId: req.user!.id, details: { passkeyId: id } });
   res.json({ ok: true });
+});
+
+/**
+ * PATCH /auth/passkeys/:id — rename a passkey (owner only).
+ *
+ * Body: { label: string | null }
+ *   - A non-empty trimmed string ≤ 64 chars sets the friendly name.
+ *   - `null` (or "") clears it back to the deviceType-derived default.
+ *
+ * Owner-only: an admin viewing another user can read their passkeys but
+ * cannot rename them — labels are personal context (e.g. "my work laptop")
+ * and an admin shouldn't be putting words in another user's mouth.
+ */
+const PASSKEY_LABEL_MAX = 64;
+router.patch("/passkeys/:id", requireAuth, async (req, res) => {
+  const id = req.params.id as string;
+  const userId = req.user!.id;
+
+  const passkey = await db.query.passkeysTable.findFirst({ where: eq(passkeysTable.id, id) });
+  // Match the DELETE handler's behaviour: 404 (not 403) for both "row missing"
+  // and "row not yours" so we don't leak the existence of other users' rows.
+  if (!passkey || passkey.userId !== userId) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+
+  const raw = (req.body as { label?: unknown } | undefined)?.label;
+  let nextLabel: string | null;
+  if (raw === null || raw === undefined) {
+    nextLabel = null;
+  } else if (typeof raw !== "string") {
+    res.status(400).json({ error: "Label must be a string or null" });
+    return;
+  } else {
+    const trimmed = raw.trim();
+    if (trimmed.length === 0) {
+      nextLabel = null;
+    } else if (trimmed.length > PASSKEY_LABEL_MAX) {
+      res.status(400).json({ error: `Label must be ${PASSKEY_LABEL_MAX} characters or fewer` });
+      return;
+    } else {
+      nextLabel = trimmed;
+    }
+  }
+
+  await db.update(passkeysTable).set({ label: nextLabel }).where(eq(passkeysTable.id, id));
+  await logAudit({
+    req,
+    action: "auth.passkey.renamed",
+    outcome: "success",
+    userId,
+    details: {
+      passkeyId: id,
+      previousLabel: passkey.label ?? null,
+      newLabel: nextLabel,
+    },
+  });
+  res.json({
+    id: passkey.id,
+    deviceType: passkey.deviceType,
+    backedUp: passkey.backedUp,
+    createdAt: passkey.createdAt,
+    lastUsedAt: passkey.lastUsedAt,
+    label: nextLabel,
+  });
 });
 
 /**

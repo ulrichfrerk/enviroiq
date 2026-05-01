@@ -12,11 +12,15 @@ import {
   Loader2,
   Eye,
   AlertTriangle,
+  Pencil,
+  Check,
+  X,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Input } from "@/components/ui/input";
 import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
@@ -31,6 +35,16 @@ interface PasskeySummary {
   backedUp: boolean;
   createdAt: string;
   lastUsedAt: string | null;
+  label: string | null;
+}
+
+// Mirrors the server-side cap in `PATCH /auth/passkeys/:id`. Kept in sync by
+// hand because the api-spec layer doesn't surface this endpoint yet.
+const PASSKEY_LABEL_MAX = 64;
+
+/** Default name when the user hasn't given the device a friendly label. */
+function defaultPasskeyName(pk: Pick<PasskeySummary, "deviceType">): string {
+  return pk.deviceType === "multiDevice" ? "Synced passkey" : "Device passkey";
 }
 
 interface SsoIdentitySummary {
@@ -169,6 +183,50 @@ export default function Account() {
       toast({ variant: "destructive", title: "Unable to unlink", description: message });
     },
   });
+
+  // Inline rename state — only one passkey is editable at a time. Storing the
+  // id (not a boolean) lets us close the previous editor automatically when
+  // the user clicks Rename on a different row.
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [labelDraft, setLabelDraft] = useState("");
+
+  const renameMutation = useMutation({
+    mutationFn: (vars: { id: string; label: string | null }) =>
+      jsonFetch<PasskeySummary>(`/api/auth/passkeys/${encodeURIComponent(vars.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ label: vars.label }),
+      }),
+    onSuccess: () => {
+      toast({ title: "Passkey renamed" });
+      setRenamingId(null);
+      setLabelDraft("");
+      void qc.invalidateQueries({ queryKey: ["passkeys", targetUserId] });
+    },
+    onError: (err: unknown) => {
+      const message = err instanceof Error ? err.message : "Could not rename passkey";
+      toast({ variant: "destructive", title: "Rename failed", description: message });
+    },
+  });
+
+  const startRename = (pk: PasskeySummary) => {
+    setRenamingId(pk.id);
+    setLabelDraft(pk.label ?? "");
+  };
+  const cancelRename = () => {
+    setRenamingId(null);
+    setLabelDraft("");
+  };
+  const submitRename = (pk: PasskeySummary) => {
+    const trimmed = labelDraft.trim();
+    // Avoid a no-op round-trip: if the trimmed value matches what's already
+    // stored (treating "" and null as equivalent), just close the editor.
+    const current = pk.label ?? "";
+    if (trimmed === current) {
+      cancelRename();
+      return;
+    }
+    renameMutation.mutate({ id: pk.id, label: trimmed.length === 0 ? null : trimmed });
+  };
 
   const handleEnrollPasskey = async () => {
     setEnrolling(true);
@@ -331,6 +389,10 @@ export default function Account() {
             <ul className="space-y-2">
               {passkeys.map((pk) => {
                 const stale = isStale(pk.lastUsedAt, pk.createdAt);
+                const isEditing = renamingId === pk.id;
+                const displayName = pk.label?.trim() || defaultPasskeyName(pk);
+                const isRenamePending =
+                  renameMutation.isPending && renameMutation.variables?.id === pk.id;
                 return (
                   <li
                     key={pk.id}
@@ -342,7 +404,7 @@ export default function Account() {
                     data-testid={`passkey-${pk.id}`}
                     data-stale={stale ? "true" : "false"}
                   >
-                    <div className="flex items-center gap-3 min-w-0">
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
                       <div
                         className={
                           stale
@@ -356,32 +418,110 @@ export default function Account() {
                           <KeyRound className="w-4 h-4 text-primary" />
                         )}
                       </div>
-                      <div className="min-w-0">
-                        <div className="text-sm font-medium text-foreground truncate">
-                          {pk.deviceType === "multiDevice" ? "Synced passkey" : "Device passkey"}
-                          {pk.backedUp && (
-                            <Badge variant="secondary" className="ml-2 text-[10px] py-0">
-                              Cloud-synced
-                            </Badge>
-                          )}
-                          {stale && (
-                            <Badge
-                              variant="outline"
-                              className="ml-2 text-[10px] py-0 border-amber-500/50 text-amber-700 dark:text-amber-300"
-                              data-testid={`passkey-stale-${pk.id}`}
-                            >
-                              Stale
-                            </Badge>
-                          )}
-                        </div>
-                        <div className="text-xs text-muted-foreground">
-                          Added {format(new Date(pk.createdAt), "MMM d, yyyy")} ·{" "}
-                          <span data-testid={`passkey-last-used-${pk.id}`}>
-                            {lastUsedLabel(pk.lastUsedAt)}
-                          </span>
-                        </div>
+                      <div className="min-w-0 flex-1">
+                        {isEditing ? (
+                          <div className="flex flex-col gap-1.5">
+                            <Input
+                              autoFocus
+                              value={labelDraft}
+                              onChange={(e) => setLabelDraft(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  submitRename(pk);
+                                } else if (e.key === "Escape") {
+                                  e.preventDefault();
+                                  cancelRename();
+                                }
+                              }}
+                              maxLength={PASSKEY_LABEL_MAX}
+                              placeholder={defaultPasskeyName(pk)}
+                              className="h-8 text-sm"
+                              disabled={isRenamePending}
+                              data-testid={`input-passkey-label-${pk.id}`}
+                            />
+                            <p className="text-[11px] text-muted-foreground">
+                              Give this device a name like "MacBook Pro" or "iPhone 15".
+                              Leave blank to clear.
+                            </p>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="text-sm font-medium text-foreground truncate">
+                              <span data-testid={`passkey-name-${pk.id}`}>{displayName}</span>
+                              {pk.backedUp && (
+                                <Badge variant="secondary" className="ml-2 text-[10px] py-0">
+                                  Cloud-synced
+                                </Badge>
+                              )}
+                              {stale && (
+                                <Badge
+                                  variant="outline"
+                                  className="ml-2 text-[10px] py-0 border-amber-500/50 text-amber-700 dark:text-amber-300"
+                                  data-testid={`passkey-stale-${pk.id}`}
+                                >
+                                  Stale
+                                </Badge>
+                              )}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              Added {format(new Date(pk.createdAt), "MMM d, yyyy")} ·{" "}
+                              <span data-testid={`passkey-last-used-${pk.id}`}>
+                                {lastUsedLabel(pk.lastUsedAt)}
+                              </span>
+                            </div>
+                          </>
+                        )}
                       </div>
                     </div>
+                    {!isViewingOther && (
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        {isEditing ? (
+                          <>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-muted-foreground hover:text-foreground gap-1"
+                              onClick={() => submitRename(pk)}
+                              disabled={isRenamePending}
+                              data-testid={`button-passkey-save-${pk.id}`}
+                              title="Save name"
+                            >
+                              {isRenamePending ? (
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                              ) : (
+                                <Check className="w-4 h-4" />
+                              )}
+                              Save
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-muted-foreground hover:text-foreground"
+                              onClick={cancelRename}
+                              disabled={isRenamePending}
+                              data-testid={`button-passkey-cancel-${pk.id}`}
+                              title="Cancel"
+                            >
+                              <X className="w-4 h-4" />
+                            </Button>
+                          </>
+                        ) : (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-muted-foreground hover:text-foreground gap-1.5"
+                            onClick={() => startRename(pk)}
+                            disabled={renameMutation.isPending}
+                            data-testid={`button-passkey-rename-${pk.id}`}
+                            title="Rename this passkey"
+                          >
+                            <Pencil className="w-4 h-4" />
+                            Rename
+                          </Button>
+                        )}
+                      </div>
+                    )}
                   </li>
                 );
               })}

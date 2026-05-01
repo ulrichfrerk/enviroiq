@@ -108,6 +108,7 @@ type PasskeyRow = {
   deviceType: string;
   backedUp: boolean;
   transports: string | null;
+  label: string | null;
 };
 
 const dbState: {
@@ -121,7 +122,12 @@ const dbState: {
   // the "successful login" signal the Account page reads, so failed/blocked
   // logins MUST leave it null.
   lastUsedUpdate: { id: string; at: Date } | null;
+  // Set whenever PATCH /auth/passkeys/:id writes a new label. Tracked
+  // separately from the other update fields so rename tests can assert
+  // "exactly one label update happened with this value".
+  labelUpdate: { id: string; label: string | null } | null;
   deletedChallengeIds: string[];
+  deletedPasskeyIds: string[];
 } = {
   user: null,
   organisation: null,
@@ -130,7 +136,9 @@ const dbState: {
   insertedPasskey: null,
   counterUpdate: null,
   lastUsedUpdate: null,
+  labelUpdate: null,
   deletedChallengeIds: [],
+  deletedPasskeyIds: [],
 };
 
 /**
@@ -216,6 +224,13 @@ vi.mock("@workspace/db", () => {
               at: value instanceof Date ? value : new Date(String(value)),
             };
           }
+          if (Object.prototype.hasOwnProperty.call(updates, "label")) {
+            const value = updates.label;
+            const next =
+              value === null || value === undefined ? null : String(value);
+            dbState.labelUpdate = { id: dbState.passkey.id, label: next };
+            dbState.passkey.label = next;
+          }
         }
         return undefined;
       }),
@@ -230,6 +245,13 @@ vi.mock("@workspace/db", () => {
           dbState.challenge = null;
         }
       }
+      if (
+        table === tables.passkeysTable &&
+        dbState.passkey &&
+        whereContainsValue(whereExpr, dbState.passkey.id)
+      ) {
+        dbState.deletedPasskeyIds.push(dbState.passkey.id);
+      }
       return undefined;
     }),
   }));
@@ -241,8 +263,12 @@ vi.mock("@workspace/db", () => {
       magicLinksTable: { findFirst: vi.fn(async () => null) },
       ssoIdentitiesTable: { findFirst: vi.fn(async () => null) },
       passkeysTable: {
-        findFirst: vi.fn(async () => dbState.passkey),
-        findMany: vi.fn(async () => (dbState.passkey ? [dbState.passkey] : [])),
+        // Return a shallow snapshot so callers see a stable view of the row
+        // even if a later mock-side mutation (e.g. update mock writing
+        // `label`) changes the underlying dbState. Mirrors real Drizzle
+        // behaviour where `findFirst` returns a fresh row object per call.
+        findFirst: vi.fn(async () => (dbState.passkey ? { ...dbState.passkey } : null)),
+        findMany: vi.fn(async () => (dbState.passkey ? [{ ...dbState.passkey }] : [])),
       },
       webAuthnChallengesTable: {
         findFirst: vi.fn(async (args?: { where?: unknown }) => {
@@ -370,6 +396,7 @@ const basePasskey: PasskeyRow = {
   deviceType: "singleDevice",
   backedUp: false,
   transports: "internal",
+  label: null,
 };
 
 /** Build a successful authentication verification result, narrowed to VerifiedAuth. */
@@ -448,7 +475,9 @@ beforeEach(() => {
   dbState.insertedPasskey = null;
   dbState.counterUpdate = null;
   dbState.lastUsedUpdate = null;
+  dbState.labelUpdate = null;
   dbState.deletedChallengeIds = [];
+  dbState.deletedPasskeyIds = [];
   // Restore default verification stubs (individual tests may override).
   // The factories use the upstream return types so a future shape change
   // in @simplewebauthn/server breaks compilation here, not silently at
@@ -891,5 +920,115 @@ describe("POST /api/auth/passkey/register/verify", () => {
     );
     expect(fail).toHaveLength(1);
     expect(fail[0]).toMatchObject({ userId: baseUser.id });
+  });
+});
+
+// ─── PATCH /passkeys/:id (rename) ───────────────────────────────────────────
+describe("PATCH /api/auth/passkeys/:id", () => {
+  it("renames a passkey, audits auth.passkey.renamed, and returns the updated row", async () => {
+    dbState.passkey = { ...basePasskey, label: null };
+
+    const app = makeApp();
+    const agent = request.agent(app);
+    await agent.post("/__test/login");
+
+    const res = await agent
+      .patch(`/api/auth/passkeys/${basePasskey.id}`)
+      .send({ label: "  MacBook Pro  " });
+
+    expect(res.status).toBe(200);
+    // Server trims surrounding whitespace before persisting.
+    expect(res.body).toMatchObject({ id: basePasskey.id, label: "MacBook Pro" });
+    expect(dbState.labelUpdate).toEqual({ id: basePasskey.id, label: "MacBook Pro" });
+
+    const audits = getAuditCalls().filter((a) => a.action === "auth.passkey.renamed");
+    expect(audits).toHaveLength(1);
+    expect(audits[0]).toMatchObject({
+      action: "auth.passkey.renamed",
+      outcome: "success",
+      userId: baseUser.id,
+      details: { passkeyId: basePasskey.id, previousLabel: null, newLabel: "MacBook Pro" },
+    });
+  });
+
+  it("clears the label when given null or an empty/whitespace string", async () => {
+    // Pre-existing label that we then clear with `null`.
+    dbState.passkey = { ...basePasskey, label: "Old name" };
+
+    const app = makeApp();
+    const agent = request.agent(app);
+    await agent.post("/__test/login");
+
+    const nullRes = await agent
+      .patch(`/api/auth/passkeys/${basePasskey.id}`)
+      .send({ label: null });
+    expect(nullRes.status).toBe(200);
+    expect(nullRes.body.label).toBeNull();
+    expect(dbState.labelUpdate).toEqual({ id: basePasskey.id, label: null });
+
+    // And the same for an empty/whitespace string.
+    dbState.passkey = { ...basePasskey, label: "Another" };
+    dbState.labelUpdate = null;
+    const blankRes = await agent
+      .patch(`/api/auth/passkeys/${basePasskey.id}`)
+      .send({ label: "   " });
+    expect(blankRes.status).toBe(200);
+    expect(blankRes.body.label).toBeNull();
+    expect(dbState.labelUpdate).toEqual({ id: basePasskey.id, label: null });
+  });
+
+  it("rejects labels longer than 64 characters and writes nothing", async () => {
+    dbState.passkey = { ...basePasskey, label: null };
+
+    const app = makeApp();
+    const agent = request.agent(app);
+    await agent.post("/__test/login");
+
+    const tooLong = "x".repeat(65);
+    const res = await agent
+      .patch(`/api/auth/passkeys/${basePasskey.id}`)
+      .send({ label: tooLong });
+
+    expect(res.status).toBe(400);
+    expect(dbState.labelUpdate).toBeNull();
+    // No audit row written for a rejected request — `auth.passkey.renamed`
+    // means "the rename actually happened".
+    expect(
+      getAuditCalls().some((a) => a.action === "auth.passkey.renamed"),
+    ).toBe(false);
+  });
+
+  it("returns 404 (not 403) when the passkey belongs to another user", async () => {
+    // Passkey exists but is owned by a different user. Returning 404 (rather
+    // than 403) avoids leaking the existence of other users' passkey rows
+    // to a probing attacker.
+    dbState.passkey = { ...basePasskey, userId: "someone-else", label: null };
+
+    const app = makeApp();
+    const agent = request.agent(app);
+    await agent.post("/__test/login");
+
+    const res = await agent
+      .patch(`/api/auth/passkeys/${basePasskey.id}`)
+      .send({ label: "Hijack" });
+
+    expect(res.status).toBe(404);
+    expect(dbState.labelUpdate).toBeNull();
+    expect(
+      getAuditCalls().some((a) => a.action === "auth.passkey.renamed"),
+    ).toBe(false);
+  });
+
+  it("requires authentication", async () => {
+    dbState.passkey = { ...basePasskey, label: null };
+
+    const app = makeApp();
+    // No /__test/login first — request must be rejected by requireAuth.
+    const res = await request(app)
+      .patch(`/api/auth/passkeys/${basePasskey.id}`)
+      .send({ label: "Anything" });
+
+    expect(res.status).toBe(401);
+    expect(dbState.labelUpdate).toBeNull();
   });
 });
