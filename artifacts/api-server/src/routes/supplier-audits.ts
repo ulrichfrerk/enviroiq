@@ -7,6 +7,11 @@ import { requireAuth, requireOrgAccess, requireOrgAdmin } from "../lib/auth.js";
 import { logAudit } from "../lib/audit.js";
 import { recordSupplierAuditEvent } from "../lib/supplier-audit-events.js";
 import { sendSupplierAuditInviteEmail } from "../lib/mailer.js";
+import {
+  computeEffectiveQuestionIds,
+  getOverridesForOrg,
+} from "../lib/supplier-question-overrides.js";
+import type { TemplateSchema } from "../lib/supplier-audit-default-template.js";
 
 const router = Router({ mergeParams: true });
 
@@ -108,6 +113,22 @@ router.post("/", requireAuth, requireOrgAdmin, async (req, res) => {
     const tokenHash = sha256(secret);
     const dueAt = new Date(Date.now() + dueInDays * 86400_000);
 
+    // Snapshot the effective question set at send time so later override
+    // changes don't retro-affect this in-flight audit. Fail-closed: a
+    // transient error here must NOT silently ship the unfiltered template,
+    // because that would reintroduce questions an admin explicitly disabled
+    // (e.g. for legal/commercial reasons). Aborting the send is safer.
+    let questionsSnapshot: string[];
+    try {
+      const schema = JSON.parse(template.schema) as TemplateSchema;
+      const overrides = await getOverridesForOrg(orgId, template.id, supplierId);
+      questionsSnapshot = computeEffectiveQuestionIds(schema, overrides, supplierId);
+    } catch (err) {
+      req.log.error({ err, supplierId, templateId: template.id }, "Failed to compute effective question set — aborting send");
+      res.status(503).json({ error: "Could not lock the question set for this audit. Please retry; if this persists, contact support." });
+      return;
+    }
+
     await db.insert(supplierAuditsTable).values({
       id,
       organisationId: orgId,
@@ -121,6 +142,7 @@ router.post("/", requireAuth, requireOrgAdmin, async (req, res) => {
       dueAt,
       sentAt: new Date(),
       remindersSent: JSON.stringify([]),
+      questionsSnapshot,
     });
 
     const url = buildAuditUrl(id, secret);

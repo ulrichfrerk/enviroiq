@@ -27,6 +27,7 @@ import complianceRouter from "./compliance.js";
 import suppliersRouter from "./suppliers.js";
 import supplierAuditTemplatesRouter from "./supplier-audit-templates.js";
 import supplierAuditsRouter from "./supplier-audits.js";
+import supplierAuditOverridesRouter from "./supplier-audit-overrides.js";
 import supplierReportsRouter from "./supplier-reports.js";
 import publicAuditsRouter from "./public-audits.js";
 import supplierPortalRouter from "./supplier-portal.js";
@@ -75,6 +76,7 @@ router.use("/organisations/:orgId/document-archives", documentArchivesRouter);
 router.use("/organisations/:orgId/suppliers", suppliersRouter);
 router.use("/organisations/:orgId/supplier-audit-templates", supplierAuditTemplatesRouter);
 router.use("/organisations/:orgId/supplier-audits", supplierAuditsRouter);
+router.use("/organisations/:orgId/audit-overrides", supplierAuditOverridesRouter);
 router.use("/organisations/:orgId/supplier-reports", supplierReportsRouter);
 
 // Public supplier audit endpoints (no auth — token-based)

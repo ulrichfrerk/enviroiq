@@ -19,6 +19,7 @@ export * from "./subcontractors";
 export * from "./advisor-cache";
 export * from "./emission-factors";
 export * from "./suppliers";
+export * from "./supplier-question-overrides";
 export * from "./contacts";
 export * from "./subscriptions";
 export * from "./billing-profiles";

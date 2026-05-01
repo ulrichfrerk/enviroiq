@@ -10,7 +10,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Plus, Pencil, Trash2, Send, RefreshCw, FileText, ShieldCheck, AlertTriangle, Building2, Mail, Eye } from "lucide-react";
+import { Plus, Pencil, Trash2, Send, RefreshCw, FileText, ShieldCheck, AlertTriangle, Building2, Mail, Eye, Loader2, Sliders } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { Link } from "wouter";
 
@@ -510,6 +511,7 @@ function SupplierDetail({ supplier, audits, orgId, onSend }: { supplier: Supplie
         <Info label="Audit cycle" value={`${supplier.auditFrequencyMonths} months`} />
         <Info label="Next audit due" value={supplier.nextAuditDueAt ? new Date(supplier.nextAuditDueAt).toLocaleDateString("en-NZ") : "—"} />
       </div>
+      <SupplierOverridesPanel supplier={supplier} orgId={orgId} />
       <div className="rounded-lg border border-border">
         <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-muted/30">
           <h4 className="font-semibold text-sm">Audit history</h4>
@@ -545,6 +547,218 @@ function Info({ label, value }: { label: string; value: string }) {
     <div>
       <div className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">{label}</div>
       <div className="text-sm text-foreground">{value}</div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Per-supplier audit question overrides. Shown inside the supplier detail
+// dialog. Mirrors org-level customisation but scoped to one supplier — and
+// per-supplier decisions win over org-level ones.
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface OverrideRow {
+  id: string; questionId: string; supplierId: string | null;
+  enabled: boolean; reason: string; rationaleSnapshot: string;
+  createdByEmail: string | null; updatedAt: string;
+}
+interface TplQ { id: string; text: string; type: string; rationale: string; weight: number }
+interface TplSection { id: string; title: string; weight: number; questions: TplQ[] }
+
+function SupplierOverridesPanel({ supplier, orgId }: { supplier: Supplier; orgId: string }) {
+  const { session } = useAuth();
+  const isAdmin = session?.role === "org_admin" || session?.role === "super_admin";
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
+
+  const { data: tplListData } = useQuery({
+    queryKey: ["supplier-audit-templates", orgId],
+    queryFn: () => apiClient<{ templates: Array<{ id: string; isDefault: boolean }> }>(
+      `/organisations/${orgId}/supplier-audit-templates`,
+    ),
+  });
+  const tplId = tplListData?.templates?.find((t) => t.isDefault)?.id;
+  const { data: tpl } = useQuery({
+    queryKey: ["supplier-audit-template", orgId, tplId],
+    queryFn: () => apiClient<{ schema: { sections: TplSection[] } }>(`/organisations/${orgId}/supplier-audit-templates/${tplId}`),
+    enabled: !!tplId,
+  });
+  const { data: ovData, isLoading: ovLoading } = useQuery({
+    queryKey: ["audit-overrides", orgId, tplId, supplier.id],
+    queryFn: () => apiClient<{ overrides: OverrideRow[] }>(
+      `/organisations/${orgId}/audit-overrides?templateId=${tplId}&supplierId=${supplier.id}`,
+    ),
+    enabled: !!tplId,
+  });
+
+  const orgOverrides = new Map<string, OverrideRow>();
+  const supplierOverrides = new Map<string, OverrideRow>();
+  for (const o of ovData?.overrides ?? []) {
+    if (o.supplierId === null) orgOverrides.set(o.questionId, o);
+    else if (o.supplierId === supplier.id) supplierOverrides.set(o.questionId, o);
+  }
+
+  const upsert = useMutation({
+    mutationFn: async (vars: { questionId: string; enabled: boolean; reason: string }) => {
+      return apiClient(`/organisations/${orgId}/audit-overrides`, {
+        method: "PUT",
+        body: { templateId: tplId, questionId: vars.questionId, supplierId: supplier.id, enabled: vars.enabled, reason: vars.reason },
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["audit-overrides", orgId, tplId, supplier.id] });
+      toast.success("Override saved", { description: "Recorded in the audit log." });
+    },
+    onError: (e: unknown) => toast.error("Could not save", { description: e instanceof Error ? e.message : "Try again" }),
+  });
+  const remove = useMutation({
+    mutationFn: async (questionId: string) =>
+      apiClient(`/organisations/${orgId}/audit-overrides/${encodeURIComponent(questionId)}?templateId=${tplId}&supplierId=${supplier.id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["audit-overrides", orgId, tplId, supplier.id] });
+      toast.success("Override removed", { description: "This question now follows the org-wide setting." });
+    },
+  });
+
+  const [confirmFor, setConfirmFor] = useState<{ q: TplQ; intendEnable: boolean } | null>(null);
+  const [reason, setReason] = useState("");
+
+  // Compute counts for the summary line
+  const counts = (() => {
+    let disabledForThisSupplier = 0;
+    let exceptionsHere = 0;
+    if (!tpl) return { disabledForThisSupplier, exceptionsHere };
+    for (const s of tpl.schema.sections) for (const q of s.questions) {
+      const sup = supplierOverrides.get(q.id);
+      const org = orgOverrides.get(q.id);
+      const enabled = sup ? sup.enabled : org ? org.enabled : true;
+      if (!enabled) disabledForThisSupplier += 1;
+      if (sup) exceptionsHere += 1;
+    }
+    return { disabledForThisSupplier, exceptionsHere };
+  })();
+
+  const onToggle = (q: TplQ, currentEnabled: boolean, hasSupplierOverride: boolean) => {
+    if (!isAdmin) return;
+    if (hasSupplierOverride) {
+      // Tapping the toggle on an existing per-supplier override → remove it (revert to inherit)
+      remove.mutate(q.id);
+      return;
+    }
+    // No per-supplier override yet — open the modal to capture a reason for the new exception.
+    setConfirmFor({ q, intendEnable: !currentEnabled });
+    setReason("");
+  };
+
+  const submitException = () => {
+    if (!confirmFor) return;
+    if (reason.trim().length < 10) {
+      toast.error("Reason required", { description: "Min 10 characters — gets recorded in the audit log." });
+      return;
+    }
+    upsert.mutate(
+      { questionId: confirmFor.q.id, enabled: confirmFor.intendEnable, reason: reason.trim() },
+      { onSuccess: () => setConfirmFor(null) },
+    );
+  };
+
+  return (
+    <div className="rounded-lg border border-border">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between px-3 py-2 border-b border-border bg-muted/30 hover:bg-muted/50 transition"
+        data-testid={`overrides-toggle-${supplier.id}`}
+      >
+        <div className="flex items-center gap-2">
+          <Sliders className="h-3.5 w-3.5 text-muted-foreground" />
+          <span className="font-semibold text-sm">Per-supplier audit overrides</span>
+          {counts.exceptionsHere > 0 && <Badge variant="outline" className="text-[10px]">{counts.exceptionsHere} exception{counts.exceptionsHere === 1 ? "" : "s"}</Badge>}
+          {counts.disabledForThisSupplier > 0 && <Badge variant="outline" className="text-[10px]">{counts.disabledForThisSupplier} off</Badge>}
+        </div>
+        <span className="text-xs text-muted-foreground">{open ? "Hide" : "Show"}</span>
+      </button>
+      {open && (
+        <div className="p-3 space-y-3 max-h-[60vh] overflow-y-auto">
+          {ovLoading || !tpl ? (
+            <div className="flex justify-center py-6"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
+          ) : (
+            <>
+              <p className="text-xs text-muted-foreground">
+                Per-supplier exceptions win over the org-wide setting. Only changes to <em>this</em> supplier get a per-supplier exception; everything else follows org-wide.
+              </p>
+              {tpl.schema.sections.map((sec) => (
+                <div key={sec.id} className="rounded-md border border-border/50">
+                  <div className="px-3 py-2 bg-secondary/30 text-xs font-semibold text-foreground/90 flex items-center justify-between">
+                    <span>{sec.title}</span>
+                    <span className="text-[10px] uppercase tracking-wide text-muted-foreground">{sec.weight === 0 ? "Insight" : `weight ${sec.weight}`}</span>
+                  </div>
+                  <div className="divide-y divide-border/40">
+                    {sec.questions.map((q) => {
+                      const sup = supplierOverrides.get(q.id);
+                      const org = orgOverrides.get(q.id);
+                      const enabled = sup ? sup.enabled : org ? org.enabled : true;
+                      const inheritedFromOrg = !sup && org && !org.enabled;
+                      return (
+                        <div key={q.id} className="px-3 py-2 flex items-start gap-3">
+                          <div className="flex-1 min-w-0">
+                            <div className="text-xs text-foreground">{q.text}</div>
+                            <div className="text-[10px] text-muted-foreground mt-0.5">{q.rationale}</div>
+                            {sup && (
+                              <div className="text-[10px] mt-1">
+                                <span className={sup.enabled ? "text-emerald-400" : "text-amber-400"}>
+                                  {sup.enabled ? "Forced ON for this supplier" : "OFF for this supplier"} ·
+                                </span>{" "}
+                                <span className="text-muted-foreground">{sup.reason}</span>
+                              </div>
+                            )}
+                            {inheritedFromOrg && !sup && (
+                              <div className="text-[10px] text-muted-foreground mt-1">Inherits org-wide OFF — toggle to force ON for this supplier.</div>
+                            )}
+                          </div>
+                          <Switch
+                            checked={enabled}
+                            disabled={!isAdmin || upsert.isPending || remove.isPending}
+                            onCheckedChange={() => onToggle(q, enabled, !!sup)}
+                            data-testid={`supplier-q-toggle-${q.id}`}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+
+      <Dialog open={!!confirmFor} onOpenChange={(o) => { if (!o) setConfirmFor(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{confirmFor?.intendEnable ? "Force this question ON" : "Disable this question"} for {supplier.legalName}?</DialogTitle>
+            <DialogDescription>{confirmFor?.q.text}</DialogDescription>
+          </DialogHeader>
+          {confirmFor && (
+            <div className="space-y-3">
+              <div className="rounded-md border border-primary/30 bg-primary/5 p-3 text-xs">
+                <div className="font-medium text-foreground mb-1">Why we ask this</div>
+                <p className="text-muted-foreground leading-relaxed">{confirmFor.q.rationale}</p>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs uppercase tracking-wide text-muted-foreground">Reason (audit-logged)</Label>
+                <Textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={3} placeholder="Why is this exception justified for this supplier?" />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmFor(null)}>Cancel</Button>
+            <Button onClick={submitException} disabled={upsert.isPending}>
+              {upsert.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              Save exception
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

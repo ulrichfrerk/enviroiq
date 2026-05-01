@@ -122,6 +122,54 @@ async function ensureSsoSchema(): Promise<void> {
 }
 
 /**
+ * Idempotent self-heal for the supplier audit question overrides table and the
+ * `questions_snapshot` column on supplier_audits. Lets buyers turn audit
+ * questions off org-wide / per-supplier with a full audit trail. Snapshot
+ * column is JSONB array of effective question IDs; null = use full template
+ * (back-compat for audits sent before overrides existed).
+ */
+async function ensureSupplierAuditOverrideSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS supplier_audit_question_overrides (
+      id                    text PRIMARY KEY,
+      organisation_id       text NOT NULL,
+      template_id           text NOT NULL,
+      question_id           text NOT NULL,
+      supplier_id           text,
+      enabled               boolean NOT NULL,
+      rationale_snapshot    text NOT NULL,
+      reason                text NOT NULL,
+      created_by_user_id    text,
+      created_by_email      text,
+      created_at            timestamptz NOT NULL DEFAULT now(),
+      updated_at            timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS supplier_q_overrides_org_scope_idx ON supplier_audit_question_overrides (organisation_id, template_id, supplier_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS supplier_q_overrides_question_idx ON supplier_audit_question_overrides (organisation_id, template_id, question_id)`,
+  );
+  // Unique guard at each scope. NULLs are not equal in standard B-tree
+  // unique indexes, so we use COALESCE-based expressions for org-level rows.
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS supplier_q_overrides_unique_org_idx
+    ON supplier_audit_question_overrides (organisation_id, template_id, question_id)
+    WHERE supplier_id IS NULL
+  `);
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS supplier_q_overrides_unique_supplier_idx
+    ON supplier_audit_question_overrides (organisation_id, template_id, question_id, supplier_id)
+    WHERE supplier_id IS NOT NULL
+  `);
+  await db.execute(
+    sql`ALTER TABLE supplier_audits ADD COLUMN IF NOT EXISTS questions_snapshot jsonb`,
+  );
+  logger.info("Supplier audit override schema ready");
+}
+
+/**
  * Idempotent self-heal for the compliance document archive
  * (lib/db/src/schema/document-archives.ts). Stores raw analytics PDFs as bytea
  * with a 6-month retention; metadata is retained after content purge.
@@ -165,6 +213,7 @@ ensureSessionTable()
   .then(() => ensureOrgBillingColumns())
   .then(() => ensureSsoSchema())
   .then(() => ensureDocumentArchiveSchema())
+  .then(() => ensureSupplierAuditOverrideSchema())
   .then(() => ensureCrmApiKeyTables())
   .then(() => ensureDefaultSupplierAuditTemplate())
   .then(() => {

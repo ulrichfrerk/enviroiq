@@ -1,4 +1,4 @@
-import { pgTable, text, boolean, timestamp, integer, real } from "drizzle-orm/pg-core";
+import { pgTable, text, boolean, timestamp, integer, real, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -72,6 +72,7 @@ export type Supplier = typeof suppliersTable.$inferSelect;
 //       weight: 35,
 //       questions: [
 //         { id: "ghg.measure", text: "...", type: "yesno", weight: 1,
+//           rationale: "Why this matters in plain language",
 //           evidenceRequired: false, evidenceGivesBonus: true }
 //       ]
 //     }, ...
@@ -156,6 +157,12 @@ export const supplierAuditsTable = pgTable("supplier_audits", {
   topRiskAnswer: text("top_risk_answer"),
   supportNeededAnswer: text("support_needed_answer"),
   willingToAlignAnswer: text("willing_to_align_answer"),
+
+  // Effective question set locked at send time. Array of question IDs that
+  // ARE applicable to this audit (after org + per-supplier overrides). null
+  // means "use full template" (back-compat for audits sent before overrides
+  // existed). In-flight audits are unaffected by later override changes.
+  questionsSnapshot: jsonb("questions_snapshot"),
 
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

@@ -89,6 +89,25 @@ async function autoCreateDueAudits(now: Date) {
     await db.update(suppliersTable)
       .set({ nextAuditDueAt: tentativeNext, updatedAt: new Date() })
       .where(eq(suppliersTable.id, sup.id));
+    // Fail-closed: if the effective question set cannot be computed we skip
+    // this supplier for this tick rather than ship the full template. The
+    // scheduler runs hourly so transient errors auto-recover; persistent
+    // failures stay visible in logs.
+    let questionsSnapshot: string[];
+    try {
+      const { computeEffectiveQuestionIds, getOverridesForOrg } =
+        await import("./supplier-question-overrides.js");
+      const schemaParsed = JSON.parse(tpl.schema);
+      const overrides = await getOverridesForOrg(sup.organisationId, tpl.id, sup.id);
+      questionsSnapshot = computeEffectiveQuestionIds(schemaParsed, overrides, sup.id);
+    } catch (err) {
+      logger.error({ err, supplierId: sup.id }, "Failed to compute effective question set — skipping auto-send this tick");
+      // Roll back the tentative nextAuditDueAt bump so we retry next cycle.
+      await db.update(suppliersTable)
+        .set({ nextAuditDueAt: sup.nextAuditDueAt, updatedAt: new Date() })
+        .where(eq(suppliersTable.id, sup.id));
+      continue;
+    }
     await db.insert(supplierAuditsTable).values({
       id,
       organisationId: sup.organisationId,
@@ -102,6 +121,7 @@ async function autoCreateDueAudits(now: Date) {
       dueAt,
       sentAt: new Date(),
       remindersSent: JSON.stringify([{ type: "30d", sentAt: now.toISOString() }] satisfies ReminderRecord[]),
+      questionsSnapshot,
     });
     const url = buildAuditUrl(id, secret);
     const dueLabel = dueAt.toLocaleDateString("en-NZ", { dateStyle: "long" });

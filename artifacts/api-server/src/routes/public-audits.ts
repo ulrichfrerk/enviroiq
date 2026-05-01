@@ -8,6 +8,7 @@ import { z } from "zod";
 import { recordSupplierAuditEvent } from "../lib/supplier-audit-events.js";
 import { scoreSupplierAudit, type Responses, type FilePresence } from "../lib/supplier-audit-scoring.js";
 import type { TemplateSchema } from "../lib/supplier-audit-default-template.js";
+import { filterSchemaToEffective } from "../lib/supplier-question-overrides.js";
 
 const router = Router();
 
@@ -51,6 +52,15 @@ router.get("/:auditId/:token", async (req, res) => {
     const files = await db.select().from(supplierAuditFilesTable)
       .where(eq(supplierAuditFilesTable.auditId, audit.id));
 
+    const fullSchema = JSON.parse(template.schema) as TemplateSchema;
+    const snapshot = (audit.questionsSnapshot as string[] | null) ?? null;
+    const effectiveSchema = filterSchemaToEffective(fullSchema, snapshot);
+    const customised = !!snapshot && (() => {
+      let totalQ = 0;
+      for (const s of fullSchema.sections) totalQ += s.questions.length;
+      return snapshot.length < totalQ;
+    })();
+
     res.json({
       audit: {
         id: audit.id,
@@ -75,7 +85,8 @@ router.get("/:auditId/:token", async (req, res) => {
           governance: template.weightGovernance,
           supplyChain: template.weightSupplyChain,
         },
-        schema: JSON.parse(template.schema),
+        schema: effectiveSchema,
+        customised,
       },
       files: files.map((f) => ({ id: f.id, questionId: f.questionId, filename: f.filename, sizeBytes: f.sizeBytes, mimeType: f.mimeType })),
     });
@@ -190,7 +201,10 @@ router.post("/:auditId/:token/submit", async (req, res) => {
 
     const template = await db.query.supplierAuditTemplatesTable.findFirst({ where: eq(supplierAuditTemplatesTable.id, audit.templateId) });
     if (!template) { res.status(500).json({ error: "Template missing" }); return; }
-    const schemaParsed = JSON.parse(template.schema) as TemplateSchema;
+    const schemaFull = JSON.parse(template.schema) as TemplateSchema;
+    // Score only against the effective set locked at send-time.
+    const snapshotSubmit = (audit.questionsSnapshot as string[] | null) ?? null;
+    const schemaParsed = filterSchemaToEffective(schemaFull, snapshotSubmit);
 
     const files = await db.select().from(supplierAuditFilesTable)
       .where(eq(supplierAuditFilesTable.auditId, audit.id));

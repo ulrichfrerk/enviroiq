@@ -125,20 +125,37 @@ export function scoreSupplierAudit(
 ): ScoreResult {
   const flags: ScoreFlag[] = [];
   const breakdown: Record<string, number> = {};
+  // Track which sections actually have at least one applicable scored question
+  // so we can renormalise weights when a section is empty for this audit.
+  const sectionHasScored: Record<string, boolean> = {};
 
   // Score each scored section.
   for (const section of schema.sections) {
     if (section.weight === 0) continue;
+    const scoredCount = section.questions.filter((q) => q.weight > 0).length;
+    sectionHasScored[section.id] = scoredCount > 0;
+    if (scoredCount === 0) continue; // section is fully disabled — skip from weighted sum
     const pct = scoreSection(section, responses, files, flags);
     breakdown[section.id] = Math.round(pct);
   }
 
+  // Normalised weighting: only count sections that contributed a score.
+  const w = {
+    environmental: sectionHasScored.environmental ? weights.environmental : 0,
+    social: sectionHasScored.social ? weights.social : 0,
+    governance: sectionHasScored.governance ? weights.governance : 0,
+    supplyChain: sectionHasScored.supplyChain ? weights.supplyChain : 0,
+  };
+  const totalWeight = w.environmental + w.social + w.governance + w.supplyChain;
+
   const total =
-    ((breakdown.environmental ?? 0) * weights.environmental +
-      (breakdown.social ?? 0) * weights.social +
-      (breakdown.governance ?? 0) * weights.governance +
-      (breakdown.supplyChain ?? 0) * weights.supplyChain) /
-    Math.max(1, weights.environmental + weights.social + weights.governance + weights.supplyChain);
+    totalWeight === 0
+      ? 0
+      : ((breakdown.environmental ?? 0) * w.environmental +
+          (breakdown.social ?? 0) * w.social +
+          (breakdown.governance ?? 0) * w.governance +
+          (breakdown.supplyChain ?? 0) * w.supplyChain) /
+        totalWeight;
 
   const esgScore = Math.round(total);
   const riskLevel: ScoreResult["riskLevel"] =

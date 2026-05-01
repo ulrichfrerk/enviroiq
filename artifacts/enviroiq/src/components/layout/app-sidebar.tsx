@@ -67,6 +67,7 @@ const groups: { label: string; items: NavItem[] }[] = [
     label: "Supplier Assurance",
     items: [
       { title: "Suppliers", url: "/suppliers", icon: Truck },
+      { title: "Audit customisation", url: "/audit-customisation", icon: ClipboardCheck },
       { title: "Supplier ESG Report", url: "/supplier-reports", icon: ClipboardCheck },
     ],
   },
