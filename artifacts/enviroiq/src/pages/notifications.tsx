@@ -4,10 +4,10 @@
 // no shared component because the inbox is a richer table whereas the bell
 // is a compact summary.
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Link } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Bell, Check, X, AlertCircle, AlertTriangle, Info, ExternalLink } from "lucide-react";
+import { Bell, Check, X, AlertCircle, AlertTriangle, Info, ExternalLink, ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -72,17 +72,25 @@ export default function NotificationsPage() {
   const [severity, setSeverity] = useState<string>("all");
   const [status, setStatus] = useState<string>("all");
   const [category, setCategory] = useState<string>("all");
+  const [page, setPage] = useState<number>(1);
+  const PAGE_SIZE = 25;
+
+  // Reset to page 1 whenever a filter changes — otherwise a filter applied
+  // on page 3 can land on an empty page.
+  useEffect(() => {
+    setPage(1);
+  }, [severity, status, category]);
 
   const queryKey = useMemo(
-    () => ["notifications", "page", orgId, severity, status, category] as const,
-    [orgId, severity, status, category],
+    () => ["notifications", "page", orgId, severity, status, category, page] as const,
+    [orgId, severity, status, category, page],
   );
   const unreadKey = ["notifications", "unread-count", orgId] as const;
 
   const { data, isLoading } = useQuery<ListResponse>({
     queryKey,
     queryFn: () => {
-      const params = new URLSearchParams({ limit: "50" });
+      const params = new URLSearchParams({ limit: String(PAGE_SIZE), page: String(page) });
       if (severity !== "all") params.set("severity", severity);
       if (status !== "all") params.set("status", status);
       if (category !== "all") params.set("category", category);
@@ -90,6 +98,8 @@ export default function NotificationsPage() {
     },
     enabled: !!orgId,
   });
+
+  const totalPages = Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE));
 
   // Build the category options dynamically from whatever the inbox has
   // currently surfaced. Keeps the filter useful as new failure sources are
@@ -181,6 +191,7 @@ export default function NotificationsPage() {
               <SelectContent>
                 <SelectItem value="all">All</SelectItem>
                 <SelectItem value="unread">Unread only</SelectItem>
+                <SelectItem value="read">Read only</SelectItem>
               </SelectContent>
             </Select>
             <Select value={category} onValueChange={setCategory}>
@@ -276,6 +287,44 @@ export default function NotificationsPage() {
             </ul>
           )}
         </CardContent>
+        {(data?.total ?? 0) > PAGE_SIZE && (
+          <div
+            className="flex items-center justify-between gap-3 px-5 py-3 border-t border-border/60 text-xs text-muted-foreground"
+            data-testid="notifications-pagination"
+          >
+            <span>
+              Showing {(page - 1) * PAGE_SIZE + 1}–
+              {Math.min(page * PAGE_SIZE, data?.total ?? 0)} of {data?.total ?? 0}
+            </span>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 px-2"
+                disabled={page <= 1 || isLoading}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                data-testid="notifications-page-prev"
+              >
+                <ChevronLeft className="w-3 h-3" />
+                Prev
+              </Button>
+              <span className="font-medium text-foreground">
+                Page {page} of {totalPages}
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 px-2"
+                disabled={page >= totalPages || isLoading}
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                data-testid="notifications-page-next"
+              >
+                Next
+                <ChevronRight className="w-3 h-3" />
+              </Button>
+            </div>
+          </div>
+        )}
       </Card>
     </div>
   );

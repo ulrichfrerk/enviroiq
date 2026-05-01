@@ -15,7 +15,7 @@
 
 import { Router } from "express";
 import { db, notificationsTable } from "@workspace/db";
-import { eq, and, desc, isNull, count, inArray } from "drizzle-orm";
+import { eq, and, desc, isNull, isNotNull, count, inArray } from "drizzle-orm";
 import { requireAuth, requireOrgAccess } from "../lib/auth.js";
 
 const router = Router({ mergeParams: true });
@@ -42,6 +42,8 @@ router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
     if (category) conditions.push(eq(notificationsTable.category, category));
     if (severity) conditions.push(eq(notificationsTable.severity, severity));
     if (status === "unread") conditions.push(isNull(notificationsTable.readAt));
+    if (status === "read") conditions.push(isNotNull(notificationsTable.readAt));
+    // status === "all" or undefined → no additional filter
 
     const [items, [{ total }]] = await Promise.all([
       db.select().from(notificationsTable)

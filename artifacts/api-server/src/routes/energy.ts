@@ -236,18 +236,20 @@ router.post("/upload", requireAuth, requireOrgAdmin, upload.single("file"), asyn
       capturedByEmail: req.user?.email ?? null,
     });
 
-    await logAudit({
+    const uploadAuditId = await logAudit({
       req,
       action: "energy_bill.upload",
       resourceType: "energy_reading",
       resourceId: reading.id,
-      details: { filename: req.file.originalname, period: `${periodStart.toISOString().slice(0, 7)}`, emissionMethod: method, autoDetected: !utilityTypeOverride },
+      details: { filename: req.file.originalname, period: `${periodStart.toISOString().slice(0, 7)}`, emissionMethod: method, autoDetected: !utilityTypeOverride, reviewFlags: parsed.reviewFlags },
     });
 
     // If the parser surfaced any review flags (low confidence, scanned PDF,
     // missing fields), queue a warn-level notification. Goes into the daily
     // 8am NZ digest rather than firing immediately so a 40-bill batch
-    // produces one summary email per admin instead of forty.
+    // produces one summary email per admin instead of forty. Dedupe is
+    // keyed on the audit row id so the same upload event never produces
+    // two warn rows even if the route is replayed.
     if (parsed.reviewFlags.length > 0) {
       void notify({
         organisationId: orgId,
@@ -256,8 +258,8 @@ router.post("/upload", requireAuth, requireOrgAdmin, upload.single("file"), asyn
         title: "Energy bill needs review",
         body: `"${req.file.originalname}" was uploaded but flagged for review:\n${parsed.reviewFlags.map((f) => `- ${f}`).join("\n")}`,
         linkUrl: "/energy",
-        sourceAuditId: reading.id,
-        dedupeKey: `upload.energy_bill.review:${reading.id}`,
+        sourceAuditId: uploadAuditId,
+        dedupeKey: `upload.energy_bill.review:${uploadAuditId}`,
         context: { readingId: reading.id, filename: req.file.originalname, confidence: parsed.confidence, reviewFlags: parsed.reviewFlags },
       });
     }
@@ -280,12 +282,20 @@ router.post("/upload", requireAuth, requireOrgAdmin, upload.single("file"), asyn
     });
   } catch (err) {
     req.log.error({ err }, "Upload energy bill failed");
-    // Notify org admins — single bill upload crashed entirely. Dedupe per
-    // (org, file, day) so a user retrying the same broken PDF in a tight
-    // loop doesn't spam the inbox.
+    // Notify org admins — single bill upload crashed entirely. We persist
+    // a failure audit row first and dedupe the notification on its id, so
+    // every distinct failure event produces exactly one notification row
+    // and the audit log row is the source of truth the email links back to.
     const orgId = req.params.orgId as string;
     const filename = req.file?.originalname ?? "unknown.pdf";
-    const day = new Date().toISOString().slice(0, 10);
+    const failAuditId = await logAudit({
+      req,
+      action: "energy_bill.upload",
+      outcome: "failure",
+      resourceType: "energy_reading",
+      organisationId: orgId,
+      details: { filename, error: err instanceof Error ? err.message : String(err) },
+    });
     void notify({
       organisationId: orgId,
       category: "upload.energy_bill",
@@ -293,7 +303,8 @@ router.post("/upload", requireAuth, requireOrgAdmin, upload.single("file"), asyn
       title: "Energy bill upload failed",
       body: `Uploading "${filename}" failed and no reading was created. Please retry, or contact support if the issue persists.`,
       linkUrl: "/energy",
-      dedupeKey: `upload.energy_bill:${orgId}:${filename}:${day}`,
+      sourceAuditId: failAuditId,
+      dedupeKey: `upload.energy_bill:${failAuditId}`,
       context: { filename, error: err instanceof Error ? err.message : String(err) },
     });
     res.status(500).json({ error: "Internal Server Error", message: "Failed to upload bill" });

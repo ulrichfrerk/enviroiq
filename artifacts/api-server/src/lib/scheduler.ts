@@ -133,15 +133,31 @@ export function startScheduler(): void {
   }, PRUNE_INTERVAL_MS);
   logger.info({ intervalMs: PRUNE_INTERVAL_MS, retentionMonths: 6 }, "Document archive prune job scheduled");
 
-  // Notification digest — every hour we check whether the local time is 8am
-  // (NZ — Pacific/Auckland) and, if so, send a single rollup email per
-  // recipient summarising every severity=warn notification still pending
-  // (no email_sent_at). severity=error is dispatched immediately by notify()
-  // and is not part of the digest. The hourly cadence keeps it robust to DST
-  // transitions without needing a cron string.
-  let lastDigestDay: string | null = null;
-  const digestTick = async () => {
+  // Notification digest — every hour we walk every active organisation and,
+  // for any org whose *local* time is currently 8am (using its
+  // organisations.default_timezone column, defaulting to Pacific/Auckland),
+  // send a single rollup email per recipient summarising every severity=warn
+  // notification still pending (no email_sent_at). A per-org `lastDigestDay`
+  // map stops us from sending twice in the same local day if the tick
+  // overlaps. severity=error is dispatched immediately by notify() and is
+  // not part of the digest. Hourly cadence keeps the scheduler robust to
+  // DST transitions and per-org timezone differences without a cron string.
+  const lastDigestDayByOrg = new Map<string, string>();
+  const orgLocalParts = (timezone: string) => {
     try {
+      const fmt = new Intl.DateTimeFormat("en-NZ", {
+        timeZone: timezone,
+        hour: "2-digit",
+        hour12: false,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      });
+      const parts = Object.fromEntries(fmt.formatToParts(new Date()).map((p) => [p.type, p.value]));
+      return { hour: Number(parts.hour), ymd: `${parts.year}-${parts.month}-${parts.day}` };
+    } catch {
+      // Fall back to NZ if the timezone string is bad — better than silently
+      // dropping the digest for that org.
       const fmt = new Intl.DateTimeFormat("en-NZ", {
         timeZone: "Pacific/Auckland",
         hour: "2-digit",
@@ -151,11 +167,21 @@ export function startScheduler(): void {
         day: "2-digit",
       });
       const parts = Object.fromEntries(fmt.formatToParts(new Date()).map((p) => [p.type, p.value]));
-      const hour = Number(parts.hour);
-      const ymd = `${parts.year}-${parts.month}-${parts.day}`;
-      if (hour === 8 && lastDigestDay !== ymd) {
-        lastDigestDay = ymd;
-        await sendNotificationDigests();
+      return { hour: Number(parts.hour), ymd: `${parts.year}-${parts.month}-${parts.day}` };
+    }
+  };
+  const digestTick = async () => {
+    try {
+      const orgs = await db
+        .select({ id: organisationsTable.id, defaultTimezone: organisationsTable.defaultTimezone })
+        .from(organisationsTable);
+      for (const org of orgs) {
+        const tz = org.defaultTimezone || "Pacific/Auckland";
+        const { hour, ymd } = orgLocalParts(tz);
+        if (hour !== 8) continue;
+        if (lastDigestDayByOrg.get(org.id) === ymd) continue;
+        lastDigestDayByOrg.set(org.id, ymd);
+        await sendNotificationDigests({ organisationId: org.id });
       }
     } catch (err) {
       logger.warn({ err }, "Notification digest tick failed");
@@ -163,7 +189,7 @@ export function startScheduler(): void {
   };
   void digestTick();
   notificationDigestHandle = setInterval(() => { void digestTick(); }, 60 * 60 * 1000);
-  logger.info("Notification daily digest scheduler started (8am NZ)");
+  logger.info("Notification daily digest scheduler started (per-org local 8am)");
 }
 
 export function stopScheduler(): void {

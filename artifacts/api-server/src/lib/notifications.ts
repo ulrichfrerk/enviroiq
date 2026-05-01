@@ -260,11 +260,22 @@ export async function notify(input: NotifyInput): Promise<NotifyResult> {
 }
 
 /**
- * Daily digest tick. Picks every notification row created since the last
- * tick where severity=warn AND email_sent_at IS NULL, groups by recipient,
- * and sends one rollup email per user. Called from scheduler.ts at 8am NZ.
+ * Daily digest tick. Picks every notification row where severity=warn AND
+ * email_sent_at IS NULL, optionally restricted to a single organisationId
+ * (used by the per-org-time scheduler to fire at the right local 8am for
+ * each org), groups by recipient, and sends one rollup email per user.
  */
-export async function sendNotificationDigests(): Promise<{ users: number; rows: number }> {
+export async function sendNotificationDigests(
+  options: { organisationId?: string } = {},
+): Promise<{ users: number; rows: number }> {
+  const filters = [
+    eq(notificationsTable.severity, "warn"),
+    isNull(notificationsTable.emailSentAt),
+    isNull(notificationsTable.dismissedAt),
+  ];
+  if (options.organisationId) {
+    filters.push(eq(notificationsTable.organisationId, options.organisationId));
+  }
   const pending = await db
     .select({
       id: notificationsTable.id,
@@ -277,13 +288,7 @@ export async function sendNotificationDigests(): Promise<{ users: number; rows: 
       createdAt: notificationsTable.createdAt,
     })
     .from(notificationsTable)
-    .where(
-      and(
-        eq(notificationsTable.severity, "warn"),
-        isNull(notificationsTable.emailSentAt),
-        isNull(notificationsTable.dismissedAt),
-      ),
-    );
+    .where(and(...filters));
 
   if (pending.length === 0) return { users: 0, rows: 0 };
 

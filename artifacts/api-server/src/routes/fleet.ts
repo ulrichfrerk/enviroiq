@@ -369,13 +369,13 @@ webhookRouter.post("/navman", async (req, res) => {
     const { deviceId, eventType, latitude, longitude, speed, odometer, timestamp, apiKey } = req.body;
     const org = await validateWebhookSecret(apiKey);
     if (!org) {
-      await logAudit({ req, action: "webhook.fleet.navman", outcome: "failure", details: { reason: "invalid_api_key", deviceId } });
-      // Alert platform ops when telematics webhooks arrive with bad credentials.
-      // We don't know which org was the intended target (the api key didn't
-      // match), so use the platform-fallback path by passing a sentinel orgId
-      // — resolveRecipients() finds zero org admins and falls back to platform
-      // super_admins automatically. Daily-cap the dedupe so a misconfigured
-      // provider sending every 30s only generates one alert per day.
+      // Persist audit row first; reuse its id as the notification's
+      // sourceAuditId so the alert links back to the underlying event.
+      // Dedupe stays daily (one alert per day per provider) — the first
+      // rejected webhook of the day "wins" the unique dedupe slot and
+      // captures the audit anchor; later same-day rejections still get
+      // their own audit rows but no additional notifications.
+      const auditId = await logAudit({ req, action: "webhook.fleet.navman", outcome: "failure", details: { reason: "invalid_api_key", deviceId } });
       void notify({
         organisationId: "PLATFORM",
         category: "webhook.fleet.invalid_api_key",
@@ -383,6 +383,7 @@ webhookRouter.post("/navman", async (req, res) => {
         title: "Telematics webhook rejected — bad credentials",
         body: `A Navman telematics webhook was rejected because the API key did not match any organisation. If a provider has just been onboarded, double-check the api key configured in the integration.`,
         linkUrl: "/fleet",
+        sourceAuditId: auditId,
         dedupeKey: `webhook.fleet.invalid_api_key:navman:${new Date().toISOString().slice(0, 10)}`,
         context: { provider: "navman", deviceId, ip: req.ip, userAgent: req.get("user-agent") },
       });
@@ -392,7 +393,7 @@ webhookRouter.post("/navman", async (req, res) => {
 
     const vehicle = await findVehicleByDeviceId(deviceId, org.id);
     if (!vehicle) {
-      await logAudit({ req, action: "webhook.fleet.navman", outcome: "failure", details: { reason: "device_not_registered", deviceId }, organisationId: org.id });
+      const auditId = await logAudit({ req, action: "webhook.fleet.navman", outcome: "failure", details: { reason: "device_not_registered", deviceId }, organisationId: org.id });
       // Daily-capped warn: a broken telematics integration sending a wrong
       // device id every 30s would otherwise generate thousands of rows.
       void notify({
@@ -402,6 +403,7 @@ webhookRouter.post("/navman", async (req, res) => {
         title: "Telematics event ignored — device not registered",
         body: `A Navman telematics event arrived for device "${deviceId}" but no vehicle is registered with that device id. Add the device under Fleet → Vehicles to start capturing emissions.`,
         linkUrl: "/fleet",
+        sourceAuditId: auditId,
         dedupeKey: `webhook.fleet.device_not_registered:${org.id}:navman:${deviceId}:${new Date().toISOString().slice(0, 10)}`,
         context: { provider: "navman", deviceId },
       });
@@ -436,7 +438,7 @@ webhookRouter.post("/blackhawk", async (req, res) => {
     const { unit_id, event, lat, lng, spd, dist, ts, token } = req.body;
     const org = await validateWebhookSecret(token);
     if (!org) {
-      await logAudit({ req, action: "webhook.fleet.blackhawk", outcome: "failure", details: { reason: "invalid_token", deviceId: unit_id } });
+      const auditId = await logAudit({ req, action: "webhook.fleet.blackhawk", outcome: "failure", details: { reason: "invalid_token", deviceId: unit_id } });
       void notify({
         organisationId: "PLATFORM",
         category: "webhook.fleet.invalid_api_key",
@@ -444,6 +446,7 @@ webhookRouter.post("/blackhawk", async (req, res) => {
         title: "Telematics webhook rejected — bad credentials",
         body: `A Blackhawk telematics webhook was rejected because the token did not match any organisation. If a provider has just been onboarded, double-check the token configured in the integration.`,
         linkUrl: "/fleet",
+        sourceAuditId: auditId,
         dedupeKey: `webhook.fleet.invalid_api_key:blackhawk:${new Date().toISOString().slice(0, 10)}`,
         context: { provider: "blackhawk", deviceId: unit_id, ip: req.ip, userAgent: req.get("user-agent") },
       });
@@ -453,7 +456,7 @@ webhookRouter.post("/blackhawk", async (req, res) => {
 
     const vehicle = await findVehicleByDeviceId(unit_id, org.id);
     if (!vehicle) {
-      await logAudit({ req, action: "webhook.fleet.blackhawk", outcome: "failure", details: { reason: "device_not_registered", deviceId: unit_id }, organisationId: org.id });
+      const auditId = await logAudit({ req, action: "webhook.fleet.blackhawk", outcome: "failure", details: { reason: "device_not_registered", deviceId: unit_id }, organisationId: org.id });
       void notify({
         organisationId: org.id,
         category: "webhook.fleet.device_not_registered",
@@ -461,6 +464,7 @@ webhookRouter.post("/blackhawk", async (req, res) => {
         title: "Telematics event ignored — device not registered",
         body: `A Blackhawk telematics event arrived for device "${unit_id}" but no vehicle is registered with that device id. Add the device under Fleet → Vehicles to start capturing emissions.`,
         linkUrl: "/fleet",
+        sourceAuditId: auditId,
         dedupeKey: `webhook.fleet.device_not_registered:${org.id}:blackhawk:${unit_id}:${new Date().toISOString().slice(0, 10)}`,
         context: { provider: "blackhawk", deviceId: unit_id },
       });
@@ -496,7 +500,7 @@ webhookRouter.post("/generic", async (req, res) => {
     const { deviceId, eventType, latitude, longitude, speedKmh, distanceKm, fuelLitres, timestamp, apiKey } = req.body;
     const org = await validateWebhookSecret(apiKey);
     if (!org) {
-      await logAudit({ req, action: "webhook.fleet.generic", outcome: "failure", details: { reason: "invalid_api_key", deviceId } });
+      const auditId = await logAudit({ req, action: "webhook.fleet.generic", outcome: "failure", details: { reason: "invalid_api_key", deviceId } });
       void notify({
         organisationId: "PLATFORM",
         category: "webhook.fleet.invalid_api_key",
@@ -504,6 +508,7 @@ webhookRouter.post("/generic", async (req, res) => {
         title: "Telematics webhook rejected — bad credentials",
         body: `A telematics webhook (generic provider) was rejected because the API key did not match any organisation. If a provider has just been onboarded, double-check the api key configured in the integration.`,
         linkUrl: "/fleet",
+        sourceAuditId: auditId,
         dedupeKey: `webhook.fleet.invalid_api_key:generic:${new Date().toISOString().slice(0, 10)}`,
         context: { provider: "generic", deviceId, ip: req.ip, userAgent: req.get("user-agent") },
       });
@@ -513,7 +518,7 @@ webhookRouter.post("/generic", async (req, res) => {
 
     const vehicle = await findVehicleByDeviceId(deviceId, org.id);
     if (!vehicle) {
-      await logAudit({ req, action: "webhook.fleet.generic", outcome: "failure", details: { reason: "device_not_registered", deviceId }, organisationId: org.id });
+      const auditId = await logAudit({ req, action: "webhook.fleet.generic", outcome: "failure", details: { reason: "device_not_registered", deviceId }, organisationId: org.id });
       void notify({
         organisationId: org.id,
         category: "webhook.fleet.device_not_registered",
@@ -521,6 +526,7 @@ webhookRouter.post("/generic", async (req, res) => {
         title: "Telematics event ignored — device not registered",
         body: `A telematics event arrived for device "${deviceId}" but no vehicle is registered with that device id. Add the device under Fleet → Vehicles to start capturing emissions.`,
         linkUrl: "/fleet",
+        sourceAuditId: auditId,
         dedupeKey: `webhook.fleet.device_not_registered:${org.id}:generic:${deviceId}:${new Date().toISOString().slice(0, 10)}`,
         context: { provider: "generic", deviceId },
       });
@@ -648,7 +654,7 @@ router.post("/import-km", requireAuth, requireOrgAdmin, async (req, res) => {
       imported++;
     }
 
-    await logAudit({
+    const importAuditId = await logAudit({
       req,
       action: "fleet.import_km",
       outcome: "success",
@@ -657,8 +663,10 @@ router.post("/import-km", requireAuth, requireOrgAdmin, async (req, res) => {
     });
 
     // Notify admins when one or more rows in the CSV import were skipped.
-    // dedupeKey includes the imported/error counts so re-running an import
-    // with the same shape still notifies (different shape => different key).
+    // The audit row id is the deterministic event anchor: every import
+    // attempt is its own audit row, so the same import never produces
+    // two notifications even if the route is replayed, and a re-import
+    // with the same shape still notifies (different audit id).
     if (errors.length > 0) {
       const errorPreview = errors.slice(0, 5).join("\n");
       const more = errors.length > 5 ? `\n…and ${errors.length - 5} more` : "";
@@ -669,7 +677,8 @@ router.post("/import-km", requireAuth, requireOrgAdmin, async (req, res) => {
         title: `Fleet KM import — ${errors.length} row${errors.length === 1 ? "" : "s"} skipped`,
         body: `${imported} row(s) imported, ${errors.length} skipped due to bad data:\n${errorPreview}${more}`,
         linkUrl: "/fleet",
-        dedupeKey: `import.fleet_csv:${orgId}:${imported}:${errors.length}:${new Date().toISOString().slice(0, 19)}`,
+        sourceAuditId: importAuditId,
+        dedupeKey: `import.fleet_csv:${importAuditId}`,
         context: { imported, created: created.length, errorCount: errors.length, errors: errors.slice(0, 50) },
       });
     }
@@ -678,6 +687,16 @@ router.post("/import-km", requireAuth, requireOrgAdmin, async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "Fleet KM import failed");
     const orgId = req.params.orgId as string;
+    // Persist a failure audit row first so the notification has a
+    // canonical event anchor; daily-cap the alert via dedupe so a
+    // persistently broken integration doesn't spam admins.
+    const failAuditId = await logAudit({
+      req,
+      action: "fleet.import_km",
+      outcome: "failure",
+      organisationId: orgId,
+      details: { error: err instanceof Error ? err.message : String(err) },
+    });
     void notify({
       organisationId: orgId,
       category: "import.fleet_csv",
@@ -685,6 +704,7 @@ router.post("/import-km", requireAuth, requireOrgAdmin, async (req, res) => {
       title: "Fleet KM import failed",
       body: `The fleet KM CSV import crashed and no rows were saved. Please retry, or contact support if the issue persists.`,
       linkUrl: "/fleet",
+      sourceAuditId: failAuditId,
       // Cap error notifications to once per org per day per source —
       // repeated identical crashes shouldn't spam admins, but we still
       // want a fresh alert if the issue is still failing tomorrow.

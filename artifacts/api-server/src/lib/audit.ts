@@ -60,12 +60,13 @@ export async function logAudit({
   correlationId?: string;
   sourceSystem?: string;
 }) {
+  const auditId = uuidv4();
   try {
     const session = req?.session;
     const resolvedActorType =
       actorType ?? (req?.crmApiKey ? "api_key" : session?.userId ? "user" : "system");
     await db.insert(auditLogsTable).values({
-      id: uuidv4(),
+      id: auditId,
       organisationId: organisationId ?? session?.organisationId,
       userId: userId ?? session?.userId,
       userEmail: userEmail ?? session?.email,
@@ -85,7 +86,9 @@ export async function logAudit({
       sourceSystem: sourceSystem ?? SOURCE_SYSTEM,
       outcome,
     });
+    return auditId;
   } catch {
     // Audit log failures must never crash the app
+    return auditId;
   }
 }
