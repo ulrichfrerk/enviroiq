@@ -337,14 +337,18 @@ export default function Reports() {
                   formatter={(v: number, name: string) => [`${v.toFixed(3)} tCO₂e`, name]}
                 />
                 <Legend wrapperStyle={{ fontSize: 12, paddingTop: 8 }} />
-                {chartYears.prev && <>
+                {chartYears.prev && (
                   <Bar dataKey={`${chartYears.prev} Fleet`}  stackId="prev" fill="#94a3b8" radius={[0,0,0,0]} />
+                )}
+                {chartYears.prev && (
                   <Bar dataKey={`${chartYears.prev} Energy`} stackId="prev" fill="#cbd5e1" radius={[3,3,0,0]} />
-                </>}
-                {chartYears.cur && <>
+                )}
+                {chartYears.cur && (
                   <Bar dataKey={`${chartYears.cur} Fleet`}  stackId="cur" fill="#16a34a" radius={[0,0,0,0]} />
+                )}
+                {chartYears.cur && (
                   <Bar dataKey={`${chartYears.cur} Energy`} stackId="cur" fill="#4ade80" radius={[3,3,0,0]} />
-                </>}
+                )}
               </BarChart>
             </ResponsiveContainer>
           )}
