@@ -11,6 +11,7 @@ import {
   Trash2,
   Loader2,
   Eye,
+  AlertTriangle,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -20,7 +21,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
-import { format } from "date-fns";
+import { format, differenceInCalendarDays } from "date-fns";
 import { useListUsers } from "@workspace/api-client-react";
 import { enrollPasskey } from "@/lib/webauthn";
 
@@ -29,6 +30,7 @@ interface PasskeySummary {
   deviceType: string | null;
   backedUp: boolean;
   createdAt: string;
+  lastUsedAt: string | null;
 }
 
 interface SsoIdentitySummary {
@@ -36,7 +38,45 @@ interface SsoIdentitySummary {
   provider: "google" | "microsoft" | string;
   providerEmail: string;
   linkedAt: string;
-  lastUsedAt: string;
+  lastUsedAt: string | null;
+}
+
+// Sign-in methods that haven't been touched in this many days are flagged as
+// stale on the Account page so the user notices and can remove them. 90 days
+// is the same threshold used by industry guidance (NIST 800-63B "infrequently
+// used") and matches what other security dashboards show.
+const STALE_THRESHOLD_DAYS = 90;
+
+/**
+ * Returns the number of whole days since `iso` (or null if `iso` is null).
+ * We use calendar days rather than exact 24h windows so "today" is always 0.
+ */
+function daysSince(iso: string | null): number | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return differenceInCalendarDays(new Date(), d);
+}
+
+/**
+ * "Last used Mar 14, 2026" / "Never used". Takes the last-used timestamp and
+ * the row's creation timestamp so we can hint that brand-new methods that
+ * haven't been signed in with yet are merely fresh, not abandoned.
+ */
+function lastUsedLabel(lastUsedAt: string | null): string {
+  if (!lastUsedAt) return "Never used";
+  return `Last used ${format(new Date(lastUsedAt), "MMM d, yyyy")}`;
+}
+
+/**
+ * Stale = last-used is at least STALE_THRESHOLD_DAYS old. Methods that have
+ * never been used count as stale only once the row itself is older than the
+ * threshold — that way a freshly-enrolled passkey isn't yelled at on day 1.
+ */
+function isStale(lastUsedAt: string | null, createdAt: string): boolean {
+  const reference = lastUsedAt ?? createdAt;
+  const age = daysSince(reference);
+  return age !== null && age >= STALE_THRESHOLD_DAYS;
 }
 
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
@@ -152,8 +192,34 @@ export default function Account() {
   const roleLabel = (role: string) =>
     role.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
-  const passkeys = passkeysQuery.data ?? [];
-  const identities = identitiesQuery.data ?? [];
+  // Stale items are surfaced first so users see what to deal with without
+  // hunting. Within a group we keep the oldest-used at the top so the worst
+  // offenders are the most prominent.
+  const passkeys = useMemo(() => {
+    const list = [...(passkeysQuery.data ?? [])];
+    list.sort((a, b) => {
+      const aStale = isStale(a.lastUsedAt, a.createdAt) ? 0 : 1;
+      const bStale = isStale(b.lastUsedAt, b.createdAt) ? 0 : 1;
+      if (aStale !== bStale) return aStale - bStale;
+      const aRef = a.lastUsedAt ?? a.createdAt;
+      const bRef = b.lastUsedAt ?? b.createdAt;
+      return new Date(aRef).getTime() - new Date(bRef).getTime();
+    });
+    return list;
+  }, [passkeysQuery.data]);
+
+  const identities = useMemo(() => {
+    const list = [...(identitiesQuery.data ?? [])];
+    list.sort((a, b) => {
+      const aStale = isStale(a.lastUsedAt, a.linkedAt) ? 0 : 1;
+      const bStale = isStale(b.lastUsedAt, b.linkedAt) ? 0 : 1;
+      if (aStale !== bStale) return aStale - bStale;
+      const aRef = a.lastUsedAt ?? a.linkedAt;
+      const bRef = b.lastUsedAt ?? b.linkedAt;
+      return new Date(aRef).getTime() - new Date(bRef).getTime();
+    });
+    return list;
+  }, [identitiesQuery.data]);
 
   // "Last sign-in path" guard mirrors the server: an unlink would strand the
   // user only if they have zero passkeys AND only one SSO identity remaining.
@@ -263,32 +329,62 @@ export default function Account() {
             </div>
           ) : (
             <ul className="space-y-2">
-              {passkeys.map((pk) => (
-                <li
-                  key={pk.id}
-                  className="flex items-center justify-between gap-3 rounded-lg border border-border/50 bg-muted/10 px-4 py-3"
-                  data-testid={`passkey-${pk.id}`}
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-9 h-9 rounded-md bg-primary/10 flex items-center justify-center flex-shrink-0">
-                      <KeyRound className="w-4 h-4 text-primary" />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="text-sm font-medium text-foreground truncate">
-                        {pk.deviceType === "multiDevice" ? "Synced passkey" : "Device passkey"}
-                        {pk.backedUp && (
-                          <Badge variant="secondary" className="ml-2 text-[10px] py-0">
-                            Cloud-synced
-                          </Badge>
+              {passkeys.map((pk) => {
+                const stale = isStale(pk.lastUsedAt, pk.createdAt);
+                return (
+                  <li
+                    key={pk.id}
+                    className={
+                      stale
+                        ? "flex items-center justify-between gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3"
+                        : "flex items-center justify-between gap-3 rounded-lg border border-border/50 bg-muted/10 px-4 py-3"
+                    }
+                    data-testid={`passkey-${pk.id}`}
+                    data-stale={stale ? "true" : "false"}
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div
+                        className={
+                          stale
+                            ? "w-9 h-9 rounded-md bg-amber-500/20 flex items-center justify-center flex-shrink-0"
+                            : "w-9 h-9 rounded-md bg-primary/10 flex items-center justify-center flex-shrink-0"
+                        }
+                      >
+                        {stale ? (
+                          <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                        ) : (
+                          <KeyRound className="w-4 h-4 text-primary" />
                         )}
                       </div>
-                      <div className="text-xs text-muted-foreground">
-                        Added {format(new Date(pk.createdAt), "MMM d, yyyy")}
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium text-foreground truncate">
+                          {pk.deviceType === "multiDevice" ? "Synced passkey" : "Device passkey"}
+                          {pk.backedUp && (
+                            <Badge variant="secondary" className="ml-2 text-[10px] py-0">
+                              Cloud-synced
+                            </Badge>
+                          )}
+                          {stale && (
+                            <Badge
+                              variant="outline"
+                              className="ml-2 text-[10px] py-0 border-amber-500/50 text-amber-700 dark:text-amber-300"
+                              data-testid={`passkey-stale-${pk.id}`}
+                            >
+                              Stale
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          Added {format(new Date(pk.createdAt), "MMM d, yyyy")} ·{" "}
+                          <span data-testid={`passkey-last-used-${pk.id}`}>
+                            {lastUsedLabel(pk.lastUsedAt)}
+                          </span>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                </li>
-              ))}
+                  </li>
+                );
+              })}
             </ul>
           )}
 
@@ -339,25 +435,50 @@ export default function Account() {
             <ul className="space-y-2">
               {identities.map((id) => {
                 const lastBlock = isLastSignInPath(id);
+                const stale = isStale(id.lastUsedAt, id.linkedAt);
                 return (
                   <li
                     key={id.id}
-                    className="flex items-center justify-between gap-3 rounded-lg border border-border/50 bg-muted/10 px-4 py-3"
+                    className={
+                      stale
+                        ? "flex items-center justify-between gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3"
+                        : "flex items-center justify-between gap-3 rounded-lg border border-border/50 bg-muted/10 px-4 py-3"
+                    }
                     data-testid={`sso-identity-${id.id}`}
+                    data-stale={stale ? "true" : "false"}
                   >
                     <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-9 h-9 rounded-md bg-primary/10 flex items-center justify-center flex-shrink-0">
-                        <ShieldCheck className="w-4 h-4 text-primary" />
+                      <div
+                        className={
+                          stale
+                            ? "w-9 h-9 rounded-md bg-amber-500/20 flex items-center justify-center flex-shrink-0"
+                            : "w-9 h-9 rounded-md bg-primary/10 flex items-center justify-center flex-shrink-0"
+                        }
+                      >
+                        {stale ? (
+                          <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                        ) : (
+                          <ShieldCheck className="w-4 h-4 text-primary" />
+                        )}
                       </div>
                       <div className="min-w-0">
                         <div className="text-sm font-medium text-foreground truncate">
                           {providerLabel(id.provider)} · {id.providerEmail}
+                          {stale && (
+                            <Badge
+                              variant="outline"
+                              className="ml-2 text-[10px] py-0 border-amber-500/50 text-amber-700 dark:text-amber-300"
+                              data-testid={`sso-identity-stale-${id.id}`}
+                            >
+                              Stale
+                            </Badge>
+                          )}
                         </div>
                         <div className="text-xs text-muted-foreground">
-                          Linked {format(new Date(id.linkedAt), "MMM d, yyyy")}
-                          {id.lastUsedAt && (
-                            <> · Last used {format(new Date(id.lastUsedAt), "MMM d, yyyy")}</>
-                          )}
+                          Linked {format(new Date(id.linkedAt), "MMM d, yyyy")} ·{" "}
+                          <span data-testid={`sso-identity-last-used-${id.id}`}>
+                            {lastUsedLabel(id.lastUsedAt)}
+                          </span>
                         </div>
                       </div>
                     </div>

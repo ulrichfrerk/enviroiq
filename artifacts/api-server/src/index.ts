@@ -104,6 +104,12 @@ async function ensureSsoSchema(): Promise<void> {
   await db.execute(
     sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS allowed_sign_in_methods jsonb`,
   );
+  // last_used_at on passkeys (lib/db/src/schema/users.ts) — bumped on each
+  // successful passkey login. Nullable so existing rows stay "Never used"
+  // until the next sign-in rather than back-dating to the migration moment.
+  await db.execute(
+    sql`ALTER TABLE passkeys ADD COLUMN IF NOT EXISTS last_used_at timestamptz`,
+  );
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS sso_identities (
       id              text PRIMARY KEY,

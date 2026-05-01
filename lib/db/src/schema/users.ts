@@ -51,6 +51,10 @@ export const passkeysTable = pgTable("passkeys", {
   backedUp: boolean("backed_up").notNull().default(false),
   transports: text("transports"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  // Bumped on each successful passkey authentication. NULL means the passkey
+  // has been enrolled but never used to sign in — surfaced on the Account
+  // page so users can spot and remove stale or unused devices.
+  lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
 });
 
 export const magicLinksTable = pgTable("magic_links", {

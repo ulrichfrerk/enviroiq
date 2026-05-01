@@ -117,6 +117,10 @@ const dbState: {
   challenge: ChallengeRow | null;
   insertedPasskey: Record<string, unknown> | null;
   counterUpdate: { id: string; counter: string } | null;
+  // Set whenever the passkey login verify path stamps lastUsedAt — this is
+  // the "successful login" signal the Account page reads, so failed/blocked
+  // logins MUST leave it null.
+  lastUsedUpdate: { id: string; at: Date } | null;
   deletedChallengeIds: string[];
 } = {
   user: null,
@@ -125,6 +129,7 @@ const dbState: {
   challenge: null,
   insertedPasskey: null,
   counterUpdate: null,
+  lastUsedUpdate: null,
   deletedChallengeIds: [],
 };
 
@@ -193,11 +198,24 @@ vi.mock("@workspace/db", () => {
           dbState.passkey &&
           whereContainsValue(whereExpr, dbState.passkey.id)
         ) {
-          dbState.counterUpdate = {
-            id: dbState.passkey.id,
-            counter: String(updates.counter ?? ""),
-          };
-          dbState.passkey.counter = String(updates.counter ?? dbState.passkey.counter);
+          // The verify path issues two separate UPDATEs against passkeys:
+          // one for `counter` (always, for replay defence) and a later one
+          // for `lastUsedAt` (only after policy/active checks succeed).
+          // Track them separately so tests can assert each independently.
+          if (Object.prototype.hasOwnProperty.call(updates, "counter")) {
+            dbState.counterUpdate = {
+              id: dbState.passkey.id,
+              counter: String(updates.counter ?? ""),
+            };
+            dbState.passkey.counter = String(updates.counter ?? dbState.passkey.counter);
+          }
+          if (Object.prototype.hasOwnProperty.call(updates, "lastUsedAt")) {
+            const value = updates.lastUsedAt;
+            dbState.lastUsedUpdate = {
+              id: dbState.passkey.id,
+              at: value instanceof Date ? value : new Date(String(value)),
+            };
+          }
         }
         return undefined;
       }),
@@ -429,6 +447,7 @@ beforeEach(() => {
   dbState.challenge = null;
   dbState.insertedPasskey = null;
   dbState.counterUpdate = null;
+  dbState.lastUsedUpdate = null;
   dbState.deletedChallengeIds = [];
   // Restore default verification stubs (individual tests may override).
   // The factories use the upstream return types so a future shape change
@@ -628,6 +647,11 @@ describe("POST /api/auth/passkey/login/verify", () => {
     expect(webauthn.verifyAuthenticationResponse).toHaveBeenCalledTimes(1);
     expect(dbState.counterUpdate).toEqual({ id: basePasskey.id, counter: "7" });
 
+    // BUT lastUsedAt MUST stay untouched — a policy-blocked attempt is not a
+    // successful login, so the Account page's "Last used …" indicator must
+    // not advance and pretend the device was actually used.
+    expect(dbState.lastUsedUpdate).toBeNull();
+
     const fail = getAuditCalls().filter(
       (a) => a.action === "auth.passkey.login" && a.outcome === "failure",
     );
@@ -674,6 +698,14 @@ describe("POST /api/auth/passkey/login/verify", () => {
 
     // Counter rolled to whatever the WebAuthn library reported.
     expect(dbState.counterUpdate).toEqual({ id: basePasskey.id, counter: "7" });
+
+    // lastUsedAt was bumped to "now" — this is what the Account page reads
+    // to render "Last used …" / stale-after-90-days. We just assert a fresh
+    // timestamp landed on the right passkey row (don't pin to ms precision).
+    expect(dbState.lastUsedUpdate).not.toBeNull();
+    expect(dbState.lastUsedUpdate?.id).toBe(basePasskey.id);
+    expect(dbState.lastUsedUpdate?.at.getTime()).toBeGreaterThan(Date.now() - 5_000);
+    expect(dbState.lastUsedUpdate?.at.getTime()).toBeLessThanOrEqual(Date.now() + 1_000);
 
     // The consumed challenge was deleted (single-use).
     expect(dbState.deletedChallengeIds).toContain(

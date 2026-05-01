@@ -484,7 +484,11 @@ router.post("/passkey/login/verify", async (req, res) => {
       return;
     }
 
-    // Update counter
+    // Always persist the new counter on a verified assertion — even if we
+    // later reject the sign-in for policy reasons. WebAuthn replay defence
+    // requires us to remember the latest counter value the authenticator
+    // produced, otherwise an attacker who replays the same assertion would
+    // pass the counter check.
     await db
       .update(passkeysTable)
       .set({ counter: String(verification.authenticationInfo.newCounter) })
@@ -510,6 +514,15 @@ router.post("/passkey/login/verify", async (req, res) => {
       res.status(403).json({ error: policy.message ?? "Passkey sign-in is not enabled for your organisation." });
       return;
     }
+
+    // Stamp last-used only once we know the sign-in is fully accepted —
+    // i.e. the account is active AND org/user policy allows it. This keeps
+    // the "Last used …" indicator on the Account page honest: a blocked
+    // login attempt won't pretend the device was actually used.
+    await db
+      .update(passkeysTable)
+      .set({ lastUsedAt: new Date() })
+      .where(eq(passkeysTable.id, passkey.id));
 
     // Rotate session ID before binding the user (anti-fixation).
     await regenerateSession(req);
@@ -593,6 +606,7 @@ router.get("/passkeys", requireAuth, async (req, res) => {
       deviceType: p.deviceType,
       backedUp: p.backedUp,
       createdAt: p.createdAt,
+      lastUsedAt: p.lastUsedAt,
     })),
   );
 });
