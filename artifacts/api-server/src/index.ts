@@ -5,6 +5,7 @@ import { startSupplierAuditScheduler } from "./lib/scheduler-supplier-audits";
 import { ensureDefaultSupplierAuditTemplate } from "./lib/supplier-audit-default-template";
 import { ensureCrmApiKeyTables } from "./lib/crm-api-keys";
 import { db } from "@workspace/db";
+import { verifyDatabaseSchema } from "@workspace/db/verify-schema";
 import { sql, eq } from "drizzle-orm";
 import { usersTable } from "@workspace/db/schema";
 
@@ -208,6 +209,34 @@ async function ensureDocumentArchiveSchema(): Promise<void> {
   logger.info("Document archive schema ready");
 }
 
+/**
+ * Verify the live database matches every table and column declared in
+ * `lib/db/src/schema`. Runs after the existing `ensure*` self-heal chain so
+ * inline backfills get a chance first; on any missing object we log a
+ * structured error naming the table/column and exit non-zero. This is the
+ * production safety net behind the post-merge schema sync — a deployed
+ * server with a missing column will refuse to start instead of returning
+ * 500s on the first request that touches it. See replit.md → "Schema
+ * changes" for the workflow.
+ */
+async function verifyAndStart(): Promise<void> {
+  const result = await verifyDatabaseSchema();
+  if (!result.ok) {
+    logger.fatal(
+      {
+        missingTables: result.missingTables,
+        missingColumns: result.missingColumns,
+      },
+      "Database schema verification failed — server will not start. " +
+        "Either the post-merge schema sync did not run, or this schema-touching " +
+        "task forgot to add a self-heal in artifacts/api-server/src/index.ts. " +
+        "See replit.md → \"Schema changes\".",
+    );
+    process.exit(1);
+  }
+  logger.info({ tablesChecked: result.tablesChecked }, "Database schema verified");
+}
+
 ensureSessionTable()
   .then(() => ensureSuperAdmin())
   .then(() => ensureOrgBillingColumns())
@@ -216,6 +245,7 @@ ensureSessionTable()
   .then(() => ensureSupplierAuditOverrideSchema())
   .then(() => ensureCrmApiKeyTables())
   .then(() => ensureDefaultSupplierAuditTemplate())
+  .then(() => verifyAndStart())
   .then(() => {
     const server = app.listen(port, () => {
       logger.info({ port }, "Server listening");

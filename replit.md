@@ -38,6 +38,19 @@ The EnviroIQ platform is built as a pnpm monorepo using Node.js 24 and TypeScrip
 - **Compliance Document Archive**: Ingested documents are archived in the `document_archives` table with a 6-month retention policy, aligned with NZ Privacy Act, GDPR, and SOC 2. Metadata is retained indefinitely for audit purposes.
 - **Security Features**: Includes a runtime security status check (`/security/status`) available to admins, assessing various security configurations and practices. Public compliance snapshots are also available.
 
+### Schema changes
+
+**Workflow when adding/altering tables or columns:**
+
+1. Edit the relevant file under `lib/db/src/schema/` and re-export from `lib/db/src/schema/index.ts`.
+2. Locally: run `pnpm --filter @workspace/db run push-force` to apply the change to your dev database, then `pnpm --filter @workspace/db run verify-schema` to confirm the database now matches the Drizzle schema (this same check runs on every server startup).
+3. **Add a matching idempotent self-heal** in `artifacts/api-server/src/index.ts` (`ensureXxxSchema()`) using `CREATE TABLE IF NOT EXISTS` / `ALTER TABLE … ADD COLUMN IF NOT EXISTS`. Wire it into the startup chain just before `verifyAndStart()`. This is what brings production into line — the post-merge script only touches the dev database.
+4. Commit. Nothing else gets generated or committed.
+
+**On merge** — `scripts/post-merge.sh` runs `drizzle-kit push --force` against the dev database and then `verify-schema`. Both must succeed or the merge fails.
+
+**On every API server startup** — the `ensure*` chain runs first (so production DDL gets applied), then `verifyDatabaseSchema()` introspects every table declared in `lib/db/src/schema` against `information_schema`. If anything is missing, the server logs a structured FATAL with the missing tables/columns and exits non-zero — so a deploy with a missing column visibly fails its health check instead of returning 500s on the first request that touches it.
+
 ### Feature Specifications
 - **ESG Intelligence**:
     - **Maturity Scoring**: A 4-dimensional system (Foundation, Coverage, Quality, Governance) resulting in grades: Foundation, Developing, Advanced, Leader.
