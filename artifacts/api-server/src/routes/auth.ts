@@ -319,9 +319,13 @@ router.post("/passkey/register/verify", requireAuth, async (req, res) => {
   const user = req.user!;
   const { rpID, expectedOrigin } = getWebAuthnContext(req);
 
+  // Single generic error for both missing- and expired-challenge cases —
+  // returning distinct messages would let callers tell whether a session
+  // had a challenge bound to it (probe signal). See login/verify below.
+  const REGISTER_CHALLENGE_INVALID = "Registration challenge invalid or expired";
   const challengeId = req.session.webAuthnChallengeId;
   if (!challengeId) {
-    res.status(400).json({ error: "No registration in progress" });
+    res.status(400).json({ error: REGISTER_CHALLENGE_INVALID });
     return;
   }
 
@@ -329,7 +333,7 @@ router.post("/passkey/register/verify", requireAuth, async (req, res) => {
     where: and(eq(webAuthnChallengesTable.id, challengeId), gt(webAuthnChallengesTable.expiresAt, new Date())),
   });
   if (!challengeRow || challengeRow.type !== "registration") {
-    res.status(400).json({ error: "Challenge expired" });
+    res.status(400).json({ error: REGISTER_CHALLENGE_INVALID });
     return;
   }
 
@@ -429,9 +433,13 @@ router.post("/passkey/login/options", async (req, res) => {
 router.post("/passkey/login/verify", async (req, res) => {
   const { rpID, expectedOrigin } = getWebAuthnContext(req);
 
+  // Single generic error for both missing- and expired-challenge cases —
+  // emitting distinct messages would let an attacker probe whether a given
+  // session has a challenge bound (e.g. has previously called /options).
+  const LOGIN_CHALLENGE_INVALID = "Authentication challenge invalid or expired";
   const challengeId = req.session.webAuthnChallengeId;
   if (!challengeId) {
-    res.status(400).json({ error: "No authentication in progress" });
+    res.status(400).json({ error: LOGIN_CHALLENGE_INVALID });
     return;
   }
 
@@ -439,7 +447,7 @@ router.post("/passkey/login/verify", async (req, res) => {
     where: and(eq(webAuthnChallengesTable.id, challengeId), gt(webAuthnChallengesTable.expiresAt, new Date())),
   });
   if (!challengeRow || challengeRow.type !== "authentication") {
-    res.status(400).json({ error: "Challenge expired" });
+    res.status(400).json({ error: LOGIN_CHALLENGE_INVALID });
     return;
   }
 
