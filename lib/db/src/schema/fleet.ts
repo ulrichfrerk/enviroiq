@@ -12,6 +12,13 @@ export const vehiclesTable = pgTable("vehicles", {
   year: integer("year"),
   fuelType: text("fuel_type").notNull().default("petrol"),
   emissionFactorKgPerKm: real("emission_factor_kg_per_km"),
+  // Fuel consumption — used to derive litres (and therefore cost) from km when
+  // fuel-card data isn't available. If null, a sensible default is applied at
+  // estimation time based on fuel_type and vehicle class.
+  fuelConsumptionLPer100km: real("fuel_consumption_l_per_100km"),
+  // Monthly fixed running cost (lease + finance + insurance + RUC + rego + WoF).
+  // Manually entered per ute. Multiplied by months in range for total fixed cost.
+  monthlyFixedCostNzd: real("monthly_fixed_cost_nzd"),
   gpsProvider: text("gps_provider").default("none"),
   gpsDeviceId: text("gps_device_id"),
   isActive: boolean("is_active").notNull().default(true),
@@ -30,6 +37,10 @@ export const fleetEventsTable = pgTable("fleet_events", {
   distanceKm: real("distance_km"),
   fuelLitres: real("fuel_litres"),
   co2eKg: real("co2e_kg"),
+  // Cost capture — direct from fuel-card line items where available; estimated
+  // at read-time from km × L/100km × NZ monthly avg pump price otherwise.
+  costNzd: real("cost_nzd"),
+  unitCostNzdPerLitre: real("unit_cost_nzd_per_litre"),
   source: text("source").notNull(),
   rawPayload: text("raw_payload"),
   // Lineage — links to versioned emission factor + ingest batch for full traceability
