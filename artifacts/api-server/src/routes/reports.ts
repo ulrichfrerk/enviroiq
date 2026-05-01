@@ -900,13 +900,15 @@ router.get("/tender-pack", requireAuth, requireOrgAccess, async (req, res) => {
 
     const [orgRows, emissionsRow, hsRows, trainingRows, workforceRow, govRow, wasteRow, subRows, goalsRows] = await Promise.all([
       db.execute(sql`SELECT name FROM organisations WHERE id = ${orgId} LIMIT 1`),
+      // Aggregate from the two real source tables (fleet_events + energy_readings).
+      // The legacy "emission_readings" view was removed in the multi-source refactor.
       db.execute(sql`
         SELECT
-          COALESCE(SUM(CASE WHEN source='fleet' THEN co2e_kg ELSE 0 END),0)::float AS fleet_co2e,
-          COALESCE(SUM(CASE WHEN source='energy' THEN co2e_kg ELSE 0 END),0)::float AS energy_co2e,
-          COALESCE(SUM(co2e_kg),0)::float AS total_co2e,
-          COALESCE(SUM(CASE WHEN source='fleet' THEN distance_km ELSE 0 END),0)::float AS total_km
-        FROM emission_readings WHERE organisation_id = ${orgId}
+          COALESCE((SELECT SUM(co2e_kg)::float    FROM fleet_events     WHERE organisation_id = ${orgId}), 0) AS fleet_co2e,
+          COALESCE((SELECT SUM(co2e_kg)::float    FROM energy_readings  WHERE organisation_id = ${orgId}), 0) AS energy_co2e,
+          COALESCE((SELECT SUM(co2e_kg)::float    FROM fleet_events     WHERE organisation_id = ${orgId}), 0)
+          + COALESCE((SELECT SUM(co2e_kg)::float  FROM energy_readings  WHERE organisation_id = ${orgId}), 0) AS total_co2e,
+          COALESCE((SELECT SUM(distance_km)::float FROM fleet_events    WHERE organisation_id = ${orgId}), 0) AS total_km
       `),
       db.execute(sql`SELECT incident_type, incident_date, description, days_lost, closed_out FROM hs_incidents WHERE organisation_id = ${orgId} ORDER BY incident_date DESC LIMIT 20`),
       db.execute(sql`SELECT topic, category, hours, employee_name, training_date FROM training_records WHERE organisation_id = ${orgId} ORDER BY training_date DESC LIMIT 10`),
