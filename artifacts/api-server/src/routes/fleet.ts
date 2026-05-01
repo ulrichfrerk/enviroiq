@@ -370,6 +370,22 @@ webhookRouter.post("/navman", async (req, res) => {
     const org = await validateWebhookSecret(apiKey);
     if (!org) {
       await logAudit({ req, action: "webhook.fleet.navman", outcome: "failure", details: { reason: "invalid_api_key", deviceId } });
+      // Alert platform ops when telematics webhooks arrive with bad credentials.
+      // We don't know which org was the intended target (the api key didn't
+      // match), so use the platform-fallback path by passing a sentinel orgId
+      // — resolveRecipients() finds zero org admins and falls back to platform
+      // super_admins automatically. Daily-cap the dedupe so a misconfigured
+      // provider sending every 30s only generates one alert per day.
+      void notify({
+        organisationId: "PLATFORM",
+        category: "webhook.fleet.invalid_api_key",
+        severity: "warn",
+        title: "Telematics webhook rejected — bad credentials",
+        body: `A Navman telematics webhook was rejected because the API key did not match any organisation. If a provider has just been onboarded, double-check the api key configured in the integration.`,
+        linkUrl: "/fleet",
+        dedupeKey: `webhook.fleet.invalid_api_key:navman:${new Date().toISOString().slice(0, 10)}`,
+        context: { provider: "navman", deviceId, ip: req.ip, userAgent: req.get("user-agent") },
+      });
       res.status(401).json({ error: "Unauthorized", message: "Invalid or missing API key" });
       return;
     }
@@ -421,6 +437,16 @@ webhookRouter.post("/blackhawk", async (req, res) => {
     const org = await validateWebhookSecret(token);
     if (!org) {
       await logAudit({ req, action: "webhook.fleet.blackhawk", outcome: "failure", details: { reason: "invalid_token", deviceId: unit_id } });
+      void notify({
+        organisationId: "PLATFORM",
+        category: "webhook.fleet.invalid_api_key",
+        severity: "warn",
+        title: "Telematics webhook rejected — bad credentials",
+        body: `A Blackhawk telematics webhook was rejected because the token did not match any organisation. If a provider has just been onboarded, double-check the token configured in the integration.`,
+        linkUrl: "/fleet",
+        dedupeKey: `webhook.fleet.invalid_api_key:blackhawk:${new Date().toISOString().slice(0, 10)}`,
+        context: { provider: "blackhawk", deviceId: unit_id, ip: req.ip, userAgent: req.get("user-agent") },
+      });
       res.status(401).json({ error: "Unauthorized", message: "Invalid or missing token" });
       return;
     }
@@ -471,6 +497,16 @@ webhookRouter.post("/generic", async (req, res) => {
     const org = await validateWebhookSecret(apiKey);
     if (!org) {
       await logAudit({ req, action: "webhook.fleet.generic", outcome: "failure", details: { reason: "invalid_api_key", deviceId } });
+      void notify({
+        organisationId: "PLATFORM",
+        category: "webhook.fleet.invalid_api_key",
+        severity: "warn",
+        title: "Telematics webhook rejected — bad credentials",
+        body: `A telematics webhook (generic provider) was rejected because the API key did not match any organisation. If a provider has just been onboarded, double-check the api key configured in the integration.`,
+        linkUrl: "/fleet",
+        dedupeKey: `webhook.fleet.invalid_api_key:generic:${new Date().toISOString().slice(0, 10)}`,
+        context: { provider: "generic", deviceId, ip: req.ip, userAgent: req.get("user-agent") },
+      });
       res.status(401).json({ error: "Unauthorized", message: "Invalid or missing API key" });
       return;
     }

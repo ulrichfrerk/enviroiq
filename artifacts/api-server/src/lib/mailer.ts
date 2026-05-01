@@ -183,6 +183,69 @@ const notificationEmailHtml = (
 </html>`;
 };
 
+export interface NotificationEmailItem {
+  to: string;
+  recipientName: string;
+  orgName: string;
+  title: string;
+  body: string;
+  linkUrl?: string;
+}
+
+/**
+ * Send a batch of notification emails in a single Resend API call. Resend's
+ * `/emails/batch` accepts up to 100 personalised emails per call, which is
+ * how the foundation notification fan-out (`notify()` in notifications.ts)
+ * stays within rate limits when an org has many admins or when the daily
+ * digest sweeps every recipient at once. Returns the number actually sent
+ * and never throws — failures are logged so the caller's ingest flow keeps
+ * running.
+ *
+ * Behaviour matches `sendNotificationEmail` for the dev/console fallback.
+ */
+export async function sendNotificationEmailBatch(
+  items: NotificationEmailItem[],
+): Promise<{ sent: number; devMode: boolean }> {
+  if (items.length === 0) return { sent: 0, devMode: false };
+  const resend = await getResendClient();
+  if (resend) {
+    // Chunk to Resend's 100-email batch limit.
+    let totalSent = 0;
+    for (let i = 0; i < items.length; i += 100) {
+      const chunk = items.slice(i, i + 100);
+      const payload = chunk.map((item) => ({
+        from: resend.from,
+        to: item.to,
+        subject: `[${item.orgName}] ${item.title}`,
+        html: notificationEmailHtml(item.recipientName, item.orgName, item.title, item.body, item.linkUrl),
+        text: `${item.title}\n\nHi ${item.recipientName},\n\n${item.body}\n${item.linkUrl ? `\nOpen in EnviroIQ: ${item.linkUrl}\n` : ""}`,
+      }));
+      try {
+        const { data, error } = await resend.client.batch.send(payload);
+        if (error) {
+          logger.error({ error, count: chunk.length }, "Resend batch failed");
+          continue;
+        }
+        const sentForChunk = Array.isArray(data?.data) ? data.data.length : chunk.length;
+        totalSent += sentForChunk;
+        logger.info({ count: sentForChunk, batchIds: Array.isArray(data?.data) ? data.data.map((d: { id?: string }) => d.id) : undefined }, "Notification emails sent via Resend batch");
+      } catch (err) {
+        logger.error({ err, count: chunk.length }, "Resend batch send threw");
+      }
+    }
+    return { sent: totalSent, devMode: false };
+  }
+  if (process.env.NODE_ENV !== "production") {
+    for (const item of items) {
+      // eslint-disable-next-line no-console
+      console.log(`\n[NOTIFICATION EMAIL — RESEND NOT CONFIGURED]\n  To: ${item.to}\n  Subject: [${item.orgName}] ${item.title}\n  Body: ${item.body}\n`);
+    }
+    return { sent: 0, devMode: true };
+  }
+  logger.error({ count: items.length }, "Resend not configured in production — notification batch dropped");
+  return { sent: 0, devMode: false };
+}
+
 /**
  * Send a data-quality / failure notification email. Used by the foundation
  * notification system in `lib/notifications.ts`. Returns sent=false in dev

@@ -276,6 +276,36 @@ async function ensureNotificationsSchema(): Promise<void> {
   await db.execute(
     sql`CREATE INDEX IF NOT EXISTS notifications_org_created_idx ON notifications (organisation_id, created_at)`,
   );
+  // ADD COLUMN guards — protect against schema drift if the tables existed
+  // from an earlier partial deploy that lacked some of the columns we now
+  // depend on. Each statement is idempotent.
+  for (const stmt of [
+    sql`ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS organisation_id text NOT NULL DEFAULT ''`,
+    sql`ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS category text NOT NULL DEFAULT ''`,
+    sql`ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS severity text NOT NULL DEFAULT 'info'`,
+    sql`ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS title text NOT NULL DEFAULT ''`,
+    sql`ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS body text NOT NULL DEFAULT ''`,
+    sql`ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS link_url text`,
+    sql`ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS source_audit_id text`,
+    sql`ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS context jsonb`,
+    sql`ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS dedupe_key text NOT NULL DEFAULT ''`,
+    sql`ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now()`,
+    sql`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS organisation_id text NOT NULL DEFAULT ''`,
+    sql`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS recipient_user_id text NOT NULL DEFAULT ''`,
+    sql`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS category text NOT NULL DEFAULT ''`,
+    sql`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS severity text NOT NULL DEFAULT 'info'`,
+    sql`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS title text NOT NULL DEFAULT ''`,
+    sql`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS body text NOT NULL DEFAULT ''`,
+    sql`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS link_url text`,
+    sql`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS source_audit_id text`,
+    sql`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS source_event_id text NOT NULL DEFAULT ''`,
+    sql`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS read_at timestamptz`,
+    sql`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS dismissed_at timestamptz`,
+    sql`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS email_sent_at timestamptz`,
+    sql`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now()`,
+  ]) {
+    await db.execute(stmt);
+  }
   logger.info("Notifications schema ready");
 }
 

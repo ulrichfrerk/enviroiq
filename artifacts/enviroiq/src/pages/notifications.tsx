@@ -71,10 +71,11 @@ export default function NotificationsPage() {
 
   const [severity, setSeverity] = useState<string>("all");
   const [status, setStatus] = useState<string>("all");
+  const [category, setCategory] = useState<string>("all");
 
   const queryKey = useMemo(
-    () => ["notifications", "page", orgId, severity, status] as const,
-    [orgId, severity, status],
+    () => ["notifications", "page", orgId, severity, status, category] as const,
+    [orgId, severity, status, category],
   );
   const unreadKey = ["notifications", "unread-count", orgId] as const;
 
@@ -84,10 +85,20 @@ export default function NotificationsPage() {
       const params = new URLSearchParams({ limit: "50" });
       if (severity !== "all") params.set("severity", severity);
       if (status !== "all") params.set("status", status);
+      if (category !== "all") params.set("category", category);
       return apiClient<ListResponse>(`/organisations/${orgId}/notifications?${params.toString()}`);
     },
     enabled: !!orgId,
   });
+
+  // Build the category options dynamically from whatever the inbox has
+  // currently surfaced. Keeps the filter useful as new failure sources are
+  // wired in without us having to maintain a hardcoded list of categories.
+  const categoryOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const n of data?.items ?? []) set.add(n.category);
+    return Array.from(set).sort();
+  }, [data]);
 
   const markRead = useMutation({
     mutationFn: (id: string) =>
@@ -170,6 +181,19 @@ export default function NotificationsPage() {
               <SelectContent>
                 <SelectItem value="all">All</SelectItem>
                 <SelectItem value="unread">Unread only</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={category} onValueChange={setCategory}>
+              <SelectTrigger className="h-8 w-56" data-testid="filter-category">
+                <SelectValue placeholder="All categories" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All categories</SelectItem>
+                {categoryOptions.map((c) => (
+                  <SelectItem key={c} value={c}>
+                    {c}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
             <span className="text-xs text-muted-foreground ml-auto">

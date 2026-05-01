@@ -24,7 +24,7 @@ import {
   type Notification,
 } from "@workspace/db";
 import { logger } from "./logger.js";
-import { sendNotificationEmail } from "./mailer.js";
+import { sendNotificationEmailBatch, type NotificationEmailItem } from "./mailer.js";
 
 export type NotificationSeverity = "info" | "warn" | "error";
 
@@ -61,6 +61,14 @@ interface ResolvedRecipient {
   id: string;
   email: string;
   name: string | null;
+  /**
+   * Last successful sign-in. NULL means the user has never completed first
+   * sign-in (e.g. an admin invited yesterday but who hasn't clicked their
+   * magic link yet). The email channel is suppressed for these users — they
+   * still get the in-app bell row, so when they do sign in the alert is
+   * waiting in the inbox.
+   */
+  lastLoginAt: Date | null;
 }
 
 /**
@@ -73,7 +81,12 @@ async function resolveRecipients(orgId: string): Promise<{
   orphanFallback: boolean;
 }> {
   const admins = await db
-    .select({ id: usersTable.id, email: usersTable.email, name: usersTable.name })
+    .select({
+      id: usersTable.id,
+      email: usersTable.email,
+      name: usersTable.name,
+      lastLoginAt: usersTable.lastLoginAt,
+    })
     .from(usersTable)
     .where(
       and(
@@ -88,7 +101,12 @@ async function resolveRecipients(orgId: string): Promise<{
   // Fall back to platform super_admins (no orgId or any orgId), filtered to
   // active. These rows are typically the EnviroIQ ops team.
   const platform = await db
-    .select({ id: usersTable.id, email: usersTable.email, name: usersTable.name })
+    .select({
+      id: usersTable.id,
+      email: usersTable.email,
+      name: usersTable.name,
+      lastLoginAt: usersTable.lastLoginAt,
+    })
     .from(usersTable)
     .where(and(eq(usersTable.role, "super_admin"), eq(usersTable.isActive, true)));
 
@@ -170,36 +188,55 @@ export async function notify(input: NotifyInput): Promise<NotifyResult> {
       return { created: true, eventId, recipientCount: 0, emailsSent: 0 };
     }
 
-    // Step 4: email side-channel — immediate for severity=error, batched
-    // for severity=warn via the daily digest scheduler.
+    // Step 4: email side-channel — one batched Resend call for severity=error
+    // (warns are rolled into the per-user daily digest by the scheduler).
+    // First-sign-in gate: users whose lastLoginAt is NULL haven't completed
+    // sign-in yet, so we skip their email and rely on the bell icon waiting
+    // for them. The bell row IS still created above for everyone.
     let emailsSent = 0;
     if (input.severity === "error") {
       const orgName = org?.name ?? "your organisation";
-      await Promise.all(
-        rows.map(async (row, i) => {
-          const recipient = recipients[i];
-          try {
-            const result = await sendNotificationEmail(
-              recipient.email,
-              recipient.name ?? recipient.email,
-              orgName,
-              input.title,
-              input.body,
-              input.linkUrl,
-            );
-            if (result.sent) emailsSent++;
+      const emailable = recipients
+        .map((recipient, i) => ({ recipient, row: rows[i] }))
+        .filter((p) => p.recipient.lastLoginAt !== null);
+      const skipped = recipients.length - emailable.length;
+      if (skipped > 0) {
+        logger.info(
+          { orgId: input.organisationId, skipped, dedupeKey: input.dedupeKey },
+          "Skipped email channel for recipients who haven't completed first sign-in",
+        );
+      }
+
+      if (emailable.length > 0) {
+        const items: NotificationEmailItem[] = emailable.map((p) => ({
+          to: p.recipient.email,
+          recipientName: p.recipient.name ?? p.recipient.email,
+          orgName,
+          title: input.title,
+          body: input.body,
+          linkUrl: input.linkUrl,
+        }));
+        try {
+          const result = await sendNotificationEmailBatch(items);
+          emailsSent = result.sent;
+          if (emailsSent > 0) {
             await db
               .update(notificationsTable)
               .set({ emailSentAt: new Date() })
-              .where(eq(notificationsTable.id, row.id));
-          } catch (err) {
-            logger.warn(
-              { err, recipient: recipient.email, dedupeKey: input.dedupeKey },
-              "Notification email failed — bell icon row still created",
-            );
+              .where(
+                inArray(
+                  notificationsTable.id,
+                  emailable.map((p) => p.row.id),
+                ),
+              );
           }
-        }),
-      );
+        } catch (err) {
+          logger.warn(
+            { err, dedupeKey: input.dedupeKey },
+            "Notification email batch failed — bell icon rows still created",
+          );
+        }
+      }
     }
 
     logger.info(
@@ -257,41 +294,54 @@ export async function sendNotificationDigests(): Promise<{ users: number; rows: 
     byRecipient.set(row.recipientUserId, arr);
   }
 
+  // Build one batch payload across all recipients, then send in a single
+  // Resend call (chunked at 100 by the mailer). Bell rows are stamped as
+  // emailed only for users we actually emailed; users who haven't completed
+  // first sign-in are skipped on the email channel and remain unstamped so
+  // they roll into tomorrow's digest (giving them a chance to sign in and
+  // see them in the bell first).
+  const items: NotificationEmailItem[] = [];
+  const stampIds: string[] = [];
   let userCount = 0;
   let rowCount = 0;
+
   for (const [userId, rows] of byRecipient) {
     const user = await db.query.usersTable.findFirst({ where: eq(usersTable.id, userId) });
     if (!user || !user.isActive) continue;
+    if (!user.lastLoginAt) {
+      logger.info({ userId }, "Digest skipped — recipient has not completed first sign-in");
+      continue;
+    }
     const org = await db.query.organisationsTable.findFirst({
       where: eq(organisationsTable.id, rows[0].organisationId),
     });
-    const summary = rows
-      .map((r) => `• ${r.title} — ${r.body}`)
-      .join("\n");
-    try {
-      await sendNotificationEmail(
-        user.email,
-        user.name ?? user.email,
-        org?.name ?? "your organisation",
-        `Daily ESG data quality digest (${rows.length} item${rows.length === 1 ? "" : "s"})`,
-        summary,
-        undefined,
-      );
-      const now = new Date();
-      await db
-        .update(notificationsTable)
-        .set({ emailSentAt: now })
-        .where(
-          inArray(
-            notificationsTable.id,
-            rows.map((r) => r.id),
-          ),
-        );
-      userCount++;
-      rowCount += rows.length;
-    } catch (err) {
-      logger.warn({ err, userId }, "Daily notification digest email failed");
-    }
+    const summary = rows.map((r) => `• ${r.title} — ${r.body}`).join("\n");
+    items.push({
+      to: user.email,
+      recipientName: user.name ?? user.email,
+      orgName: org?.name ?? "your organisation",
+      title: `Daily ESG data quality digest (${rows.length} item${rows.length === 1 ? "" : "s"})`,
+      body: summary,
+    });
+    stampIds.push(...rows.map((r) => r.id));
+    userCount++;
+    rowCount += rows.length;
+  }
+
+  if (items.length === 0) {
+    logger.info({ userCount: 0, rowCount: 0 }, "Notification digest had no eligible recipients");
+    return { users: 0, rows: 0 };
+  }
+
+  try {
+    await sendNotificationEmailBatch(items);
+    const now = new Date();
+    await db
+      .update(notificationsTable)
+      .set({ emailSentAt: now })
+      .where(inArray(notificationsTable.id, stampIds));
+  } catch (err) {
+    logger.warn({ err }, "Daily notification digest batch failed");
   }
   logger.info({ userCount, rowCount }, "Notification digest sent");
   return { users: userCount, rows: rowCount };
