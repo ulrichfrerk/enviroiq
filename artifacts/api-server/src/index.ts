@@ -74,9 +74,89 @@ async function ensureOrgBillingColumns(): Promise<void> {
   logger.info("Organisation billing columns ready");
 }
 
+/**
+ * Idempotent self-heal for the SSO schema (lib/db/src/schema/sso-identities.ts
+ * + new columns on organisations). Required because production rolls forward
+ * via `drizzle-kit push` on the dev DB only — production DDL must be applied
+ * here at startup.
+ */
+async function ensureSsoSchema(): Promise<void> {
+  await db.execute(
+    sql`ALTER TABLE organisations ADD COLUMN IF NOT EXISTS google_sso_enabled boolean NOT NULL DEFAULT true`,
+  );
+  await db.execute(
+    sql`ALTER TABLE organisations ADD COLUMN IF NOT EXISTS microsoft_sso_enabled boolean NOT NULL DEFAULT true`,
+  );
+  await db.execute(
+    sql`ALTER TABLE organisations ADD COLUMN IF NOT EXISTS allowed_sign_in_methods jsonb NOT NULL DEFAULT '["magic_link","passkey","google_sso","microsoft_sso"]'::jsonb`,
+  );
+  await db.execute(
+    sql`ALTER TABLE organisations ADD COLUMN IF NOT EXISTS required_sso_provider text`,
+  );
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS sso_identities (
+      id              text PRIMARY KEY,
+      user_id         text NOT NULL,
+      provider        text NOT NULL,
+      provider_sub    text NOT NULL,
+      provider_email  text NOT NULL,
+      linked_at       timestamptz NOT NULL DEFAULT now(),
+      last_used_at    timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS sso_identities_provider_sub_uq ON sso_identities (provider, provider_sub)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS sso_identities_user_idx ON sso_identities (user_id)`,
+  );
+  logger.info("SSO schema ready");
+}
+
+/**
+ * Idempotent self-heal for the compliance document archive
+ * (lib/db/src/schema/document-archives.ts). Stores raw analytics PDFs as bytea
+ * with a 6-month retention; metadata is retained after content purge.
+ */
+async function ensureDocumentArchiveSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS document_archives (
+      id                    text PRIMARY KEY,
+      organisation_id       text NOT NULL,
+      source_type           text NOT NULL,
+      source_id             text,
+      original_filename     text NOT NULL,
+      content_type          text NOT NULL,
+      size_bytes            integer NOT NULL,
+      sha256                text NOT NULL,
+      content               bytea,
+      captured_at           timestamptz NOT NULL DEFAULT now(),
+      expires_at            timestamptz NOT NULL,
+      captured_by_user_id   text,
+      captured_by_email     text,
+      retention_policy      text NOT NULL DEFAULT '6mo_default',
+      sender_email          text,
+      purged_at             timestamptz,
+      notes                 text
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS doc_archives_org_idx ON document_archives (organisation_id, captured_at)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS doc_archives_expires_idx ON document_archives (expires_at)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS doc_archives_source_idx ON document_archives (source_type, source_id)`,
+  );
+  logger.info("Document archive schema ready");
+}
+
 ensureSessionTable()
   .then(() => ensureSuperAdmin())
   .then(() => ensureOrgBillingColumns())
+  .then(() => ensureSsoSchema())
+  .then(() => ensureDocumentArchiveSchema())
   .then(() => ensureCrmApiKeyTables())
   .then(() => ensureDefaultSupplierAuditTemplate())
   .then(() => {
