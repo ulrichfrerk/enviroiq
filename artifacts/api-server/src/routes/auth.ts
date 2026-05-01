@@ -1,6 +1,14 @@
 import { Router } from "express";
-import type { Request } from "express";
-import { db, usersTable, magicLinksTable, passkeysTable, webAuthnChallengesTable, organisationsTable } from "@workspace/db";
+import type { Request, Response } from "express";
+import {
+  db,
+  usersTable,
+  magicLinksTable,
+  passkeysTable,
+  webAuthnChallengesTable,
+  organisationsTable,
+  ssoIdentitiesTable,
+} from "@workspace/db";
 import { eq, and, gt, isNull } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
 import { randomBytes, createHash } from "node:crypto";
@@ -16,8 +24,17 @@ import type {
   AuthenticatorTransportFuture,
 } from "@simplewebauthn/server";
 import { logAudit } from "../lib/audit.js";
-import { requireAuth } from "../lib/auth.js";
+import { requireAuth, checkSignInMethodAllowed, type SignInMethod } from "../lib/auth.js";
 import { sendMagicLinkEmail } from "../lib/mailer.js";
+import {
+  buildAuthorizeUrl,
+  buildRedirectUri,
+  configuredProviders,
+  exchangeCodeForTokens,
+  isProviderConfigured,
+  verifyIdToken,
+  type OidcProviderName,
+} from "../lib/oidc.js";
 
 const router = Router();
 
@@ -135,6 +152,35 @@ router.post("/magic-link/request", async (req, res) => {
       await logAudit({ req, action: "auth.magic_link.request.unknown", outcome: "failure", details: { email } });
       res.json(generic);
       return;
+    }
+
+    // Org policy: refuse if magic-link is not allowed for this org and the
+    // user is not eligible for the org_admin break-glass exception.
+    const policy = await checkSignInMethodAllowed(user.organisationId, user.role, "magic_link");
+    if (!policy.ok) {
+      await logAudit({
+        req,
+        action: "auth.magic_link.request",
+        outcome: "failure",
+        organisationId: user.organisationId ?? undefined,
+        userId: user.id,
+        userEmail: user.email,
+        details: { reason: policy.reason, email },
+      });
+      // Don't leak whether the email exists; just return the generic response.
+      res.json(generic);
+      return;
+    }
+    if (policy.breakGlass) {
+      await logAudit({
+        req,
+        action: "auth.break_glass_magic_link",
+        outcome: "success",
+        organisationId: user.organisationId ?? undefined,
+        userId: user.id,
+        userEmail: user.email,
+        details: { email, role: user.role },
+      });
     }
 
     const token = newToken(32);
@@ -338,6 +384,20 @@ router.post("/passkey/login/options", async (req, res) => {
   if (email) {
     const user = await db.query.usersTable.findFirst({ where: eq(usersTable.email, email) });
     if (user) {
+      // Org policy: refuse if passkey login isn't allowed for this org. We
+      // surface a 403 so the UI can show "passkeys disabled — use SSO".
+      const policy = await checkSignInMethodAllowed(user.organisationId, user.role, "passkey");
+      if (!policy.ok) {
+        await logAudit({
+          req,
+          action: "auth.passkey.login",
+          outcome: "failure",
+          userId: user.id,
+          details: { reason: policy.reason, stage: "options" },
+        });
+        res.status(403).json({ error: "Passkey sign-in is not enabled for your organisation. Please use the SSO option." });
+        return;
+      }
       const passkeys = await db.query.passkeysTable.findMany({ where: eq(passkeysTable.userId, user.id) });
       allowCredentials = passkeys.map((p) => ({
         id: p.credentialId,
@@ -428,6 +488,21 @@ router.post("/passkey/login/verify", async (req, res) => {
       return;
     }
 
+    // Org policy enforcement at the verify step too — defends against an
+    // attacker who calls /verify directly without going through /options.
+    const policy = await checkSignInMethodAllowed(user.organisationId, user.role, "passkey");
+    if (!policy.ok) {
+      await logAudit({
+        req,
+        action: "auth.passkey.login",
+        outcome: "failure",
+        userId: user.id,
+        details: { reason: policy.reason, stage: "verify" },
+      });
+      res.status(403).json({ error: policy.message ?? "Passkey sign-in is not enabled for your organisation." });
+      return;
+    }
+
     // Rotate session ID before binding the user (anti-fixation).
     await regenerateSession(req);
     req.session.userId = user.id;
@@ -486,5 +561,321 @@ router.delete("/passkeys/:id", requireAuth, async (req, res) => {
 });
 
 void pruneExpiredChallenges; // silence unused-var lint
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SSO (Native Google + Microsoft OIDC, Authorization Code + PKCE)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SSO_FLOW_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+function ssoErrorRedirect(req: Request, res: Response, code: string): void {
+  // Land the user back on the sign-in page with a recognisable code; the UI
+  // surfaces a friendly message. Never include any provider-side detail.
+  const base = appBaseUrl(req);
+  res.redirect(`${base}/app/sign-in?error=sso_${encodeURIComponent(code)}`);
+}
+
+function safeReturnTo(raw: unknown): string | undefined {
+  const r = typeof raw === "string" ? raw : "";
+  if (!r) return undefined;
+  // Only allow same-origin app paths under /app — never an arbitrary URL.
+  if (!r.startsWith("/app/") && r !== "/app") return undefined;
+  return r;
+}
+
+/** PKCE: SHA-256(code_verifier), base64url. */
+function pkceChallenge(verifier: string): string {
+  return createHash("sha256").update(verifier).digest("base64url");
+}
+
+function isOidcProviderName(value: string): value is OidcProviderName {
+  return value === "google" || value === "microsoft";
+}
+
+/**
+ * GET /auth/sso/:provider/start
+ * Begins an SSO sign-in: stores PKCE verifier + state + nonce in the session,
+ * then 302-redirects the browser to the provider's authorize endpoint.
+ */
+router.get("/sso/:provider/start", async (req, res) => {
+  const provider = String(req.params.provider || "");
+  if (!isOidcProviderName(provider)) {
+    res.status(404).json({ error: "Unknown SSO provider" });
+    return;
+  }
+  if (!isProviderConfigured(provider)) {
+    req.log?.warn({ provider }, "SSO start refused — provider not configured");
+    ssoErrorRedirect(req, res, "not_configured");
+    return;
+  }
+
+  try {
+    const state = newToken(24);
+    const nonce = newToken(24);
+    const codeVerifier = newToken(48);
+    const codeChallenge = pkceChallenge(codeVerifier);
+    const redirectUri = buildRedirectUri(provider, appBaseUrl(req));
+
+    req.session.oidcFlow = {
+      provider,
+      state,
+      nonce,
+      codeVerifier,
+      redirectUri,
+      returnTo: safeReturnTo(req.query.returnTo),
+      createdAt: Date.now(),
+    };
+    await new Promise<void>((r) => req.session.save(() => r()));
+
+    const authorizeUrl = await buildAuthorizeUrl(provider, {
+      state,
+      nonce,
+      codeChallenge,
+      redirectUri,
+    });
+    res.redirect(authorizeUrl);
+  } catch (err) {
+    req.log?.error({ err, provider }, "SSO start failed");
+    ssoErrorRedirect(req, res, "start_failed");
+  }
+});
+
+/**
+ * GET /auth/sso/:provider/callback
+ * Handles the provider's redirect: validates state, exchanges code, verifies
+ * id_token, looks up the user, applies org policy, starts the session.
+ */
+router.get("/sso/:provider/callback", async (req, res) => {
+  const provider = String(req.params.provider || "");
+  if (!isOidcProviderName(provider)) {
+    res.status(404).json({ error: "Unknown SSO provider" });
+    return;
+  }
+
+  // Provider-side error (user denied consent, etc).
+  if (typeof req.query.error === "string") {
+    await logAudit({
+      req,
+      action: "sso.sign_in.rejected",
+      outcome: "failure",
+      details: { provider, reason: "provider_error", providerError: String(req.query.error) },
+    });
+    ssoErrorRedirect(req, res, "denied");
+    return;
+  }
+
+  const code = String(req.query.code || "");
+  const state = String(req.query.state || "");
+  const flow = req.session.oidcFlow;
+
+  // State validation MUST happen before anything else.
+  if (!flow || flow.provider !== provider || !state || flow.state !== state) {
+    await logAudit({
+      req,
+      action: "sso.sign_in.rejected",
+      outcome: "failure",
+      details: { provider, reason: "state_mismatch" },
+    });
+    delete req.session.oidcFlow;
+    ssoErrorRedirect(req, res, "state");
+    return;
+  }
+  if (Date.now() - flow.createdAt > SSO_FLOW_TTL_MS) {
+    delete req.session.oidcFlow;
+    await logAudit({
+      req,
+      action: "sso.sign_in.rejected",
+      outcome: "failure",
+      details: { provider, reason: "flow_expired" },
+    });
+    ssoErrorRedirect(req, res, "expired");
+    return;
+  }
+  if (!code) {
+    delete req.session.oidcFlow;
+    await logAudit({
+      req,
+      action: "sso.sign_in.rejected",
+      outcome: "failure",
+      details: { provider, reason: "missing_code" },
+    });
+    ssoErrorRedirect(req, res, "missing_code");
+    return;
+  }
+
+  try {
+    let tokens;
+    try {
+      tokens = await exchangeCodeForTokens(provider, {
+        code,
+        codeVerifier: flow.codeVerifier,
+        redirectUri: flow.redirectUri,
+      });
+    } catch (err) {
+      await logAudit({
+        req,
+        action: "sso.sign_in.rejected",
+        outcome: "failure",
+        details: { provider, reason: "token_exchange_failed", error: (err as Error).message },
+      });
+      delete req.session.oidcFlow;
+      ssoErrorRedirect(req, res, "token");
+      return;
+    }
+
+    let verified;
+    try {
+      verified = await verifyIdToken(provider, tokens.id_token, flow.nonce);
+    } catch (err) {
+      const reason = (err as Error).message;
+      await logAudit({
+        req,
+        action: "sso.sign_in.rejected",
+        outcome: "failure",
+        details: { provider, reason: `id_token_${reason}` },
+      });
+      delete req.session.oidcFlow;
+      ssoErrorRedirect(req, res, "token");
+      return;
+    }
+
+    if (!verified.emailVerified) {
+      await logAudit({
+        req,
+        action: "sso.sign_in.rejected",
+        outcome: "failure",
+        userEmail: verified.email,
+        details: { provider, reason: "email_not_verified" },
+      });
+      delete req.session.oidcFlow;
+      ssoErrorRedirect(req, res, "email_unverified");
+      return;
+    }
+
+    // 1) Try (provider, sub) first — survives email changes at the IdP.
+    let identity = await db.query.ssoIdentitiesTable.findFirst({
+      where: and(
+        eq(ssoIdentitiesTable.provider, provider),
+        eq(ssoIdentitiesTable.providerSub, verified.sub),
+      ),
+    });
+
+    let user = identity
+      ? await db.query.usersTable.findFirst({ where: eq(usersTable.id, identity.userId) })
+      : await db.query.usersTable.findFirst({ where: eq(usersTable.email, verified.email) });
+
+    if (!user || !user.isActive) {
+      await logAudit({
+        req,
+        action: "sso.sign_in.rejected",
+        outcome: "failure",
+        organisationId: user?.organisationId ?? undefined,
+        userId: user?.id,
+        userEmail: verified.email,
+        details: { provider, reason: user ? "account_inactive" : "unknown_email" },
+      });
+      delete req.session.oidcFlow;
+      ssoErrorRedirect(req, res, user ? "account_inactive" : "unknown_email");
+      return;
+    }
+
+    // 2) Org policy
+    const method: SignInMethod = provider === "google" ? "google_sso" : "microsoft_sso";
+    const policy = await checkSignInMethodAllowed(user.organisationId, user.role, method);
+    if (!policy.ok) {
+      await logAudit({
+        req,
+        action: "sso.sign_in.rejected",
+        outcome: "failure",
+        organisationId: user.organisationId ?? undefined,
+        userId: user.id,
+        userEmail: verified.email,
+        details: { provider, reason: policy.reason },
+      });
+      delete req.session.oidcFlow;
+      ssoErrorRedirect(req, res, policy.reason || "policy");
+      return;
+    }
+
+    // 3) Link identity on first sign-in for this (provider, sub).
+    if (!identity) {
+      const [inserted] = await db
+        .insert(ssoIdentitiesTable)
+        .values({
+          id: uuidv4(),
+          userId: user.id,
+          provider,
+          providerSub: verified.sub,
+          providerEmail: verified.email,
+        })
+        .returning();
+      identity = inserted;
+      await logAudit({
+        req,
+        action: "sso.identity.linked",
+        outcome: "success",
+        organisationId: user.organisationId ?? undefined,
+        userId: user.id,
+        userEmail: verified.email,
+        details: { provider },
+      });
+    } else {
+      await db
+        .update(ssoIdentitiesTable)
+        .set({ lastUsedAt: new Date(), providerEmail: verified.email })
+        .where(eq(ssoIdentitiesTable.id, identity.id));
+    }
+
+    // 4) Establish session — same shape as the magic-link flow.
+    await regenerateSession(req);
+    req.session.userId = user.id;
+    req.session.email = user.email;
+    req.session.name = user.name;
+    req.session.role = user.role as "super_admin" | "org_admin" | "org_viewer";
+    req.session.organisationId = user.organisationId ?? undefined;
+    req.session.verifiedEmail = user.email;
+    delete req.session.oidcFlow;
+
+    await db.update(usersTable).set({ lastLoginAt: new Date() }).where(eq(usersTable.id, user.id));
+    await logAudit({
+      req,
+      action: "sso.sign_in.success",
+      outcome: "success",
+      organisationId: user.organisationId ?? undefined,
+      userId: user.id,
+      userEmail: verified.email,
+      details: { provider },
+    });
+
+    const dest = flow.returnTo || "/app/dashboard";
+    const base = appBaseUrl(req);
+    // returnTo is already validated to start with /app
+    const target = dest.startsWith("/app") ? dest.replace(/^\/app/, "") || "/dashboard" : "/dashboard";
+    req.session.save(() => res.redirect(`${base}/app${target.startsWith("/") ? target : `/${target}`}`));
+  } catch (err) {
+    req.log?.error({ err, provider }, "SSO callback failed");
+    try {
+      await logAudit({
+        req,
+        action: "sso.sign_in.rejected",
+        outcome: "failure",
+        details: { provider, reason: "server_error", error: (err as Error).message },
+      });
+    } catch {
+      // best-effort audit; don't mask the redirect
+    }
+    delete req.session.oidcFlow;
+    ssoErrorRedirect(req, res, "server_error");
+  }
+});
+
+/**
+ * GET /auth/sso/providers — surfaces which SSO buttons the UI should render.
+ * Public endpoint (no PII), used by the sign-in page to hide buttons when the
+ * platform OAuth client isn't yet configured for that provider.
+ */
+router.get("/sso/providers", (_req, res) => {
+  res.json({ providers: configuredProviders() });
+});
 
 export default router;

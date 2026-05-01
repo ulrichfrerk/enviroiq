@@ -1,5 +1,6 @@
 export * from "./organisations";
 export * from "./users";
+export * from "./sso-identities";
 export * from "./fleet";
 export * from "./energy";
 export * from "./goals";

@@ -52,6 +52,22 @@ export const organisationsTable = pgTable("organisations", {
   isActive: boolean("is_active").notNull().default(true),
   requireMfa: boolean("require_mfa").notNull().default(false),
   dataResidency: text("data_residency").notNull().default("NZ"),
+  // SSO policy ────────────────────────────────────────────────────────────────
+  // Per-provider master switch. Both default ON so SSO works as soon as the
+  // tenant has an EnviroIQ-issued OAuth client wired up at the platform level.
+  googleSsoEnabled: boolean("google_sso_enabled").notNull().default(true),
+  microsoftSsoEnabled: boolean("microsoft_sso_enabled").notNull().default(true),
+  // Set of sign-in methods allowed for users in this org. Subset of
+  // ["magic_link","passkey","google_sso","microsoft_sso"]. At least one must
+  // remain non-empty (enforced at the API layer). org_admins always retain a
+  // break-glass magic-link path even if magic_link is removed here.
+  allowedSignInMethods: jsonb("allowed_sign_in_methods")
+    .$type<("magic_link" | "passkey" | "google_sso" | "microsoft_sso")[]>()
+    .notNull()
+    .default(["magic_link", "passkey", "google_sso", "microsoft_sso"]),
+  // When set, ordinary users can ONLY sign in via this provider. Admins still
+  // retain magic-link break-glass.
+  requiredSsoProvider: text("required_sso_provider"),
   // ESG computed metrics — updated by the scheduled metrics refresh engine
   esgFleetCo2eKg: real("esg_fleet_co2e_kg"),
   esgEnergyCo2eKg: real("esg_energy_co2e_kg"),

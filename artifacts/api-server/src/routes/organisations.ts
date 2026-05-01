@@ -194,6 +194,175 @@ router.patch("/:orgId", requireAuth, requireOrgAdmin, async (req, res) => {
   }
 });
 
+// ── SSO policy ─────────────────────────────────────────────────────────────
+// GET /organisations/:orgId/sso-policy — read current SSO policy.
+router.get("/:orgId/sso-policy", requireAuth, requireOrgAdmin, async (req, res) => {
+  try {
+    const org = await db.query.organisationsTable.findFirst({
+      where: eq(organisationsTable.id, req.params.orgId as string),
+    });
+    if (!org) {
+      res.status(404).json({ error: "Not Found", message: "Organisation not found" });
+      return;
+    }
+    res.json({
+      googleSsoEnabled: org.googleSsoEnabled,
+      microsoftSsoEnabled: org.microsoftSsoEnabled,
+      allowedSignInMethods: org.allowedSignInMethods ?? [],
+      requiredSsoProvider: org.requiredSsoProvider,
+    });
+  } catch (err) {
+    req.log.error({ err }, "Get SSO policy failed");
+    res.status(500).json({ error: "Internal Server Error", message: "Failed to load SSO policy" });
+  }
+});
+
+const VALID_SIGN_IN_METHODS = ["magic_link", "passkey", "google_sso", "microsoft_sso"] as const;
+type ValidSignInMethod = (typeof VALID_SIGN_IN_METHODS)[number];
+
+// PATCH /organisations/:orgId/sso-policy
+router.patch("/:orgId/sso-policy", requireAuth, requireOrgAdmin, async (req, res) => {
+  try {
+    const orgId = req.params.orgId as string;
+    const body = req.body as {
+      googleSsoEnabled?: unknown;
+      microsoftSsoEnabled?: unknown;
+      allowedSignInMethods?: unknown;
+      requiredSsoProvider?: unknown;
+    };
+
+    const update: Record<string, unknown> = { updatedAt: new Date() };
+
+    if (body.googleSsoEnabled !== undefined) {
+      if (typeof body.googleSsoEnabled !== "boolean") {
+        res.status(400).json({ error: "Bad Request", message: "googleSsoEnabled must be boolean" });
+        return;
+      }
+      update.googleSsoEnabled = body.googleSsoEnabled;
+    }
+    if (body.microsoftSsoEnabled !== undefined) {
+      if (typeof body.microsoftSsoEnabled !== "boolean") {
+        res.status(400).json({ error: "Bad Request", message: "microsoftSsoEnabled must be boolean" });
+        return;
+      }
+      update.microsoftSsoEnabled = body.microsoftSsoEnabled;
+    }
+    if (body.allowedSignInMethods !== undefined) {
+      if (
+        !Array.isArray(body.allowedSignInMethods) ||
+        body.allowedSignInMethods.length === 0 ||
+        !body.allowedSignInMethods.every(
+          (m): m is ValidSignInMethod =>
+            typeof m === "string" && (VALID_SIGN_IN_METHODS as readonly string[]).includes(m),
+        )
+      ) {
+        res.status(400).json({
+          error: "Bad Request",
+          message: "allowedSignInMethods must be a non-empty array of: " + VALID_SIGN_IN_METHODS.join(", "),
+        });
+        return;
+      }
+      // Dedup
+      update.allowedSignInMethods = Array.from(new Set(body.allowedSignInMethods)) as ValidSignInMethod[];
+    }
+    if (body.requiredSsoProvider !== undefined) {
+      if (
+        body.requiredSsoProvider !== null &&
+        body.requiredSsoProvider !== "google" &&
+        body.requiredSsoProvider !== "microsoft"
+      ) {
+        res.status(400).json({ error: "Bad Request", message: "requiredSsoProvider must be 'google', 'microsoft', or null" });
+        return;
+      }
+      update.requiredSsoProvider = body.requiredSsoProvider;
+    }
+
+    const previous = await db.query.organisationsTable.findFirst({
+      where: eq(organisationsTable.id, orgId),
+    });
+    if (!previous) {
+      res.status(404).json({ error: "Not Found", message: "Organisation not found" });
+      return;
+    }
+
+    // Effective-usability invariant: after applying changes, at least one
+    // sign-in method in the allowed list must actually be reachable for
+    // non-admin users. This blocks combinations like "only google_sso allowed
+    // but Google is disabled" or "requiredSsoProvider=google with Google
+    // disabled" which would silently lock users out (admins still have the
+    // magic-link break-glass, but the UX would be broken).
+    const effective = {
+      googleSsoEnabled: update.googleSsoEnabled ?? previous.googleSsoEnabled,
+      microsoftSsoEnabled: update.microsoftSsoEnabled ?? previous.microsoftSsoEnabled,
+      allowedSignInMethods:
+        (update.allowedSignInMethods as ValidSignInMethod[] | undefined) ??
+        ((previous.allowedSignInMethods as ValidSignInMethod[] | null) ?? VALID_SIGN_IN_METHODS),
+      requiredSsoProvider:
+        update.requiredSsoProvider !== undefined
+          ? update.requiredSsoProvider
+          : previous.requiredSsoProvider,
+    };
+    const usable = effective.allowedSignInMethods.filter((m) => {
+      if (m === "magic_link" || m === "passkey") {
+        return effective.requiredSsoProvider === null || effective.requiredSsoProvider === undefined;
+      }
+      if (m === "google_sso") {
+        return effective.googleSsoEnabled && (effective.requiredSsoProvider ?? "google") === "google";
+      }
+      if (m === "microsoft_sso") {
+        return (
+          effective.microsoftSsoEnabled &&
+          (effective.requiredSsoProvider ?? "microsoft") === "microsoft"
+        );
+      }
+      return false;
+    });
+    if (usable.length === 0) {
+      res.status(400).json({
+        error: "Bad Request",
+        message:
+          "These settings would lock out non-admin users — at least one allowed sign-in method must be effectively reachable. Adjust allowedSignInMethods, the provider toggles, or requiredSsoProvider so they are mutually consistent.",
+      });
+      return;
+    }
+
+    const [updated] = await db
+      .update(organisationsTable)
+      .set(update)
+      .where(eq(organisationsTable.id, orgId))
+      .returning();
+
+    await logAudit({
+      req,
+      action: "sso.policy.changed",
+      resourceType: "organisation",
+      resourceId: orgId,
+      previousValue: {
+        googleSsoEnabled: previous.googleSsoEnabled,
+        microsoftSsoEnabled: previous.microsoftSsoEnabled,
+        allowedSignInMethods: previous.allowedSignInMethods,
+        requiredSsoProvider: previous.requiredSsoProvider,
+      },
+      newValue: {
+        googleSsoEnabled: updated.googleSsoEnabled,
+        microsoftSsoEnabled: updated.microsoftSsoEnabled,
+        allowedSignInMethods: updated.allowedSignInMethods,
+        requiredSsoProvider: updated.requiredSsoProvider,
+      },
+    });
+
+    res.json({
+      googleSsoEnabled: updated.googleSsoEnabled,
+      microsoftSsoEnabled: updated.microsoftSsoEnabled,
+      allowedSignInMethods: updated.allowedSignInMethods ?? [],
+      requiredSsoProvider: updated.requiredSsoProvider,
+    });
+  } catch (err) {
+    req.log.error({ err }, "Update SSO policy failed");
+    res.status(500).json({ error: "Internal Server Error", message: "Failed to update SSO policy" });
+  }
+});
+
 // DELETE /organisations/:orgId
 router.delete("/:orgId", requireAuth, requireRole("super_admin"), async (req, res) => {
   try {

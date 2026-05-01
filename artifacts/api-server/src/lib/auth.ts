@@ -1,7 +1,89 @@
 import type { Request, Response, NextFunction } from "express";
-import { db, usersTable } from "@workspace/db";
+import { db, usersTable, organisationsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { checkOrgLoginAllowed } from "./org-active-guard.js";
+
+export type SignInMethod = "magic_link" | "passkey" | "google_sso" | "microsoft_sso";
+
+export interface SignInPolicyResult {
+  ok: boolean;
+  /** True when this allow-through is the org_admin break-glass path. */
+  breakGlass?: boolean;
+  reason?:
+    | "org_missing"
+    | "method_not_allowed"
+    | "required_provider_mismatch"
+    | "provider_disabled";
+  message?: string;
+}
+
+/**
+ * Check whether `userRole` in `organisationId` may sign in via `method`.
+ *
+ * Org policy rules:
+ *  - If `googleSsoEnabled` / `microsoftSsoEnabled` is false, that provider is refused.
+ *  - The method must be in `allowedSignInMethods`.
+ *  - If `requiredSsoProvider` is set, only that provider's SSO is allowed.
+ *
+ * Break-glass: an `org_admin` (or higher) is ALWAYS permitted to sign in via
+ * `magic_link` regardless of the policy — this prevents an admin from locking
+ * themselves out of their own tenant. Callers must audit the break-glass path
+ * (`auth.break_glass_magic_link`).
+ *
+ * Super admins bypass org policy entirely (no organisation).
+ */
+export async function checkSignInMethodAllowed(
+  organisationId: string | null,
+  userRole: string,
+  method: SignInMethod,
+): Promise<SignInPolicyResult> {
+  if (userRole === "super_admin" || !organisationId) return { ok: true };
+
+  const org = await db.query.organisationsTable.findFirst({
+    where: eq(organisationsTable.id, organisationId),
+  });
+  if (!org) return { ok: false, reason: "org_missing", message: "Organisation not found" };
+
+  // Per-provider master switch
+  if (method === "google_sso" && org.googleSsoEnabled === false) {
+    return { ok: false, reason: "provider_disabled", message: "Google sign-in is disabled for this organisation." };
+  }
+  if (method === "microsoft_sso" && org.microsoftSsoEnabled === false) {
+    return { ok: false, reason: "provider_disabled", message: "Microsoft sign-in is disabled for this organisation." };
+  }
+
+  const allowed = (org.allowedSignInMethods ?? []) as SignInMethod[];
+  const isInAllowList = allowed.includes(method);
+
+  // Required SSO provider — overrides the allow-list for non-SSO methods.
+  if (org.requiredSsoProvider) {
+    const requiredMethod: SignInMethod =
+      org.requiredSsoProvider === "google" ? "google_sso" : "microsoft_sso";
+    if (method !== requiredMethod) {
+      // Break-glass: admins can still magic-link in.
+      if (userRole === "org_admin" && method === "magic_link") {
+        return { ok: true, breakGlass: true };
+      }
+      return {
+        ok: false,
+        reason: "required_provider_mismatch",
+        message: `This organisation requires sign-in with ${org.requiredSsoProvider === "google" ? "Google" : "Microsoft"}.`,
+      };
+    }
+  }
+
+  if (!isInAllowList) {
+    if (userRole === "org_admin" && method === "magic_link") {
+      return { ok: true, breakGlass: true };
+    }
+    return {
+      ok: false,
+      reason: "method_not_allowed",
+      message: "This sign-in method is not enabled for your organisation. Contact your administrator.",
+    };
+  }
+  return { ok: true };
+}
 
 /**
  * Authenticated user, populated by `requireAuth` and consumed by all

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { useGetEnergyEmailAddress, useGetWidgetConfig } from "@workspace/api-client-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -6,10 +6,228 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
   Mail, Copy, Check, Webhook, RefreshCw, Code, Loader2,
-  KeyRound, Eye, EyeOff, ExternalLink,
+  KeyRound, Eye, EyeOff, ExternalLink, Shield, AlertCircle,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
+
+type SignInMethod = "magic_link" | "passkey" | "google_sso" | "microsoft_sso";
+
+interface SsoPolicy {
+  googleSsoEnabled: boolean;
+  microsoftSsoEnabled: boolean;
+  allowedSignInMethods: SignInMethod[];
+  requiredSsoProvider: "google" | "microsoft" | null;
+}
+
+const METHOD_LABELS: Record<SignInMethod, string> = {
+  magic_link: "Email magic link",
+  passkey: "Passkey",
+  google_sso: "Google SSO",
+  microsoft_sso: "Microsoft SSO",
+};
+
+function SsoPolicyCard({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const { data, isLoading } = useQuery<SsoPolicy>({
+    queryKey: ["ssoPolicy", orgId],
+    queryFn: async () => {
+      const res = await fetch(`/api/organisations/${orgId}/sso-policy`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load SSO policy");
+      return res.json();
+    },
+    enabled: isAdmin,
+  });
+
+  const [draft, setDraft] = useState<SsoPolicy | null>(null);
+  useEffect(() => {
+    if (data && !draft) setDraft(data);
+  }, [data, draft]);
+
+  const mutate = useMutation({
+    mutationFn: async (next: SsoPolicy) => {
+      const res = await fetch(`/api/organisations/${orgId}/sso-policy`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(next),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { message?: string }).message || "Failed to save SSO policy");
+      }
+      return res.json() as Promise<SsoPolicy>;
+    },
+    onSuccess: (next) => {
+      queryClient.setQueryData(["ssoPolicy", orgId], next);
+      setDraft(next);
+      toast({ title: "Sign-in & SSO policy updated" });
+    },
+    onError: (e: unknown) => {
+      toast({
+        variant: "destructive",
+        title: "Could not save",
+        description: e instanceof Error ? e.message : "Unknown error",
+      });
+    },
+  });
+
+  if (!isAdmin) return null;
+
+  if (isLoading || !draft) {
+    return (
+      <Card className="overflow-hidden border-border/50">
+        <div className="p-6 border-b border-border/50 bg-secondary/20 flex items-center gap-3">
+          <div className="p-2 bg-primary/10 rounded-xl"><Shield className="w-5 h-5 text-primary" /></div>
+          <div>
+            <h2 className="font-semibold text-base">Sign-in & SSO</h2>
+            <p className="text-xs text-muted-foreground">Loading…</p>
+          </div>
+        </div>
+        <div className="p-6 flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="w-4 h-4 animate-spin" /> Loading sign-in policy…
+        </div>
+      </Card>
+    );
+  }
+
+  const toggleMethod = (m: SignInMethod) => {
+    setDraft((d) => {
+      if (!d) return d;
+      const has = d.allowedSignInMethods.includes(m);
+      const next = has ? d.allowedSignInMethods.filter((x) => x !== m) : [...d.allowedSignInMethods, m];
+      return { ...d, allowedSignInMethods: next };
+    });
+  };
+
+  const dirty = JSON.stringify(draft) !== JSON.stringify(data);
+  const validationError = draft.allowedSignInMethods.length === 0
+    ? "At least one sign-in method must remain enabled."
+    : null;
+
+  const onSave = () => {
+    if (!draft || validationError) return;
+    mutate.mutate(draft);
+  };
+
+  const onReset = () => {
+    if (data) setDraft(data);
+  };
+
+  return (
+    <Card className="overflow-hidden border-border/50">
+      <div className="p-6 border-b border-border/50 bg-secondary/20 flex items-center gap-3">
+        <div className="p-2 bg-primary/10 rounded-xl"><Shield className="w-5 h-5 text-primary" /></div>
+        <div>
+          <h2 className="font-semibold text-base">Sign-in & SSO</h2>
+          <p className="text-xs text-muted-foreground">Choose how your team signs in to EnviroIQ</p>
+        </div>
+      </div>
+      <div className="p-6 space-y-6">
+        {/* Per-provider toggles */}
+        <div className="space-y-3">
+          <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Allowed providers</label>
+          <label className="flex items-center justify-between gap-3 px-4 py-3 rounded-md border border-border bg-background">
+            <div>
+              <div className="text-sm font-medium text-foreground">Allow Google sign-in for this organisation</div>
+              <div className="text-xs text-muted-foreground">Anyone with a verified Gmail or Google Workspace account</div>
+            </div>
+            <input
+              type="checkbox"
+              checked={draft.googleSsoEnabled}
+              onChange={(e) => setDraft({ ...draft, googleSsoEnabled: e.target.checked })}
+              className="h-4 w-4 accent-primary"
+              data-testid="checkbox-google-sso-enabled"
+            />
+          </label>
+          <label className="flex items-center justify-between gap-3 px-4 py-3 rounded-md border border-border bg-background">
+            <div>
+              <div className="text-sm font-medium text-foreground">Allow Microsoft sign-in for this organisation</div>
+              <div className="text-xs text-muted-foreground">Microsoft 365 / Entra ID and personal Microsoft accounts</div>
+            </div>
+            <input
+              type="checkbox"
+              checked={draft.microsoftSsoEnabled}
+              onChange={(e) => setDraft({ ...draft, microsoftSsoEnabled: e.target.checked })}
+              className="h-4 w-4 accent-primary"
+              data-testid="checkbox-microsoft-sso-enabled"
+            />
+          </label>
+        </div>
+
+        {/* Allowed methods */}
+        <div className="space-y-3">
+          <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Sign-in methods allowed for this organisation</label>
+          <div className="grid sm:grid-cols-2 gap-2">
+            {(Object.keys(METHOD_LABELS) as SignInMethod[]).map((m) => (
+              <label
+                key={m}
+                className="flex items-center gap-3 px-4 py-3 rounded-md border border-border bg-background cursor-pointer"
+              >
+                <input
+                  type="checkbox"
+                  checked={draft.allowedSignInMethods.includes(m)}
+                  onChange={() => toggleMethod(m)}
+                  className="h-4 w-4 accent-primary"
+                  data-testid={`checkbox-method-${m}`}
+                />
+                <span className="text-sm text-foreground">{METHOD_LABELS[m]}</span>
+              </label>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Org admins always retain a magic-link break-glass path even if magic-link is disabled here.
+          </p>
+        </div>
+
+        {/* Required SSO provider */}
+        <div className="space-y-3">
+          <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Required SSO provider (optional)</label>
+          <select
+            value={draft.requiredSsoProvider ?? ""}
+            onChange={(e) =>
+              setDraft({
+                ...draft,
+                requiredSsoProvider: (e.target.value || null) as "google" | "microsoft" | null,
+              })
+            }
+            className="w-full h-11 px-3 rounded-md bg-input border border-border focus:border-primary focus:ring-1 focus:ring-primary outline-none text-foreground text-sm"
+            data-testid="select-required-sso-provider"
+          >
+            <option value="">— None —</option>
+            <option value="google">Google only</option>
+            <option value="microsoft">Microsoft only</option>
+          </select>
+          <p className="text-xs text-muted-foreground">
+            When set, ordinary users may only sign in via the chosen provider. Admins retain magic-link break-glass.
+          </p>
+        </div>
+
+        {validationError && (
+          <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 flex gap-2 items-start">
+            <AlertCircle className="h-4 w-4 text-destructive flex-shrink-0 mt-0.5" />
+            <p className="text-sm text-destructive-foreground">{validationError}</p>
+          </div>
+        )}
+
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="outline" disabled={!dirty || mutate.isPending} onClick={onReset}>
+            Reset
+          </Button>
+          <Button
+            onClick={onSave}
+            disabled={!dirty || !!validationError || mutate.isPending}
+            data-testid="button-save-sso-policy"
+          >
+            {mutate.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+            Save changes
+          </Button>
+        </div>
+      </div>
+    </Card>
+  );
+}
 
 function CopyField({ value, label, mono = true }: { value: string; label: string; mono?: boolean }) {
   const [copied, setCopied] = useState(false);
@@ -89,6 +307,11 @@ export default function Settings() {
         <h1 className="text-3xl font-bold tracking-tight text-foreground">Integrations & Settings</h1>
         <p className="text-muted-foreground mt-1">Connect data sources and embed your public sustainability widget.</p>
       </div>
+
+      {/* ── Sign-in & SSO ─────────────────────────────────────────────── */}
+      {orgId && (session?.role === "org_admin" || session?.role === "super_admin") && (
+        <SsoPolicyCard orgId={orgId} isAdmin />
+      )}
 
       {/* ── Inbound Email ─────────────────────────────────────────────── */}
       <Card className="overflow-hidden border-border/50">

@@ -2,293 +2,55 @@
 
 ## Overview
 
-Real-time multi-tenant ESG sustainability measurement platform. Companies track CO2 emissions from fleet vehicles (Navman, Blackhawk GPS integration) and energy consumption (PDF upload + inbound email bill parsing). Features custom passwordless authentication (email magic links via Resend + WebAuthn passkeys), super-admin portal, board-ready PDF reports, an embeddable public widget, full audit logging (SOC 2 mindset), and role-based access.
+EnviroIQ is a real-time multi-tenant ESG sustainability measurement platform. It enables companies to track CO2 emissions from fleet vehicles and energy consumption. The platform features custom passwordless authentication, a super-admin portal, generates board-ready PDF reports, includes an embeddable public widget, incorporates full audit logging for SOC 2 compliance, and supports role-based access.
 
-### ESG Intelligence Features
-- **Maturity Scoring**: 4-dimension scoring (Foundation 40pt, Coverage 30pt, Quality 20pt, Governance 10pt) — grades: Foundation / Developing / Advanced / Leader
-- **Emission Targets**: CRUD for reduction targets with baseline/target year, % reduction, framework (SBTi, Paris, etc.)
-- **Scenario Modelling**: Lever-based emission reduction engine (EV transition, km reduction, modal shift, renewables, efficiency, offsets) with live preview
-- **Dashboard widgets**: Maturity ring chart + Targets progress bars on the main dashboard
+Key capabilities include:
+- **ESG Intelligence**: Maturity Scoring, Emission Target management, and Scenario Modelling for emission reduction.
+- **Data Ingestion**: Integration with GPS providers (Navman, Blackhawk) for fleet data and PDF/email parsing for energy bills.
+- **Reporting & Analytics**: Dashboard widgets for maturity and target progress, detailed emission tracking, and concrete, ranked decarbonisation recommendations.
 
-## Stack
+The project aims to provide comprehensive ESG data and actionable insights to facilitate sustainable practices and drive environmental impact.
 
-- **Monorepo tool**: pnpm workspaces
-- **Node.js**: 24
-- **Package manager**: pnpm
-- **TypeScript**: 5.9
-- **API framework**: Express 5 + Helmet + express-rate-limit
-- **Database**: PostgreSQL + Drizzle ORM
-- **Auth**: Custom passwordless — `express-session` (Postgres store, cookie `eiq.sid`) keyed on `req.session.userId`. Two sign-in surfaces:
-  1. **Magic link** — `POST /api/auth/magic-link/request` issues a one-shot token (15-min TTL) emailed via Resend; `GET /api/auth/magic-link/verify?token=...` consumes it, establishes the session, then redirects users without a passkey to `?enroll_passkey=1` to enrol one.
-  2. **Passkey (WebAuthn)** — `@simplewebauthn/server` v13 on the API, `@simplewebauthn/browser` v13 on the client. `POST /api/auth/passkey/{login,register}/{options,verify}` for both ceremonies. `rpID` is derived from the request hostname so the same code works on `enviroiq.net` and on Replit dev preview domains.
-  Tables: `users`, `passkeys`, `magic_links`, `webauthn_challenges`. The supplier portal keeps its own separate magic-link cookie flow.
-- **Validation**: Zod (zod/v4), drizzle-zod
-- **API codegen**: Orval (from OpenAPI spec)
-- **Frontend**: React + Vite + TanStack Query + Wouter + Recharts + shadcn/ui
-- **Build**: esbuild (ESM bundle for API), Vite (frontend)
+## User Preferences
 
-## Roles
+I prefer iterative development with clear communication on significant changes. Before making any major architectural changes or introducing new external dependencies, please ask for approval. For code, I prefer modern TypeScript with a focus on maintainability and scalability. All documentation should be clear, concise, and kept up-to-date with the codebase.
 
-- `super_admin` — platform management, create/manage organisations
-- `org_admin` — manage their organisation, users, vehicles, energy, reports
-- `org_viewer` — read-only access
+## System Architecture
 
-## Demo Data
+The EnviroIQ platform is built as a pnpm monorepo using Node.js 24 and TypeScript 5.9.
 
-The database has been seeded with:
-- **Super Admin**: `admin@enviroiq.app`
-- **Org Admin**: `sarah@acmelogistics.co.nz`
-- **Viewer**: `james@acmelogistics.co.nz`
-- **Organisation**: Acme Logistics Ltd (4 vehicles, 30 fleet events, 12 energy readings, 3 goals, 1 report)
+### UI/UX Decisions
+- **Color Scheme**: Utilizes a specific brand palette: Charcoal (`#0B0D0F`), Electric Green (`#22C55E`), IQ Blue (`#0EA5E8`), Steel (`#64748B`), Mist (`#F3F4F6`), and White (`#FFFFFF`).
+- **Typography**: Employs the Inter font family across various weights.
+- **Branding**: The logo mark features a 'Q' with a waveform and data point, symbolizing intelligence and real-time data. Specific logo variants are used for dark vs. light backgrounds and app vs. marketing contexts.
+- **Application Theme**: The main application (`enviroiq`) uses a dark charcoal theme, while the marketing site uses a white/light theme. Electric Green serves as the primary accent and CTA color across both.
+- **Frontend**: Developed with React, Vite, TanStack Query, Wouter, Recharts, and shadcn/ui.
 
-Login at `/app/sign-in` — enter email, click the magic link from the email (Resend in production, console-logged in dev when `RESEND_API_KEY` is unset).
+### Technical Implementations
+- **API Framework**: Express 5, secured with Helmet and express-rate-limit.
+- **Database**: PostgreSQL with Drizzle ORM. The schema includes tables for organisations, users, fleet, energy, goals, reports, widgets, and audit logs.
+- **Authentication**: Custom passwordless system using `express-session` for session management. It supports four sign-in methods: magic links (via Resend), WebAuthn passkeys (using `@simplewebauthn/server` and `@simplewebauthn/browser`), Google SSO and Microsoft SSO (native OIDC + PKCE via `jose`, no Clerk/Auth0/WorkOS). SSO never creates accounts (no JIT) — the user must already exist; the first successful sign-in links a row in `sso_identities`. Org admins can configure per-org policy in **Settings → Sign-in & SSO**: enable/disable each provider, restrict the list of allowed sign-in methods, optionally require one specific SSO provider for non-admin users. Org admins always retain a magic-link break-glass path (audited as `auth.break_glass_magic_link`). All SSO and policy events are written to the audit log (`sso.sign_in.success`, `sso.sign_in.rejected`, `sso.identity.linked`, `sso.policy.changed`).
+- **Validation**: Zod is used for schema validation.
+- **API Codegen**: Orval generates API client code from an OpenAPI specification.
+- **Monorepo Structure**: Organized into `artifacts` (API server and frontend), `lib` (API spec, generated clients, database schema), and `scripts`.
+- **Roles**: `super_admin`, `org_admin`, and `org_viewer` with distinct access levels.
+- **Emission Factors**: Pre-defined factors for Diesel, Petrol, Electricity, and Gas are used for CO2e calculations.
+- **Compliance Document Archive**: Ingested documents are archived in the `document_archives` table with a 6-month retention policy, aligned with NZ Privacy Act, GDPR, and SOC 2. Metadata is retained indefinitely for audit purposes.
+- **Security Features**: Includes a runtime security status check (`/security/status`) available to admins, assessing various security configurations and practices. Public compliance snapshots are also available.
 
-## Emission Factors
+### Feature Specifications
+- **ESG Intelligence**:
+    - **Maturity Scoring**: A 4-dimensional system (Foundation, Coverage, Quality, Governance) resulting in grades: Foundation, Developing, Advanced, Leader.
+    - **Emission Targets**: CRUD operations for defining reduction targets with baselines, target years, percentage reductions, and frameworks (SBTi, Paris).
+    - **Scenario Modelling**: An interactive engine for modeling emission reductions through levers like EV transition, distance reduction, modal shifts, renewables, efficiency, and offsets.
+- **Decarbonisation Recommendations**: Concrete, ranked, NZ-specific actions generated from live fleet, energy, and target data, including CO₂e savings, capex, payback, scope, and effort.
+- **CRM Integration API (`/api/v1/*`)**: A bearer-key authenticated API for customer operations, fully aligned with the FGC Customer Operations API Standard v1. It handles customer provisioning, contact/user management, subscriptions, billing, and pulls audit/ESG metrics. This API enforces specific response envelopes, error structures, correlation IDs, and idempotency keys. Lifecycle endpoints require specific `reason_code` values.
 
-- Diesel: 2.68 kg CO2e per litre
-- Petrol: 2.31 kg CO2e per litre
-- Electricity: 0.0977 kg CO2e per kWh
-- Gas: 0.0535 kg CO2e per MJ
+## External Dependencies
 
-## Structure
-
-```
-.
-├── artifacts/
-│   ├── api-server/         # Express API (port 8080)
-│   │   ├── src/app.ts      # Helmet, CORS, session, rate-limit
-│   │   ├── src/routes/     # auth, organisations, users, fleet, energy, emissions, goals, reports, widget, audit, admin
-│   │   ├── src/lib/        # auth.ts (middleware), audit.ts, emissions.ts, logger.ts
-│   │   └── src/seed.ts     # Demo data seeder
-│   └── enviroiq/           # React/Vite frontend (previewPath /)
-│       ├── src/pages/      # login, dashboard, fleet, energy, goals, reports, users, widget, audit, admin
-│       ├── src/components/ # layout (AppLayout, AppSidebar), ui (shadcn)
-│       ├── src/hooks/      # use-auth.ts (WebAuthn flow), use-toast, use-mobile
-│       └── src/lib/        # webauthn.ts, queryClient.ts
-├── lib/
-│   ├── api-spec/           # OpenAPI 3.1 spec + Orval config
-│   ├── api-client-react/   # Generated React Query hooks
-│   ├── api-zod/            # Generated Zod schemas
-│   └── db/                 # Drizzle schema + DB connection
-│       └── src/schema/     # organisations, users, fleet, energy, goals, reports, widget, audit
-└── scripts/                # Utility scripts
-```
-
-## API Routes
-
-All under `/api`:
-- `GET /healthz` — health check
-- `GET/POST /auth/session|passkey/*|magic-link/*|logout`
-- `GET/POST/PATCH/DELETE /organisations/:orgId`
-- `GET /organisations/:orgId/summary` — ESG summary dashboard
-- `GET/POST /organisations/:orgId/users`
-- `GET/POST/DELETE /organisations/:orgId/fleet/vehicles`
-- `GET /organisations/:orgId/fleet/events`
-- `POST /webhooks/fleet/navman|blackhawk|generic` — authenticated via per-org `webhookSecret` from `organisations.webhook_secret`
-- `GET /organisations/:orgId/energy/readings`
-- `POST /organisations/:orgId/energy/upload` — PDF bill upload
-- `GET /organisations/:orgId/energy/email-address` — inbound email
-- `POST /webhooks/energy/inbound-email`
-- `GET /organisations/:orgId/emissions` — with period and groupBy
-- `GET/POST/PATCH /organisations/:orgId/goals`
-- `GET/POST /organisations/:orgId/reports`
-- `GET /organisations/:orgId/recommendations` — concrete, ranked NZ-specific
-  decarbonisation actions generated from live fleet, energy, and target data.
-  Returns `{ baseline, totals, targetGap, items[] }`. Items include vehicle
-  EV/PHEV swaps (BYD Shark 6, Atto 3, MG4, LDV eDeliver, Kia EV9), right-sized
-  rooftop solar (SEANZ benchmarks), renewable supplier switches (Ecotricity
-  lead), building measures (LED, HVAC schedule, heat-pump HWC, sub-metering),
-  and operational changes (telematics coaching, fleet right-sizing, hybrid WFH).
-  Each rec carries CO₂e saving, capex, payback, scope, effort, and links.
-  Frontend: `/recommendations` page with category filter chips and target-gap
-  callout. Catalogue lives in `lib/recommendations-catalogue.ts`.
-- `GET/PUT /organisations/:orgId/widget`
-- `GET /widget/:widgetKey/data` — public (no auth)
-- `GET /organisations/:orgId/audit-logs`
-- `GET /admin/stats` — super_admin only
-- `GET /security/status` — admin-only (super_admin / org_admin); runs ~17 runtime
-  security checks (TLS, headers, CORS, session, auth rate-limit, passkey store,
-  CRM key hashing + indexed prefix lookup, fleet webhook secrets per org,
-  public-audit token hashing, audit-log activity, CRM call ledger, etc.).
-  Returns `{ overall: pass|warn|fail, counts, checks[] }`. Surfaced in the UI
-  via the floating shield button at the bottom-right of every authenticated
-  page (`SecurityStatusWidget`). Polls every 5 min idle / 1 min while open;
-  hidden entirely for non-admin roles.
-- `GET /security/pack.txt` — admin-only; downloadable plaintext "Internal
-  Security Pack" with every check + detail + SHA-256 self-checksum. Confidential.
-- `GET /api/compliance/public` — **PUBLIC**, no auth, open CORS. Returns a
-  sanitised aggregate snapshot: overall status, passing/total counts, 8 high-level
-  category buckets (no check IDs, no env names, no infra detail). 60s in-memory
-  cache. Powers the live `<ComplianceWidget>` on the marketing site (front page
-  + /trust hero).
-- `GET /api/compliance/public/pack.txt` — **PUBLIC** downloadable text "Trust
-  Pack" with the same sanitised data plus framework alignment claims (SOC 2,
-  ISO 27001, NZ Privacy Act, GDPR, GHG Protocol, FIDO2) and SHA-256 checksum.
-  Safe for boards, prospects, and procurement.
-
-### CRM Integration API (`/api/v1/*`) — FGC Customer Operations API Standard v1
-Bearer-key authenticated surface for the sister CRM (FGC, also on Replit) to provision
-EnviroIQ customers, manage contacts/users/subscriptions/billing/provisioning/tickets,
-and pull audit + ESG metrics. **Fully aligned to the FGC Customer Operations API Standard
-v1** — every payload is snake_case, every response uses the standard envelope.
-
-**Conventions enforced platform-wide on `/api/v1`:**
-- Response envelope: `{ success, data, meta:{timestamp,version,requestId}, [pagination] }`.
-- Error envelope: `{ success:false, error:{ code, message, details? }, meta }` with
-  SCREAMING_SNAKE_CASE codes (`BAD_REQUEST`, `UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND`,
-  `CONFLICT`, `UNPROCESSABLE`, `RATE_LIMITED`, `INTERNAL_ERROR`, `UPSTREAM_ERROR`).
-- Per-request `X-Correlation-ID` (auto-minted if absent) — echoed back, persisted on
-  every audit row (`audit_logs.correlation_id`), and threaded through inner calls.
-- `Idempotency-Key` header on POST/PATCH/DELETE — 24h replay window via
-  `idempotency_keys` table (returns cached body + `Idempotent-Replay: true` header;
-  same key + different body = `409 CONFLICT`).
-- Lifecycle endpoints (suspend/reactivate/archive/cancel/credit-hold/escalate) **require**
-  a `reason_code` from the FGC enum: `customer_request`, `billing_non_payment`,
-  `security_event`, `compliance_issue`, `duplicate_record`, `internal_admin_change`,
-  `failed_verification`, `contract_end`, `fraud_review`.
-- Webhook event names (emitted in `audit_logs.details.event`): `customer.created`,
-  `customer.suspended`, `customer.reactivated`, `customer.archived`, `contact.*`,
-  `user.suspended`, `subscription.created`, `subscription.cancelled`,
-  `billing_profile.credit_hold_applied`, `billing_profile.credit_hold_released`,
-  `provisioning.requested`, `ticket.escalated`, etc.
-
-**Entity surface** (all under `/api/v1`):
-- `customers` (formerly organisations) — full CRUD + `/suspend`, `/reactivate`, `/archive`
-- `customers/:cid/contacts` — CRUD
-- `customers/:cid/users` — invite + `/suspend`, `/reactivate`
-- `customers/:cid/subscriptions` — create + `/cancel`
-- `customers/:cid/billing-profile` — GET, PUT, `/credit-hold`
-- `customers/:cid/provisioning-requests` — create + list
-- `customers/:cid/tickets` — CRUD + `/escalate`
-- `audit` — global query with filters (customer_id, action, actor_type, reason_code, correlation_id, …)
-
-**Scopes** (each key has explicit subset; enforced per route):
-`customers|contacts|users|subscriptions|billing|provisioning|tickets|audit|metrics × read|write`.
-
-**Key infra:**
-- `lib/api-response.ts` — `ok`, `created`, `paginated`, `noContent`, `Errors.*`,
-  `fgcErrorHandler` (last middleware on `/v1`), `asyncRoute`.
-- `lib/api-context.ts` — `correlationMiddleware` (binds `X-Correlation-ID`).
-- `lib/idempotency.ts` — replay + body-hash conflict detection.
-- `lib/audit.ts` — extended with `actor_type`, `previous_value`, `new_value`,
-  `reason_code`, `correlation_id`; `FGC_REASON_CODES` allow-list.
-- Keys issued from Super Admin → "CRM API & Keys" (`/api-keys`); SHA-256 hashed only,
-  shown to operator exactly once at creation; per-call audit log (`crm_api_key_usage`).
-- Auth flow: lookup by indexed public prefix → constant-time hash compare. All auth
-  failures route through the FGC envelope (`UNAUTHORIZED`/`FORBIDDEN`).
-- Suspending a customer immediately blocks all logins for that org's users via
-  `lib/org-active-guard.ts` (called from session, passkey-authenticate, magic-link verify).
-- Spec: `GET /api/v1/openapi.json` (OpenAPI 3.1, includes `x-fgc-standard` extension
-  listing all reason codes + webhook events) + `/crm-api-spec.md` (human brief).
-
-## Compliance Document Archive (6-month retention)
-
-Every PDF/document ingested for analytics is automatically copied to the
-`document_archives` table for compliance purposes, then permanently purged 6
-months after capture by the daily scheduler.
-
-**Sources captured:**
-- `energy_bill_upload` — single-file uploads via `POST /organisations/:orgId/energy/upload`
-- `energy_bill_batch_upload` — bulk uploads via `POST /organisations/:orgId/energy/upload-batch`
-- `energy_bill_email` — PDF attachments from inbound webhook `POST /webhooks/energy/inbound-email`
-
-**Schema** (`document_archives`): `id`, `organisation_id`, `source_type`,
-`source_id` (FK to source row, e.g. energy_readings.id), `original_filename`,
-`content_type`, `size_bytes`, `sha256` (integrity proof), `content` (bytea —
-raw bytes, nullified on purge), `captured_at`, `expires_at`,
-`captured_by_user_id` / `_email`, `sender_email` (for inbound mail),
-`retention_policy` (default `6mo_default`), `purged_at`, `notes`. Indexed
-on `(organisation_id, captured_at)`, `(expires_at)`, and `(source_type, source_id)`.
-
-**Lifecycle:** `archiveDocument()` in `lib/documentArchive.ts` is called from
-each ingestion site (failures swallowed — must never break the primary flow).
-The daily prune job runs every 24h and `UPDATE…SET content=NULL, purged_at=now()`
-on rows where `expires_at <= now() AND content IS NOT NULL`. The metadata row
-is **retained forever** as evidence the document was held + lawfully purged
-(filename, size, SHA-256, capture/purge timestamps).
-
-**Access:** `GET /api/organisations/:orgId/document-archives` (org members,
-metadata + retention summary) and `GET …/:id/download` (org admin only,
-audit-logged on every access; returns `410 Gone` with metadata if purged).
-
-**Regulatory alignment:**
-- **NZ Privacy Act 2020 (IPP 9)** — info shall not be kept longer than required;
-  6-month analytics retention is well within bounds.
-- **GDPR Art. 5(1)(e)** — storage limitation principle satisfied.
-- **SOC 2 CC6.5** — secure disposal evidenced by `purged_at` + retained hash.
-- **Conflict warning:** NZ IRD requires tax-invoice originals for **7 years**
-  (Tax Administration Act 1994, s.22). EnviroIQ holds *analytics copies only* —
-  customers must retain tax originals via their accounting system. The
-  retention page in the UI surfaces this disclaimer.
-- **Per-org override:** `retention_policy` column allows future per-org
-  configuration (e.g. 13mo for orgs needing climate-disclosure audit trails
-  matching the grid intensity retention window).
-
-## Key Environment Variables
-
-- `DATABASE_URL` — PostgreSQL connection (auto-set by Replit)
-- `SESSION_SECRET` — express-session secret (defaults to dev value)
-- `RP_ID` — WebAuthn relying party ID (defaults to `localhost`)
-- `ORIGIN` — WebAuthn expected origin (defaults to `http://localhost`)
-- `INBOUND_EMAIL_DOMAIN` — email domain for energy bill forwarding (defaults to `bills.enviroiq.app`)
-- `PORT` — server port (auto-set per artifact)
-
-## Running Seed
-
-```bash
-node_modules/.bin/tsx artifacts/api-server/src/seed.ts
-```
-
-## Brand Guidelines (Official)
-
-### Colours
-| Name | Hex | RGB |
-|---|---|---|
-| Charcoal | `#0B0D0F` | 11 13 15 |
-| Electric Green | `#22C55E` | 34 197 94 |
-| IQ Blue | `#0EA5E8` | 14 165 233 |
-| Steel | `#64748B` | 100 116 139 |
-| Mist | `#F3F4F6` | 243 244 246 |
-| White | `#FFFFFF` | 255 255 255 |
-
-### Typography
-- **Font**: Inter only — Light, Regular, Medium, SemiBold, Bold
-- Wordmark: "Enviro" in regular/medium weight, "IQ" in bold + Electric Green
-
-### Logo Mark Anatomy
-The Q mark comprises three elements:
-1. **System / World** — Bold Q ring (circle with arrow tail = magnifying glass/search)
-2. **Signal / Pulse** — Green ECG/mountain waveform inside the Q ring = Intelligence in motion
-3. **Data Point** — Green dot at top-right of the ring = Live, connected, real-time
-
-### Logo Variants & Usage
-| Variant | File | Usage |
-|---|---|---|
-| Primary lockup (dark bg) | `mark-white.svg` + CSS wordmark | App sidebar, login page, dark surfaces |
-| Primary lockup (light bg) | `mark-dark.svg` + CSS wordmark | Marketing navbar/footer, light surfaces |
-| Icon only | `favicon.svg` | Browser tab only (charcoal rounded-square bg) |
-
-### Logo Rules
-- Clear space around logo = height of the green dot
-- Never crowd or distort the logo
-- On dark: white Q ring + white tail + green ECG + green dot
-- On light: charcoal Q ring + charcoal tail + green ECG + green dot
-- "IQ" is always Electric Green in the wordmark
-
-### App vs Marketing Theme
-- **App (enviroiq)**: Dark charcoal theme — `#0B0D0F` background, white foreground
-- **Marketing site**: White/light theme — white background, charcoal foreground
-- Primary green `#22C55E` is used on both as the accent/CTA colour
-
-### Taglines
-- "Real Time ESG Intelligence"
-- "Data. Decisions. Impact."
-- "Know Now. Act Now."
-
-## TypeScript & Composite Projects
-
-Every package extends `tsconfig.base.json` with `composite: true`. Root `tsconfig.json` lists all packages as references. Always typecheck from root: `pnpm run typecheck`.
-
-- `emitDeclarationOnly` — only .d.ts files via typecheck; actual JS by esbuild/vite
-- Run codegen: `pnpm --filter @workspace/api-spec run codegen`
-- Push DB schema: `pnpm --filter @workspace/db run push`
+- **Email Service**: Resend (for sending magic links)
+- **GPS Telematics**: Navman, Blackhawk GPS (for fleet data integration)
+- **Database**: PostgreSQL
+- **WebAuthn Libraries**: `@simplewebauthn/server`, `@simplewebauthn/browser`
+- **Frontend Libraries**: TanStack Query, Wouter, Recharts, shadcn/ui
+- **CRM System**: FGC (sister CRM integrated via `/api/v1` endpoints)

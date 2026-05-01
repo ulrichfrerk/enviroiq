@@ -10,7 +10,43 @@ const ERRORS: Record<string, string> = {
   invalid_link: "That link is missing or malformed.",
   account_inactive: "Your account is inactive. Please contact your administrator.",
   server_error: "Something went wrong. Please try again.",
+  // SSO error codes — server prefixes them with `sso_`
+  sso_unknown_email:
+    "We couldn't find an account for that email. Ask your administrator to invite you to EnviroIQ first.",
+  sso_account_inactive: "Your account is inactive. Please contact your administrator.",
+  sso_email_unverified: "Your provider hasn't verified your email yet. Please verify it and try again.",
+  sso_provider_disabled: "That sign-in provider is disabled for your organisation.",
+  sso_method_not_allowed: "That sign-in method is not enabled for your organisation.",
+  sso_required_provider_mismatch: "Your organisation requires a specific sign-in provider. Try the other button.",
+  sso_state: "Your sign-in attempt expired or was tampered with. Please try again.",
+  sso_expired: "Your sign-in attempt expired. Please try again.",
+  sso_token: "Sign-in failed during token verification. Please try again.",
+  sso_denied: "Sign-in was cancelled at the provider.",
+  sso_not_configured: "That sign-in provider isn't configured yet. Please contact support.",
+  sso_missing_code: "Sign-in failed — missing authorization code.",
+  sso_start_failed: "Could not start sign-in. Please try again.",
+  sso_server_error: "Something went wrong during sign-in. Please try again.",
+  sso_org_missing: "We couldn't load your organisation. Please contact support.",
+  sso_policy: "Sign-in is not permitted for your account right now. Contact your administrator.",
 };
+
+const GoogleIcon = () => (
+  <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+    <path
+      fill="#EA4335"
+      d="M12 10.2v3.9h5.5c-.24 1.4-1.7 4.1-5.5 4.1-3.3 0-6-2.7-6-6.1s2.7-6.1 6-6.1c1.9 0 3.1.8 3.8 1.5l2.6-2.5C16.7 3.2 14.6 2.2 12 2.2 6.5 2.2 2.1 6.6 2.1 12.1S6.5 22 12 22c6.9 0 11.5-4.9 11.5-11.7 0-.8-.1-1.4-.2-2.1H12z"
+    />
+  </svg>
+);
+
+const MicrosoftIcon = () => (
+  <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+    <rect x="2" y="2" width="9" height="9" fill="#F25022" />
+    <rect x="13" y="2" width="9" height="9" fill="#7FBA00" />
+    <rect x="2" y="13" width="9" height="9" fill="#00A4EF" />
+    <rect x="13" y="13" width="9" height="9" fill="#FFB900" />
+  </svg>
+);
 
 export default function SignInPage() {
   const [, setLocation] = useLocation();
@@ -161,6 +197,33 @@ export default function SignInPage() {
             </div>
           ) : (
             <>
+              {/* SSO buttons — full-page navigation, not fetch, so the browser
+                  follows the provider 302 redirect. */}
+              <div className="space-y-2.5 mb-5">
+                <a
+                  href="/api/auth/sso/google/start"
+                  className="w-full h-11 rounded-md border border-border bg-card hover:bg-muted/40 transition-colors text-foreground font-medium inline-flex items-center justify-center gap-2"
+                  data-testid="link-sso-google"
+                >
+                  <GoogleIcon />
+                  Continue with Google
+                </a>
+                <a
+                  href="/api/auth/sso/microsoft/start"
+                  className="w-full h-11 rounded-md border border-border bg-card hover:bg-muted/40 transition-colors text-foreground font-medium inline-flex items-center justify-center gap-2"
+                  data-testid="link-sso-microsoft"
+                >
+                  <MicrosoftIcon />
+                  Continue with Microsoft
+                </a>
+              </div>
+
+              <div className="my-5 flex items-center gap-3">
+                <div className="h-px flex-1 bg-border/60" />
+                <span className="text-xs text-muted-foreground">or</span>
+                <div className="h-px flex-1 bg-border/60" />
+              </div>
+
               <form onSubmit={requestMagicLink} className="space-y-4">
                 <div>
                   <label htmlFor="email" className="block text-sm font-medium text-foreground mb-1.5">

@@ -10,5 +10,15 @@ declare module "express-session" {
     webAuthnChallengeId?: string;
     /** Set after email ownership is verified via magic-link; permits passkey enrollment for this email */
     verifiedEmail?: string;
+    /** In-flight OIDC SSO authorization request — cleared on callback. */
+    oidcFlow?: {
+      provider: "google" | "microsoft";
+      state: string;
+      nonce: string;
+      codeVerifier: string;
+      redirectUri: string;
+      returnTo?: string;
+      createdAt: number;
+    };
   }
 }
