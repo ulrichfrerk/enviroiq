@@ -702,11 +702,22 @@ void pruneExpiredChallenges; // silence unused-var lint
 
 const SSO_FLOW_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
-function ssoErrorRedirect(req: Request, res: Response, code: string): void {
+function ssoErrorRedirect(
+  req: Request,
+  res: Response,
+  code: string,
+  source?: "user" | "org",
+): void {
   // Land the user back on the sign-in page with a recognisable code; the UI
   // surfaces a friendly message. Never include any provider-side detail.
+  // `source` is included only for policy-driven refusals so the UI can phrase
+  // the message as "your account" (per-user override) vs "your organisation"
+  // (org-level policy). This is safe because the user has already proven
+  // ownership of the email at the IdP — we are not enumerating accounts.
   const base = appBaseUrl(req);
-  res.redirect(`${base}/app/sign-in?error=sso_${encodeURIComponent(code)}`);
+  const qs = new URLSearchParams({ error: `sso_${code}` });
+  if (source) qs.set("source", source);
+  res.redirect(`${base}/app/sign-in?${qs.toString()}`);
 }
 
 function safeReturnTo(raw: unknown): string | undefined {
@@ -924,10 +935,13 @@ router.get("/sso/:provider/callback", async (req, res) => {
         organisationId: user.organisationId ?? undefined,
         userId: user.id,
         userEmail: verified.email,
-        details: { provider, reason: policy.reason },
+        details: { provider, reason: policy.reason, source: policy.source },
       });
       delete req.session.oidcFlow;
-      ssoErrorRedirect(req, res, policy.reason || "policy");
+      // Pass policy.source through so the sign-in page can phrase the
+      // message correctly ("your account" vs "your organisation"). Safe to
+      // surface here because the user has already verified email at the IdP.
+      ssoErrorRedirect(req, res, policy.reason || "policy", policy.source);
       return;
     }
 

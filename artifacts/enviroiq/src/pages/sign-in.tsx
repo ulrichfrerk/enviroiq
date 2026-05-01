@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
-import { Loader2, Mail, KeyRound, CheckCircle2, AlertCircle } from "lucide-react";
+import { Loader2, Mail, KeyRound, CheckCircle2, AlertCircle, ShieldAlert, Info } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { isPasskeySupported, signInWithPasskey } from "@/lib/webauthn";
 
@@ -30,6 +30,52 @@ const ERRORS: Record<string, string> = {
   sso_policy: "Sign-in is not permitted for your account right now. Contact your administrator.",
 };
 
+/**
+ * Error codes that mean "the IdP authenticated you but your org/account
+ * policy forbids this method". These get a more prominent, helpful UI
+ * because the user genuinely needs to switch sign-in methods — a small
+ * inline error banner is easy to miss.
+ */
+const RESTRICTION_CODES = new Set([
+  "sso_method_not_allowed",
+  "sso_required_provider_mismatch",
+  "sso_provider_disabled",
+]);
+
+/**
+ * Build a clear "this method isn't available for your <scope>" message.
+ * `source` is provided by the API after a verified SSO callback: "user"
+ * means a per-user override is the deciding policy, "org" means it's the
+ * org-wide setting. We never show this when there's no error — listing
+ * disabled methods up front would leak admin policy.
+ */
+function restrictionMessage(code: string, source: "user" | "org" | null): {
+  title: string;
+  body: string;
+} {
+  const scope = source === "user" ? "your account" : "your organisation";
+  if (code === "sso_required_provider_mismatch") {
+    return {
+      title: "Try a different sign-in method",
+      body:
+        source === "user"
+          ? "Your account is restricted to a specific sign-in provider. Use the other button above, or ask your administrator to update your access."
+          : "This organisation requires a specific sign-in provider. Use the other button above, or contact your administrator if you think this is wrong.",
+    };
+  }
+  if (code === "sso_provider_disabled") {
+    return {
+      title: "That sign-in provider is turned off",
+      body: `That provider has been disabled for ${scope}. Try a different button above, or contact your administrator.`,
+    };
+  }
+  // sso_method_not_allowed
+  return {
+    title: "Sign-in method not available",
+    body: `That sign-in method isn't enabled for ${scope}. Try a different button above, or contact your administrator if you think this is wrong.`,
+  };
+}
+
 const GoogleIcon = () => (
   <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
     <path
@@ -54,7 +100,15 @@ export default function SignInPage() {
 
   const params = new URLSearchParams(window.location.search);
   const errorCode = params.get("error");
-  const initialError = errorCode ? ERRORS[errorCode] || ERRORS.server_error : null;
+  const sourceParam = params.get("source");
+  const errorSource: "user" | "org" | null =
+    sourceParam === "user" || sourceParam === "org" ? sourceParam : null;
+  const isRestrictionError = !!errorCode && RESTRICTION_CODES.has(errorCode);
+  const restriction = isRestrictionError ? restrictionMessage(errorCode!, errorSource) : null;
+  // Restriction errors get the dedicated callout (rendered above the buttons),
+  // so we don't double-render them in the small inline alert below the form.
+  const initialError =
+    errorCode && !isRestrictionError ? ERRORS[errorCode] || ERRORS.server_error : null;
   const redirectTarget = (() => {
     const r = params.get("redirect_url");
     if (!r) return "/dashboard";
@@ -197,9 +251,29 @@ export default function SignInPage() {
             </div>
           ) : (
             <>
+              {/* Restriction callout — shown only when the IdP authenticated
+                  the user but their org/account policy refused the chosen
+                  method. Rendered above the buttons so it's the first thing
+                  the user sees, with concrete next steps. */}
+              {restriction && (
+                <div
+                  className="mb-5 rounded-lg border border-amber-500/40 bg-amber-500/10 p-4"
+                  role="alert"
+                  data-testid="alert-method-restricted"
+                >
+                  <div className="flex gap-3">
+                    <ShieldAlert className="h-5 w-5 text-amber-500 flex-shrink-0 mt-0.5" />
+                    <div className="space-y-1">
+                      <h2 className="text-sm font-semibold text-foreground">{restriction.title}</h2>
+                      <p className="text-sm text-muted-foreground">{restriction.body}</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* SSO buttons — full-page navigation, not fetch, so the browser
                   follows the provider 302 redirect. */}
-              <div className="space-y-2.5 mb-5">
+              <div className="space-y-2.5 mb-3">
                 <a
                   href="/api/auth/sso/google/start"
                   className="w-full h-11 rounded-md border border-border bg-card hover:bg-muted/40 transition-colors text-foreground font-medium inline-flex items-center justify-center gap-2"
@@ -218,7 +292,18 @@ export default function SignInPage() {
                 </a>
               </div>
 
-              <div className="my-5 flex items-center gap-3">
+              {/* Generic, non-enumerating hint. Tells legitimate users why a
+                  button might not work without revealing whose account is
+                  restricted to what — every user sees the same text. */}
+              <p
+                className="flex items-start gap-1.5 text-xs text-muted-foreground"
+                data-testid="text-method-hint"
+              >
+                <Info className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" aria-hidden="true" />
+                <span>Some sign-in methods may be disabled by your administrator.</span>
+              </p>
+
+              <div className="mt-5 mb-5 flex items-center gap-3">
                 <div className="h-px flex-1 bg-border/60" />
                 <span className="text-xs text-muted-foreground">or</span>
                 <div className="h-px flex-1 bg-border/60" />

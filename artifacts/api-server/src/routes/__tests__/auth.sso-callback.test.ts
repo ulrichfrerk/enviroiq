@@ -651,7 +651,7 @@ describe("GET /api/auth/sso/:provider/callback", () => {
 
       expect(res.status).toBe(302);
       expect(res.headers.location).toMatch(
-        /\/app\/sign-in\?error=sso_required_provider_mismatch$/,
+        /\/app\/sign-in\?error=sso_required_provider_mismatch&source=org$/,
       );
 
       const rejected = getAuditCalls().filter((a) => a.action === "sso.sign_in.rejected");
@@ -659,11 +659,100 @@ describe("GET /api/auth/sso/:provider/callback", () => {
         outcome: "failure",
         organisationId: "org-1",
         userId: "user-1",
-        details: { provider: "google", reason: "required_provider_mismatch" },
+        details: { provider: "google", reason: "required_provider_mismatch", source: "org" },
       });
 
       const me = await agent.get("/__test/whoami");
       expect(me.body.userId).toBeNull();
+    });
+
+    it("redirects with source=user when a per-user override forces the wrong provider", async () => {
+      // Per-user requiredSignInProvider overrides org policy. The redirect
+      // must include source=user so the sign-in page can phrase the message
+      // as "your account" rather than "your organisation".
+      dbState.organisation = { ...baseOrg, requiredSsoProvider: null };
+      dbState.user = {
+        ...baseUser,
+        role: "org_user",
+        requiredSignInProvider: "microsoft",
+      };
+
+      const app = makeApp();
+      const agent = request.agent(app);
+      const { state, nonce } = await startSso(agent, "google");
+
+      tokenHandler = async () => {
+        const id_token = await signIdToken({
+          iss: GOOGLE_ISS,
+          aud: "test-google-client",
+          sub: "google-sub-1",
+          email: "user@example.com",
+          emailVerified: true,
+          nonce,
+        });
+        return new Response(JSON.stringify({ id_token }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      };
+
+      const res = await agent
+        .get(`/api/auth/sso/google/callback?code=auth-code&state=${state}`)
+        .redirects(0);
+
+      expect(res.status).toBe(302);
+      expect(res.headers.location).toMatch(
+        /\/app\/sign-in\?error=sso_required_provider_mismatch&source=user$/,
+      );
+
+      const rejected = getAuditCalls().filter((a) => a.action === "sso.sign_in.rejected");
+      expect(rejected[0]).toMatchObject({
+        details: { source: "user" },
+      });
+    });
+
+    it("redirects with source=org when the org allow-list excludes the chosen provider", async () => {
+      // Org-level allow-list refusal — the user has no per-user override, so
+      // source must be "org".
+      dbState.organisation = {
+        ...baseOrg,
+        requiredSsoProvider: null,
+        allowedSignInMethods: ["magic_link", "microsoft_sso"],
+      };
+      dbState.user = { ...baseUser, role: "org_user" };
+
+      const app = makeApp();
+      const agent = request.agent(app);
+      const { state, nonce } = await startSso(agent, "google");
+
+      tokenHandler = async () => {
+        const id_token = await signIdToken({
+          iss: GOOGLE_ISS,
+          aud: "test-google-client",
+          sub: "google-sub-1",
+          email: "user@example.com",
+          emailVerified: true,
+          nonce,
+        });
+        return new Response(JSON.stringify({ id_token }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      };
+
+      const res = await agent
+        .get(`/api/auth/sso/google/callback?code=auth-code&state=${state}`)
+        .redirects(0);
+
+      expect(res.status).toBe(302);
+      expect(res.headers.location).toMatch(
+        /\/app\/sign-in\?error=sso_method_not_allowed&source=org$/,
+      );
+
+      const rejected = getAuditCalls().filter((a) => a.action === "sso.sign_in.rejected");
+      expect(rejected[0]).toMatchObject({
+        details: { provider: "google", reason: "method_not_allowed", source: "org" },
+      });
     });
 
     it("allows an org_admin signing in via the required provider (no policy bypass needed)", async () => {
@@ -743,7 +832,7 @@ describe("GET /api/auth/sso/:provider/callback", () => {
 
       expect(res.status).toBe(302);
       expect(res.headers.location).toMatch(
-        /\/app\/sign-in\?error=sso_required_provider_mismatch$/,
+        /\/app\/sign-in\?error=sso_required_provider_mismatch&source=org$/,
       );
 
       const me = await agent.get("/__test/whoami");
