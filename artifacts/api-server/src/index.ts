@@ -110,6 +110,14 @@ async function ensureSsoSchema(): Promise<void> {
   await db.execute(
     sql`CREATE INDEX IF NOT EXISTS sso_identities_user_idx ON sso_identities (user_id)`,
   );
+  // Per-user sign-in policy override columns (Task #9). When set on a user
+  // row these supersede the org-level policy.
+  await db.execute(
+    sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS required_sign_in_provider text`,
+  );
+  await db.execute(
+    sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS allowed_sign_in_methods jsonb`,
+  );
   logger.info("SSO schema ready");
 }
 
