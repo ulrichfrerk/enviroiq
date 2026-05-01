@@ -9,6 +9,8 @@ export interface SignInPolicyResult {
   ok: boolean;
   /** True when this allow-through is the org_admin break-glass path. */
   breakGlass?: boolean;
+  /** Source of the deciding policy when ok=false (or when an override is present). */
+  source?: "user" | "org";
   reason?:
     | "org_missing"
     | "method_not_allowed"
@@ -18,12 +20,33 @@ export interface SignInPolicyResult {
 }
 
 /**
+ * Per-user override snapshot. Either field may be NULL meaning "inherit org".
+ * `requiredSignInProvider` accepts the sentinel "none" to explicitly clear an
+ * org-level requirement for this user (e.g. an org-wide `requiredSsoProvider`
+ * of "google" can be lifted just for one contractor).
+ */
+export interface UserSignInOverrides {
+  requiredSignInProvider?: string | null;
+  allowedSignInMethods?: SignInMethod[] | null;
+}
+
+/**
  * Check whether `userRole` in `organisationId` may sign in via `method`.
  *
- * Org policy rules:
- *  - If `googleSsoEnabled` / `microsoftSsoEnabled` is false, that provider is refused.
- *  - The method must be in `allowedSignInMethods`.
- *  - If `requiredSsoProvider` is set, only that provider's SSO is allowed.
+ * Effective policy is computed by overlaying any per-user override on top of
+ * the org policy:
+ *  - `userOverrides.requiredSignInProvider`:
+ *       NULL    → inherit org.requiredSsoProvider
+ *       "none"  → user is exempted from any required SSO provider
+ *       "google" / "microsoft" → user MUST use that provider
+ *  - `userOverrides.allowedSignInMethods`:
+ *       NULL    → inherit org.allowedSignInMethods
+ *       array   → use this user-specific allow list
+ *
+ * Org-level rules still apply on top:
+ *  - If `googleSsoEnabled` / `microsoftSsoEnabled` is false at the org, that
+ *    provider is refused — a per-user override cannot re-enable a master-off
+ *    provider (the OAuth client may not even be configured).
  *
  * Break-glass: an `org_admin` (or higher) is ALWAYS permitted to sign in via
  * `magic_link` regardless of the policy — this prevents an admin from locking
@@ -36,6 +59,7 @@ export async function checkSignInMethodAllowed(
   organisationId: string | null,
   userRole: string,
   method: SignInMethod,
+  userOverrides: UserSignInOverrides = {},
 ): Promise<SignInPolicyResult> {
   if (userRole === "super_admin" || !organisationId) return { ok: true };
 
@@ -44,45 +68,79 @@ export async function checkSignInMethodAllowed(
   });
   if (!org) return { ok: false, reason: "org_missing", message: "Organisation not found" };
 
-  // Per-provider master switch
+  // Per-provider master switch (always org-level — a per-user override cannot
+  // re-enable a provider the org has turned off).
   if (method === "google_sso" && org.googleSsoEnabled === false) {
-    return { ok: false, reason: "provider_disabled", message: "Google sign-in is disabled for this organisation." };
+    return { ok: false, source: "org", reason: "provider_disabled", message: "Google sign-in is disabled for this organisation." };
   }
   if (method === "microsoft_sso" && org.microsoftSsoEnabled === false) {
-    return { ok: false, reason: "provider_disabled", message: "Microsoft sign-in is disabled for this organisation." };
+    return { ok: false, source: "org", reason: "provider_disabled", message: "Microsoft sign-in is disabled for this organisation." };
   }
 
-  const allowed = (org.allowedSignInMethods ?? []) as SignInMethod[];
+  // Effective allow-list — user override supersedes org list when present.
+  // An array (including the empty array) is an explicit user override:
+  //   - non-empty → use this user-specific allow list
+  //   - empty []  → user is denied every method (defensive: PATCH validation
+  //     should already prevent this, but if corrupted/legacy data ever lands
+  //     in the row we honour the strictest interpretation rather than silently
+  //     falling back to the org list and granting more access than intended).
+  // Only `null`/`undefined` means "inherit org".
+  const userAllowed = userOverrides.allowedSignInMethods;
+  const usingUserAllowed = Array.isArray(userAllowed);
+  const allowed: SignInMethod[] = usingUserAllowed
+    ? (userAllowed as SignInMethod[])
+    : ((org.allowedSignInMethods ?? []) as SignInMethod[]);
   const isInAllowList = allowed.includes(method);
 
-  // Required SSO provider — overrides the allow-list for non-SSO methods.
-  if (org.requiredSsoProvider) {
+  // Effective required provider — user override supersedes org. The sentinel
+  // "none" explicitly clears an org-level requirement for this single user.
+  let effectiveRequired: "google" | "microsoft" | null;
+  let requiredSource: "user" | "org" = "org";
+  const userRequired = userOverrides.requiredSignInProvider;
+  if (userRequired === "google" || userRequired === "microsoft") {
+    effectiveRequired = userRequired;
+    requiredSource = "user";
+  } else if (userRequired === "none") {
+    effectiveRequired = null;
+    requiredSource = "user";
+  } else {
+    effectiveRequired = (org.requiredSsoProvider as "google" | "microsoft" | null) ?? null;
+  }
+
+  if (effectiveRequired) {
     const requiredMethod: SignInMethod =
-      org.requiredSsoProvider === "google" ? "google_sso" : "microsoft_sso";
+      effectiveRequired === "google" ? "google_sso" : "microsoft_sso";
     if (method !== requiredMethod) {
       // Break-glass: admins can still magic-link in.
       if (userRole === "org_admin" && method === "magic_link") {
-        return { ok: true, breakGlass: true };
+        return { ok: true, breakGlass: true, source: requiredSource };
       }
       return {
         ok: false,
+        source: requiredSource,
         reason: "required_provider_mismatch",
-        message: `This organisation requires sign-in with ${org.requiredSsoProvider === "google" ? "Google" : "Microsoft"}.`,
+        message:
+          requiredSource === "user"
+            ? `Your account is restricted to sign-in with ${effectiveRequired === "google" ? "Google" : "Microsoft"}.`
+            : `This organisation requires sign-in with ${effectiveRequired === "google" ? "Google" : "Microsoft"}.`,
       };
     }
   }
 
   if (!isInAllowList) {
     if (userRole === "org_admin" && method === "magic_link") {
-      return { ok: true, breakGlass: true };
+      return { ok: true, breakGlass: true, source: usingUserAllowed ? "user" : "org" };
     }
     return {
       ok: false,
+      source: usingUserAllowed ? "user" : "org",
       reason: "method_not_allowed",
-      message: "This sign-in method is not enabled for your organisation. Contact your administrator.",
+      message: usingUserAllowed
+        ? "This sign-in method is not enabled for your account. Contact your administrator."
+        : "This sign-in method is not enabled for your organisation. Contact your administrator.",
     };
   }
-  return { ok: true };
+  return { ok: true, source: usingUserAllowed || requiredSource === "user" ? "user" : "org" };
 }
 
 /**

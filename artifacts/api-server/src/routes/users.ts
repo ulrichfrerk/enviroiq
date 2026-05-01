@@ -7,6 +7,10 @@ import { requireAuth, requireOrgAccess, requireRole } from "../lib/auth.js";
 import { logAudit } from "../lib/audit.js";
 import { sendInviteEmail } from "../lib/mailer.js";
 
+const VALID_SIGN_IN_METHODS = ["magic_link", "passkey", "google_sso", "microsoft_sso"] as const;
+type ValidSignInMethod = (typeof VALID_SIGN_IN_METHODS)[number];
+const VALID_REQUIRED_PROVIDERS = ["none", "google", "microsoft"] as const;
+
 const router = Router({ mergeParams: true });
 
 const INVITE_LINK_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours — matches invite email copy.
@@ -195,6 +199,186 @@ router.patch("/:userId", requireAuth, requireRole("super_admin", "org_admin"), r
   } catch (err) {
     req.log.error({ err }, "Update user failed");
     res.status(500).json({ error: "Internal Server Error", message: "Failed to update user" });
+  }
+});
+
+// GET /organisations/:orgId/users/:userId/sign-in-policy
+// Returns the per-user override (NULLs mean "inherit org") plus the org policy
+// snapshot, so the admin UI can render the inherited values as placeholders.
+router.get("/:userId/sign-in-policy", requireAuth, requireRole("super_admin", "org_admin"), requireOrgAccess, async (req, res) => {
+  try {
+    const orgId = req.params.orgId as string;
+    const userId = req.params.userId as string;
+    const user = await db.query.usersTable.findFirst({
+      where: and(eq(usersTable.id, userId), eq(usersTable.organisationId, orgId)),
+    });
+    if (!user) {
+      res.status(404).json({ error: "Not Found", message: "User not found" });
+      return;
+    }
+    const org = await db.query.organisationsTable.findFirst({
+      where: eq(organisationsTable.id, orgId),
+    });
+    res.json({
+      userId: user.id,
+      requiredSignInProvider: user.requiredSignInProvider, // null | "none" | "google" | "microsoft"
+      allowedSignInMethods: user.allowedSignInMethods,     // null | array
+      orgPolicy: {
+        googleSsoEnabled: org?.googleSsoEnabled ?? true,
+        microsoftSsoEnabled: org?.microsoftSsoEnabled ?? true,
+        allowedSignInMethods: org?.allowedSignInMethods ?? [],
+        requiredSsoProvider: org?.requiredSsoProvider ?? null,
+      },
+    });
+  } catch (err) {
+    req.log.error({ err }, "Get user sign-in policy failed");
+    res.status(500).json({ error: "Internal Server Error", message: "Failed to load sign-in policy" });
+  }
+});
+
+// PATCH /organisations/:orgId/users/:userId/sign-in-policy
+// Accepts { requiredSignInProvider, allowedSignInMethods }. Either field may be:
+//   - omitted          → leave unchanged
+//   - explicitly null  → clear override (inherit org)
+//   - a value          → set override
+// Audit event `user.sign_in_policy.changed` is emitted with previous/new values.
+router.patch("/:userId/sign-in-policy", requireAuth, requireRole("super_admin", "org_admin"), requireOrgAccess, async (req, res) => {
+  try {
+    const orgId = req.params.orgId as string;
+    const userId = req.params.userId as string;
+    const body = req.body as {
+      requiredSignInProvider?: unknown;
+      allowedSignInMethods?: unknown;
+    };
+
+    const update: Record<string, unknown> = { updatedAt: new Date() };
+
+    if (Object.prototype.hasOwnProperty.call(body, "requiredSignInProvider")) {
+      const v = body.requiredSignInProvider;
+      if (v !== null && (typeof v !== "string" || !(VALID_REQUIRED_PROVIDERS as readonly string[]).includes(v))) {
+        res.status(400).json({
+          error: "Bad Request",
+          message: "requiredSignInProvider must be null, 'none', 'google', or 'microsoft'",
+        });
+        return;
+      }
+      update.requiredSignInProvider = v;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(body, "allowedSignInMethods")) {
+      const v = body.allowedSignInMethods;
+      if (v !== null) {
+        if (
+          !Array.isArray(v) ||
+          v.length === 0 ||
+          !v.every(
+            (m): m is ValidSignInMethod =>
+              typeof m === "string" && (VALID_SIGN_IN_METHODS as readonly string[]).includes(m),
+          )
+        ) {
+          res.status(400).json({
+            error: "Bad Request",
+            message:
+              "allowedSignInMethods must be null (inherit) or a non-empty array of: " +
+              VALID_SIGN_IN_METHODS.join(", "),
+          });
+          return;
+        }
+        update.allowedSignInMethods = Array.from(new Set(v)) as ValidSignInMethod[];
+      } else {
+        update.allowedSignInMethods = null;
+      }
+    }
+
+    const previous = await db.query.usersTable.findFirst({
+      where: and(eq(usersTable.id, userId), eq(usersTable.organisationId, orgId)),
+    });
+    if (!previous) {
+      res.status(404).json({ error: "Not Found", message: "User not found" });
+      return;
+    }
+
+    // Effective-usability invariant: don't let an admin save an override that
+    // would lock this user out (e.g. allowedSignInMethods=["google_sso"] when
+    // the org has Google disabled, or requiredSignInProvider="google" with
+    // the chosen allow-list excluding google_sso). Mirrors the org-level
+    // check in PATCH /organisations/:orgId/sso-policy.
+    const org = await db.query.organisationsTable.findFirst({
+      where: eq(organisationsTable.id, orgId),
+    });
+    if (!org) {
+      res.status(404).json({ error: "Not Found", message: "Organisation not found" });
+      return;
+    }
+    const nextRequired = (Object.prototype.hasOwnProperty.call(update, "requiredSignInProvider")
+      ? (update.requiredSignInProvider as string | null)
+      : (previous.requiredSignInProvider as string | null)) ?? null;
+    const nextAllowedRaw = Object.prototype.hasOwnProperty.call(update, "allowedSignInMethods")
+      ? (update.allowedSignInMethods as ValidSignInMethod[] | null)
+      : (previous.allowedSignInMethods as ValidSignInMethod[] | null);
+    const effectiveRequired: "google" | "microsoft" | null =
+      nextRequired === "google" || nextRequired === "microsoft"
+        ? nextRequired
+        : nextRequired === "none"
+          ? null
+          : ((org.requiredSsoProvider as "google" | "microsoft" | null) ?? null);
+    const effectiveAllowed: ValidSignInMethod[] =
+      nextAllowedRaw && nextAllowedRaw.length > 0
+        ? nextAllowedRaw
+        : ((org.allowedSignInMethods as ValidSignInMethod[] | null) ?? [...VALID_SIGN_IN_METHODS]);
+
+    const usable = effectiveAllowed.filter((m) => {
+      if (m === "magic_link" || m === "passkey") return effectiveRequired === null;
+      if (m === "google_sso") return org.googleSsoEnabled && (effectiveRequired ?? "google") === "google";
+      if (m === "microsoft_sso") return org.microsoftSsoEnabled && (effectiveRequired ?? "microsoft") === "microsoft";
+      return false;
+    });
+    // Allow admins to be saved into a state that ordinarily would lock out a
+    // non-admin, since they retain magic-link break-glass anyway.
+    if (usable.length === 0 && previous.role !== "org_admin" && previous.role !== "super_admin") {
+      res.status(400).json({
+        error: "Bad Request",
+        message:
+          "These restrictions would lock this user out — at least one allowed sign-in method must be effectively reachable. Adjust allowedSignInMethods or requiredSignInProvider so they are mutually consistent with the organisation policy.",
+      });
+      return;
+    }
+
+    const [updated] = await db
+      .update(usersTable)
+      .set(update)
+      .where(and(eq(usersTable.id, userId), eq(usersTable.organisationId, orgId)))
+      .returning();
+
+    await logAudit({
+      req,
+      action: "user.sign_in_policy.changed",
+      resourceType: "user",
+      resourceId: userId,
+      previousValue: {
+        requiredSignInProvider: previous.requiredSignInProvider,
+        allowedSignInMethods: previous.allowedSignInMethods,
+      },
+      newValue: {
+        requiredSignInProvider: updated.requiredSignInProvider,
+        allowedSignInMethods: updated.allowedSignInMethods,
+      },
+    });
+
+    res.json({
+      userId: updated.id,
+      requiredSignInProvider: updated.requiredSignInProvider,
+      allowedSignInMethods: updated.allowedSignInMethods,
+      orgPolicy: {
+        googleSsoEnabled: org.googleSsoEnabled,
+        microsoftSsoEnabled: org.microsoftSsoEnabled,
+        allowedSignInMethods: org.allowedSignInMethods ?? [],
+        requiredSsoProvider: org.requiredSsoProvider,
+      },
+    });
+  } catch (err) {
+    req.log.error({ err }, "Update user sign-in policy failed");
+    res.status(500).json({ error: "Internal Server Error", message: "Failed to update sign-in policy" });
   }
 });
 

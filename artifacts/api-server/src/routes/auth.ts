@@ -156,7 +156,7 @@ router.post("/magic-link/request", async (req, res) => {
 
     // Org policy: refuse if magic-link is not allowed for this org and the
     // user is not eligible for the org_admin break-glass exception.
-    const policy = await checkSignInMethodAllowed(user.organisationId, user.role, "magic_link");
+    const policy = await checkSignInMethodAllowed(user.organisationId, user.role, "magic_link", { requiredSignInProvider: user.requiredSignInProvider, allowedSignInMethods: user.allowedSignInMethods });
     if (!policy.ok) {
       await logAudit({
         req,
@@ -386,7 +386,7 @@ router.post("/passkey/login/options", async (req, res) => {
     if (user) {
       // Org policy: refuse if passkey login isn't allowed for this org. We
       // surface a 403 so the UI can show "passkeys disabled — use SSO".
-      const policy = await checkSignInMethodAllowed(user.organisationId, user.role, "passkey");
+      const policy = await checkSignInMethodAllowed(user.organisationId, user.role, "passkey", { requiredSignInProvider: user.requiredSignInProvider, allowedSignInMethods: user.allowedSignInMethods });
       if (!policy.ok) {
         await logAudit({
           req,
@@ -490,7 +490,7 @@ router.post("/passkey/login/verify", async (req, res) => {
 
     // Org policy enforcement at the verify step too — defends against an
     // attacker who calls /verify directly without going through /options.
-    const policy = await checkSignInMethodAllowed(user.organisationId, user.role, "passkey");
+    const policy = await checkSignInMethodAllowed(user.organisationId, user.role, "passkey", { requiredSignInProvider: user.requiredSignInProvider, allowedSignInMethods: user.allowedSignInMethods });
     if (!policy.ok) {
       await logAudit({
         req,
@@ -781,7 +781,7 @@ router.get("/sso/:provider/callback", async (req, res) => {
 
     // 2) Org policy
     const method: SignInMethod = provider === "google" ? "google_sso" : "microsoft_sso";
-    const policy = await checkSignInMethodAllowed(user.organisationId, user.role, method);
+    const policy = await checkSignInMethodAllowed(user.organisationId, user.role, method, { requiredSignInProvider: user.requiredSignInProvider, allowedSignInMethods: user.allowedSignInMethods });
     if (!policy.ok) {
       await logAudit({
         req,

@@ -1,4 +1,4 @@
-import { pgTable, text, boolean, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, text, boolean, timestamp, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -16,6 +16,27 @@ export const usersTable = pgTable("users", {
    */
   clerkUserId: text("clerk_user_id").unique(),
   lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
+  // Per-user sign-in policy override ─────────────────────────────────────────
+  // When set, these supersede the equivalent organisation-level policy. This
+  // lets admins say things like "Finance team must use Microsoft" while the
+  // rest of the org follows the org default.
+  //
+  // requiredSignInProvider:
+  //   NULL        → inherit org.requiredSsoProvider
+  //   "none"      → explicitly clear the org-level requirement for this user
+  //   "google"    → this user MUST sign in via Google
+  //   "microsoft" → this user MUST sign in via Microsoft
+  //
+  // allowedSignInMethods:
+  //   NULL        → inherit org.allowedSignInMethods
+  //   array       → use this user-specific allow list
+  //
+  // Org-level master switches (googleSsoEnabled / microsoftSsoEnabled) and
+  // the org_admin magic-link break-glass still apply.
+  requiredSignInProvider: text("required_sign_in_provider"),
+  allowedSignInMethods: jsonb("allowed_sign_in_methods").$type<
+    ("magic_link" | "passkey" | "google_sso" | "microsoft_sso")[]
+  >(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

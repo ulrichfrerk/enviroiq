@@ -1,19 +1,261 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { useListUsers, useCreateUser, useDeleteUser, CreateUserRequestRole } from "@workspace/api-client-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Users as UsersIcon, UserPlus, Trash2, Shield, Loader2 } from "lucide-react";
+import { Users as UsersIcon, UserPlus, Trash2, Shield, Loader2, Lock, AlertCircle } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { format } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
+
+type SignInMethod = "magic_link" | "passkey" | "google_sso" | "microsoft_sso";
+type RequiredProvider = "none" | "google" | "microsoft" | null;
+
+interface UserSignInPolicy {
+  userId: string;
+  requiredSignInProvider: RequiredProvider;
+  allowedSignInMethods: SignInMethod[] | null;
+  orgPolicy: {
+    googleSsoEnabled: boolean;
+    microsoftSsoEnabled: boolean;
+    allowedSignInMethods: SignInMethod[];
+    requiredSsoProvider: "google" | "microsoft" | null;
+  };
+}
+
+const METHOD_LABELS: Record<SignInMethod, string> = {
+  magic_link: "Email magic link",
+  passkey: "Passkey",
+  google_sso: "Google SSO",
+  microsoft_sso: "Microsoft SSO",
+};
+
+function describeOrgRequired(p: "google" | "microsoft" | null): string {
+  if (!p) return "None (org default)";
+  return p === "google" ? "Google only (org default)" : "Microsoft only (org default)";
+}
+
+function SignInRestrictionsDialog({
+  orgId,
+  user,
+  open,
+  onOpenChange,
+}: {
+  orgId: string;
+  user: { id: string; name: string; email: string };
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+}) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  const { data, isLoading } = useQuery<UserSignInPolicy>({
+    queryKey: ["userSignInPolicy", orgId, user.id],
+    queryFn: async () => {
+      const res = await fetch(`/api/organisations/${orgId}/users/${user.id}/sign-in-policy`, {
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Failed to load sign-in policy");
+      return res.json();
+    },
+    enabled: open,
+  });
+
+  // Local edit state. We keep the override fields as their stored representation
+  // (NULL = inherit). The user-facing form maps these to friendly toggles.
+  const [draft, setDraft] = useState<{ required: RequiredProvider; allowed: SignInMethod[] | null } | null>(null);
+
+  useEffect(() => {
+    if (data) {
+      setDraft({
+        required: data.requiredSignInProvider,
+        allowed: data.allowedSignInMethods,
+      });
+    }
+  }, [data]);
+
+  const mutate = useMutation({
+    mutationFn: async (next: { required: RequiredProvider; allowed: SignInMethod[] | null }) => {
+      const res = await fetch(`/api/organisations/${orgId}/users/${user.id}/sign-in-policy`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          requiredSignInProvider: next.required,
+          allowedSignInMethods: next.allowed,
+        }),
+      });
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { message?: string };
+        throw new Error(err.message || "Failed to save sign-in restrictions");
+      }
+      return res.json() as Promise<UserSignInPolicy>;
+    },
+    onSuccess: (next) => {
+      queryClient.setQueryData(["userSignInPolicy", orgId, user.id], next);
+      toast({ title: "Sign-in restrictions updated" });
+      onOpenChange(false);
+    },
+    onError: (e: unknown) => {
+      toast({
+        variant: "destructive",
+        title: "Could not save",
+        description: e instanceof Error ? e.message : "Unknown error",
+      });
+    },
+  });
+
+  const overrideAllowed = draft?.allowed !== null && draft?.allowed !== undefined;
+  const validationError = overrideAllowed && (draft?.allowed?.length ?? 0) === 0
+    ? "If you set a custom allow list, it must include at least one method."
+    : null;
+
+  const toggleMethod = (m: SignInMethod) => {
+    setDraft((d) => {
+      if (!d) return d;
+      const list = d.allowed ?? [];
+      const has = list.includes(m);
+      return { ...d, allowed: has ? list.filter((x) => x !== m) : [...list, m] };
+    });
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="bg-card border-border max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Lock className="w-4 h-4 text-primary" />
+            Sign-in restrictions for {user.name || user.email}
+          </DialogTitle>
+        </DialogHeader>
+
+        {isLoading || !data || !draft ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground py-8 justify-center">
+            <Loader2 className="w-4 h-4 animate-spin" /> Loading…
+          </div>
+        ) : (
+          <div className="space-y-6 pt-2">
+            <p className="text-xs text-muted-foreground">
+              These overrides apply <strong>only to this user</strong> and supersede the
+              organisation-wide sign-in policy. Leave blank to inherit the org default.
+            </p>
+
+            {/* Required provider override */}
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                Required SSO provider for this user
+              </label>
+              <select
+                value={draft.required ?? ""}
+                onChange={(e) =>
+                  setDraft({
+                    ...draft,
+                    required: (e.target.value || null) as RequiredProvider,
+                  })
+                }
+                className="w-full h-10 px-3 rounded-md bg-background border border-input text-sm"
+                data-testid="select-user-required-provider"
+              >
+                <option value="">Inherit org default — {describeOrgRequired(data.orgPolicy.requiredSsoProvider)}</option>
+                <option value="none">No requirement (override org)</option>
+                <option value="google">Must use Google</option>
+                <option value="microsoft">Must use Microsoft</option>
+              </select>
+            </div>
+
+            {/* Allowed methods override */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                  Allowed sign-in methods
+                </label>
+                <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={overrideAllowed}
+                    onChange={(e) => {
+                      setDraft({
+                        ...draft,
+                        allowed: e.target.checked
+                          ? (draft.allowed ?? data.orgPolicy.allowedSignInMethods ?? [])
+                          : null,
+                      });
+                    }}
+                    className="h-3.5 w-3.5 accent-primary"
+                    data-testid="checkbox-override-allowed-methods"
+                  />
+                  Override org default
+                </label>
+              </div>
+
+              {!overrideAllowed ? (
+                <div className="text-xs text-muted-foreground rounded-md border border-border bg-secondary/20 px-3 py-2">
+                  Inheriting org default:{" "}
+                  {data.orgPolicy.allowedSignInMethods.length === 0
+                    ? "(none)"
+                    : data.orgPolicy.allowedSignInMethods.map((m) => METHOD_LABELS[m]).join(", ")}
+                </div>
+              ) : (
+                <div className="grid sm:grid-cols-2 gap-2">
+                  {(Object.keys(METHOD_LABELS) as SignInMethod[]).map((m) => (
+                    <label
+                      key={m}
+                      className="flex items-center gap-3 px-3 py-2 rounded-md border border-border bg-background cursor-pointer text-sm"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={(draft.allowed ?? []).includes(m)}
+                        onChange={() => toggleMethod(m)}
+                        className="h-4 w-4 accent-primary"
+                        data-testid={`checkbox-user-method-${m}`}
+                      />
+                      <span className="text-foreground">{METHOD_LABELS[m]}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+              <p className="text-xs text-muted-foreground">
+                Org admins always retain a magic-link break-glass path even if magic-link is removed here.
+              </p>
+            </div>
+
+            {validationError && (
+              <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 flex gap-2 items-start">
+                <AlertCircle className="h-4 w-4 text-destructive flex-shrink-0 mt-0.5" />
+                <p className="text-sm text-destructive-foreground">{validationError}</p>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" onClick={() => onOpenChange(false)} disabled={mutate.isPending}>
+                Cancel
+              </Button>
+              <Button
+                disabled={!!validationError || mutate.isPending}
+                onClick={() => draft && mutate.mutate(draft)}
+                data-testid="button-save-user-sign-in-policy"
+              >
+                {mutate.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                Save restrictions
+              </Button>
+            </div>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 export default function Users() {
   const { session } = useAuth();
   const orgId = session?.organisationId;
   const { toast } = useToast();
   const [isOpen, setIsOpen] = useState(false);
+  // Currently-edited user for the Sign-in restrictions dialog.
+  const [restrictionsUser, setRestrictionsUser] = useState<{ id: string; name: string; email: string } | null>(null);
+  const isAdmin = session?.role === "org_admin" || session?.role === "super_admin";
 
   const { data: users, isLoading } = useListUsers(orgId!, { query: { enabled: !!orgId } });
   const createUser = useCreateUser();
@@ -133,11 +375,26 @@ export default function Users() {
                     {user.lastLoginAt ? format(new Date(user.lastLoginAt), "MMM d, yyyy") : "Never"}
                   </td>
                   <td className="px-6 py-4 text-right">
-                    {user.id !== session?.userId && (
-                      <Button variant="ghost" size="icon" onClick={() => handleRemove(user.id)} className="text-muted-foreground hover:text-destructive">
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
-                    )}
+                    <div className="flex items-center justify-end gap-1">
+                      {isAdmin && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setRestrictionsUser({ id: user.id, name: user.name ?? "", email: user.email })}
+                          className="text-muted-foreground hover:text-foreground gap-1.5"
+                          data-testid={`button-sign-in-restrictions-${user.id}`}
+                          title="Sign-in restrictions"
+                        >
+                          <Lock className="w-3.5 h-3.5" />
+                          <span className="hidden md:inline text-xs">Sign-in</span>
+                        </Button>
+                      )}
+                      {user.id !== session?.userId && (
+                        <Button variant="ghost" size="icon" onClick={() => handleRemove(user.id)} className="text-muted-foreground hover:text-destructive">
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -145,6 +402,16 @@ export default function Users() {
           </table>
         </div>
       </Card>
+
+      {orgId && restrictionsUser && (
+        <SignInRestrictionsDialog
+          orgId={orgId}
+          user={restrictionsUser}
+          open={!!restrictionsUser}
+          onOpenChange={(v) => { if (!v) setRestrictionsUser(null); }}
+        />
+      )}
     </div>
   );
 }
+
