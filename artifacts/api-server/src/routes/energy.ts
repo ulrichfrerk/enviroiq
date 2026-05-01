@@ -9,6 +9,7 @@ import { calcEnergyCo2e, resolveElectricityFactor } from "../lib/emissions.js";
 import { getCurrentGridIntensity } from "../lib/em6.js";
 import { parseBillText } from "../lib/billParser.js";
 import { archiveDocument } from "../lib/documentArchive.js";
+import { notify } from "../lib/notifications.js";
 import { createRequire } from "module";
 // pdf-parse v2 is ESM-first — load the CJS build via createRequire so it works from our ESM bundle
 const { PDFParse } = createRequire(import.meta.url)("pdf-parse") as {
@@ -243,6 +244,24 @@ router.post("/upload", requireAuth, requireOrgAdmin, upload.single("file"), asyn
       details: { filename: req.file.originalname, period: `${periodStart.toISOString().slice(0, 7)}`, emissionMethod: method, autoDetected: !utilityTypeOverride },
     });
 
+    // If the parser surfaced any review flags (low confidence, scanned PDF,
+    // missing fields), queue a warn-level notification. Goes into the daily
+    // 8am NZ digest rather than firing immediately so a 40-bill batch
+    // produces one summary email per admin instead of forty.
+    if (parsed.reviewFlags.length > 0) {
+      void notify({
+        organisationId: orgId,
+        category: "upload.energy_bill.review",
+        severity: "warn",
+        title: "Energy bill needs review",
+        body: `"${req.file.originalname}" was uploaded but flagged for review:\n${parsed.reviewFlags.map((f) => `- ${f}`).join("\n")}`,
+        linkUrl: "/energy",
+        sourceAuditId: reading.id,
+        dedupeKey: `upload.energy_bill.review:${reading.id}`,
+        context: { readingId: reading.id, filename: req.file.originalname, confidence: parsed.confidence, reviewFlags: parsed.reviewFlags },
+      });
+    }
+
     res.status(201).json({
       reading,
       parsedFields: {
@@ -261,6 +280,22 @@ router.post("/upload", requireAuth, requireOrgAdmin, upload.single("file"), asyn
     });
   } catch (err) {
     req.log.error({ err }, "Upload energy bill failed");
+    // Notify org admins — single bill upload crashed entirely. Dedupe per
+    // (org, file, day) so a user retrying the same broken PDF in a tight
+    // loop doesn't spam the inbox.
+    const orgId = req.params.orgId as string;
+    const filename = req.file?.originalname ?? "unknown.pdf";
+    const day = new Date().toISOString().slice(0, 10);
+    void notify({
+      organisationId: orgId,
+      category: "upload.energy_bill",
+      severity: "error",
+      title: "Energy bill upload failed",
+      body: `Uploading "${filename}" failed and no reading was created. Please retry, or contact support if the issue persists.`,
+      linkUrl: "/energy",
+      dedupeKey: `upload.energy_bill:${orgId}:${filename}:${day}`,
+      context: { filename, error: err instanceof Error ? err.message : String(err) },
+    });
     res.status(500).json({ error: "Internal Server Error", message: "Failed to upload bill" });
   }
 });

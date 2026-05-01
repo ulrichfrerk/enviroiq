@@ -44,6 +44,7 @@ const ORG_SCOPED_ROUTERS = [
   { name: "advisor",                   probe: "/insights" },
   { name: "compliance",                probe: "/summary" },
   { name: "document-archives",         probe: "" },
+  { name: "notifications",             probe: "/unread-count" },
   { name: "suppliers",                 probe: "" },
   { name: "supplier-audits",           probe: "" },
   { name: "supplier-reports",          probe: "/summary" },

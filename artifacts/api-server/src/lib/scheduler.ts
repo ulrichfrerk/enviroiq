@@ -5,6 +5,7 @@ import { calcSustainabilityScore } from "./emissions.js";
 import { sqlRow, numCol } from "./sql-result.js";
 import { fetchAndStoreEm6Intensity, clearIntensityCache, pruneOldGridSnapshots } from "./em6.js";
 import { pruneExpiredDocumentArchives } from "./documentArchive.js";
+import { sendNotificationDigests } from "./notifications.js";
 
 interface OrgMetrics {
   fleetCo2eKg: number;
@@ -94,6 +95,7 @@ let schedulerHandle: ReturnType<typeof setInterval> | null = null;
 let em6Handle: ReturnType<typeof setInterval> | null = null;
 let pruneHandle: ReturnType<typeof setInterval> | null = null;
 let archivePruneHandle: ReturnType<typeof setInterval> | null = null;
+let notificationDigestHandle: ReturnType<typeof setInterval> | null = null;
 const REFRESH_INTERVAL_MS = 15 * 60 * 1000;     // 15 minutes
 const EM6_INTERVAL_MS = 30 * 60 * 1000;          // 30 minutes — matches em6 trading period
 const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;   // 24 hours
@@ -130,6 +132,38 @@ export function startScheduler(): void {
     void pruneExpiredDocumentArchives();
   }, PRUNE_INTERVAL_MS);
   logger.info({ intervalMs: PRUNE_INTERVAL_MS, retentionMonths: 6 }, "Document archive prune job scheduled");
+
+  // Notification digest — every hour we check whether the local time is 8am
+  // (NZ — Pacific/Auckland) and, if so, send a single rollup email per
+  // recipient summarising every severity=warn notification still pending
+  // (no email_sent_at). severity=error is dispatched immediately by notify()
+  // and is not part of the digest. The hourly cadence keeps it robust to DST
+  // transitions without needing a cron string.
+  let lastDigestDay: string | null = null;
+  const digestTick = async () => {
+    try {
+      const fmt = new Intl.DateTimeFormat("en-NZ", {
+        timeZone: "Pacific/Auckland",
+        hour: "2-digit",
+        hour12: false,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      });
+      const parts = Object.fromEntries(fmt.formatToParts(new Date()).map((p) => [p.type, p.value]));
+      const hour = Number(parts.hour);
+      const ymd = `${parts.year}-${parts.month}-${parts.day}`;
+      if (hour === 8 && lastDigestDay !== ymd) {
+        lastDigestDay = ymd;
+        await sendNotificationDigests();
+      }
+    } catch (err) {
+      logger.warn({ err }, "Notification digest tick failed");
+    }
+  };
+  void digestTick();
+  notificationDigestHandle = setInterval(() => { void digestTick(); }, 60 * 60 * 1000);
+  logger.info("Notification daily digest scheduler started (8am NZ)");
 }
 
 export function stopScheduler(): void {
@@ -148,6 +182,10 @@ export function stopScheduler(): void {
   if (archivePruneHandle) {
     clearInterval(archivePruneHandle);
     archivePruneHandle = null;
+  }
+  if (notificationDigestHandle) {
+    clearInterval(notificationDigestHandle);
+    notificationDigestHandle = null;
   }
   logger.info("Schedulers stopped");
 }

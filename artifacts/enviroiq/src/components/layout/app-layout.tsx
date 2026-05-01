@@ -2,6 +2,7 @@ import { ReactNode } from "react";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "./app-sidebar";
 import { SecurityStatusWidget } from "@/components/security-status-widget";
+import { NotificationsBell } from "@/components/notifications-bell";
 import { useAuth } from "@/hooks/use-auth";
 import { Loader2, Shield } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -42,23 +43,26 @@ export function AppLayout({ children }: { children: ReactNode }) {
                 {session.organisationName} <span className="mx-2 text-border">•</span> {session.role === 'super_admin' ? 'Platform Management' : 'ESG Portal'}
               </h2>
             </div>
-            {session.role === "super_admin" && (
-              <Button
-                asChild
-                size="sm"
-                variant={location === "/admin" ? "default" : "outline"}
-                className={`gap-2 font-medium transition-all ${
-                  location === "/admin"
-                    ? "bg-primary text-primary-foreground shadow-lg shadow-primary/25"
-                    : "border-primary/40 text-primary hover:bg-primary/10 hover:border-primary"
-                }`}
-              >
-                <Link href="/admin">
-                  <Shield className="w-3.5 h-3.5" />
-                  Admin
-                </Link>
-              </Button>
-            )}
+            <div className="flex items-center gap-2">
+              <NotificationsBell />
+              {session.role === "super_admin" && (
+                <Button
+                  asChild
+                  size="sm"
+                  variant={location === "/admin" ? "default" : "outline"}
+                  className={`gap-2 font-medium transition-all ${
+                    location === "/admin"
+                      ? "bg-primary text-primary-foreground shadow-lg shadow-primary/25"
+                      : "border-primary/40 text-primary hover:bg-primary/10 hover:border-primary"
+                  }`}
+                >
+                  <Link href="/admin">
+                    <Shield className="w-3.5 h-3.5" />
+                    Admin
+                  </Link>
+                </Button>
+              )}
+            </div>
           </header>
           <main className="flex-1 overflow-y-auto p-6 md:p-8 animate-in fade-in duration-500">
             <div className="max-w-7xl mx-auto">

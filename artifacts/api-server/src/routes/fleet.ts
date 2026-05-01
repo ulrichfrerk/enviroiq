@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from "uuid";
 import { requireAuth, requireOrgAccess, requireOrgAdmin } from "../lib/auth.js";
 import { logAudit } from "../lib/audit.js";
 import { calcFleetCo2e, vehicleClassEmissionFactor } from "../lib/emissions.js";
+import { notify } from "../lib/notifications.js";
 
 const router = Router({ mergeParams: true });
 const webhookRouter = Router();
@@ -376,6 +377,18 @@ webhookRouter.post("/navman", async (req, res) => {
     const vehicle = await findVehicleByDeviceId(deviceId, org.id);
     if (!vehicle) {
       await logAudit({ req, action: "webhook.fleet.navman", outcome: "failure", details: { reason: "device_not_registered", deviceId }, organisationId: org.id });
+      // Daily-capped warn: a broken telematics integration sending a wrong
+      // device id every 30s would otherwise generate thousands of rows.
+      void notify({
+        organisationId: org.id,
+        category: "webhook.fleet.device_not_registered",
+        severity: "warn",
+        title: "Telematics event ignored — device not registered",
+        body: `A Navman telematics event arrived for device "${deviceId}" but no vehicle is registered with that device id. Add the device under Fleet → Vehicles to start capturing emissions.`,
+        linkUrl: "/fleet",
+        dedupeKey: `webhook.fleet.device_not_registered:${org.id}:navman:${deviceId}:${new Date().toISOString().slice(0, 10)}`,
+        context: { provider: "navman", deviceId },
+      });
       res.json({ message: "Device not registered, event ignored" });
       return;
     }
@@ -415,6 +428,16 @@ webhookRouter.post("/blackhawk", async (req, res) => {
     const vehicle = await findVehicleByDeviceId(unit_id, org.id);
     if (!vehicle) {
       await logAudit({ req, action: "webhook.fleet.blackhawk", outcome: "failure", details: { reason: "device_not_registered", deviceId: unit_id }, organisationId: org.id });
+      void notify({
+        organisationId: org.id,
+        category: "webhook.fleet.device_not_registered",
+        severity: "warn",
+        title: "Telematics event ignored — device not registered",
+        body: `A Blackhawk telematics event arrived for device "${unit_id}" but no vehicle is registered with that device id. Add the device under Fleet → Vehicles to start capturing emissions.`,
+        linkUrl: "/fleet",
+        dedupeKey: `webhook.fleet.device_not_registered:${org.id}:blackhawk:${unit_id}:${new Date().toISOString().slice(0, 10)}`,
+        context: { provider: "blackhawk", deviceId: unit_id },
+      });
       res.json({ message: "Device not registered, event ignored" });
       return;
     }
@@ -455,6 +478,16 @@ webhookRouter.post("/generic", async (req, res) => {
     const vehicle = await findVehicleByDeviceId(deviceId, org.id);
     if (!vehicle) {
       await logAudit({ req, action: "webhook.fleet.generic", outcome: "failure", details: { reason: "device_not_registered", deviceId }, organisationId: org.id });
+      void notify({
+        organisationId: org.id,
+        category: "webhook.fleet.device_not_registered",
+        severity: "warn",
+        title: "Telematics event ignored — device not registered",
+        body: `A telematics event arrived for device "${deviceId}" but no vehicle is registered with that device id. Add the device under Fleet → Vehicles to start capturing emissions.`,
+        linkUrl: "/fleet",
+        dedupeKey: `webhook.fleet.device_not_registered:${org.id}:generic:${deviceId}:${new Date().toISOString().slice(0, 10)}`,
+        context: { provider: "generic", deviceId },
+      });
       res.json({ message: "Device not registered, event ignored" });
       return;
     }
@@ -587,9 +620,41 @@ router.post("/import-km", requireAuth, requireOrgAdmin, async (req, res) => {
       organisationId: orgId,
     });
 
+    // Notify admins when one or more rows in the CSV import were skipped.
+    // dedupeKey includes the imported/error counts so re-running an import
+    // with the same shape still notifies (different shape => different key).
+    if (errors.length > 0) {
+      const errorPreview = errors.slice(0, 5).join("\n");
+      const more = errors.length > 5 ? `\n…and ${errors.length - 5} more` : "";
+      void notify({
+        organisationId: orgId,
+        category: "import.fleet_csv",
+        severity: "warn",
+        title: `Fleet KM import — ${errors.length} row${errors.length === 1 ? "" : "s"} skipped`,
+        body: `${imported} row(s) imported, ${errors.length} skipped due to bad data:\n${errorPreview}${more}`,
+        linkUrl: "/fleet",
+        dedupeKey: `import.fleet_csv:${orgId}:${imported}:${errors.length}:${new Date().toISOString().slice(0, 19)}`,
+        context: { imported, created: created.length, errorCount: errors.length, errors: errors.slice(0, 50) },
+      });
+    }
+
     res.json({ imported, created, errors });
   } catch (err) {
     req.log.error({ err }, "Fleet KM import failed");
+    const orgId = req.params.orgId as string;
+    void notify({
+      organisationId: orgId,
+      category: "import.fleet_csv",
+      severity: "error",
+      title: "Fleet KM import failed",
+      body: `The fleet KM CSV import crashed and no rows were saved. Please retry, or contact support if the issue persists.`,
+      linkUrl: "/fleet",
+      // Cap error notifications to once per org per day per source —
+      // repeated identical crashes shouldn't spam admins, but we still
+      // want a fresh alert if the issue is still failing tomorrow.
+      dedupeKey: `import.fleet_csv.error:${orgId}:${new Date().toISOString().slice(0, 10)}`,
+      context: { error: err instanceof Error ? err.message : String(err) },
+    });
     res.status(500).json({ error: "Internal Server Error", message: "Failed to import KM data" });
   }
 });

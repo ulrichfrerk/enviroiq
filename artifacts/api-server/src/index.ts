@@ -224,6 +224,62 @@ async function ensureDocumentArchiveSchema(): Promise<void> {
 }
 
 /**
+ * Idempotent self-heal for the notifications schema
+ * (lib/db/src/schema/notifications.ts). Two tables:
+ *   - notification_events: one row per upstream domain event, with a UNIQUE
+ *     dedupeKey so repeat fires of `notify()` no-op.
+ *   - notifications: per-recipient fan-out drives the bell icon + email.
+ */
+async function ensureNotificationsSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS notification_events (
+      id                 text PRIMARY KEY,
+      organisation_id    text NOT NULL,
+      category           text NOT NULL,
+      severity           text NOT NULL,
+      title              text NOT NULL,
+      body               text NOT NULL,
+      link_url           text,
+      source_audit_id    text,
+      context            jsonb,
+      dedupe_key         text NOT NULL,
+      created_at         timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS notification_events_dedupe_key_uq ON notification_events (dedupe_key)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS notification_events_org_created_idx ON notification_events (organisation_id, created_at)`,
+  );
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id                  text PRIMARY KEY,
+      organisation_id     text NOT NULL,
+      recipient_user_id   text NOT NULL,
+      category            text NOT NULL,
+      severity            text NOT NULL,
+      title               text NOT NULL,
+      body                text NOT NULL,
+      link_url            text,
+      source_audit_id     text,
+      source_event_id     text NOT NULL,
+      read_at             timestamptz,
+      dismissed_at        timestamptz,
+      email_sent_at       timestamptz,
+      created_at          timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS notifications_recipient_created_idx ON notifications (recipient_user_id, created_at)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS notifications_org_created_idx ON notifications (organisation_id, created_at)`,
+  );
+  logger.info("Notifications schema ready");
+}
+
+/**
  * Verify the live database matches every table and column declared in
  * `lib/db/src/schema`. Runs after the existing `ensure*` self-heal chain so
  * inline backfills get a chance first; on any missing object we log a
@@ -257,6 +313,7 @@ ensureSessionTable()
   .then(() => ensureSsoSchema())
   .then(() => ensureDocumentArchiveSchema())
   .then(() => ensureSupplierAuditOverrideSchema())
+  .then(() => ensureNotificationsSchema())
   .then(() => ensureCrmApiKeyTables())
   .then(() => ensureDefaultSupplierAuditTemplate())
   .then(() => verifyAndStart())

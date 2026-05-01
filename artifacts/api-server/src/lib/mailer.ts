@@ -150,6 +150,81 @@ export async function sendMagicLinkEmail(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Notification emails (data quality / ingest failure alerts)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const notificationEmailHtml = (
+  recipientName: string,
+  orgName: string,
+  title: string,
+  body: string,
+  linkUrl?: string,
+) => {
+  const safeBody = body.replace(/\n/g, "<br>");
+  const cta = linkUrl
+    ? `<a href="${linkUrl}" style="display:inline-block;background:#16a34a;color:#fff;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:600;font-size:15px;margin-top:8px;">Open in EnviroIQ →</a>`
+    : "";
+  return `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>${title}</title></head>
+<body style="font-family:system-ui,sans-serif;background:#f9fafb;margin:0;padding:40px 20px;">
+  <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:12px;padding:40px;border:1px solid #e5e7eb;">
+    <div style="margin-bottom:24px;">
+      <span style="color:#16a34a;font-weight:700;font-size:20px;">EnviroIQ</span>
+      <span style="color:#6b7280;font-size:13px;margin-left:8px;">${orgName}</span>
+    </div>
+    <h1 style="font-size:20px;font-weight:700;color:#111827;margin:0 0 12px;">${title}</h1>
+    <p style="color:#374151;margin:0 0 16px;font-size:14px;">Hi ${recipientName},</p>
+    <div style="color:#374151;margin:0 0 20px;font-size:14px;line-height:1.6;">${safeBody}</div>
+    ${cta}
+    <p style="color:#9ca3af;margin-top:32px;font-size:12px;">You're receiving this because you're an organisation administrator on EnviroIQ. Open the bell icon in the app to see the full notification history.</p>
+  </div>
+</body>
+</html>`;
+};
+
+/**
+ * Send a data-quality / failure notification email. Used by the foundation
+ * notification system in `lib/notifications.ts`. Returns sent=false in dev
+ * when Resend isn't configured (logs to console instead) — never throws so
+ * a failed email doesn't crash the parent ingest flow.
+ */
+export async function sendNotificationEmail(
+  to: string,
+  recipientName: string,
+  orgName: string,
+  title: string,
+  body: string,
+  linkUrl?: string,
+): Promise<{ sent: boolean; devMode: boolean }> {
+  const resend = await getResendClient();
+  if (resend) {
+    const { data, error } = await resend.client.emails.send({
+      from: resend.from,
+      to,
+      subject: `[${orgName}] ${title}`,
+      html: notificationEmailHtml(recipientName, orgName, title, body, linkUrl),
+      text: `${title}\n\nHi ${recipientName},\n\n${body}\n${linkUrl ? `\nOpen in EnviroIQ: ${linkUrl}\n` : ""}`,
+    });
+    if (error) {
+      logger.error({ error, to }, "Resend failed to send notification email");
+      throw new Error(`Notification email send failed: ${error.message}`);
+    }
+    logger.info({ to, messageId: data?.id, title }, "Notification email sent via Resend");
+    return { sent: true, devMode: false };
+  }
+  if (process.env.NODE_ENV !== "production") {
+    // eslint-disable-next-line no-console
+    console.log(`\n[NOTIFICATION EMAIL — RESEND NOT CONFIGURED]\n  To: ${to}\n  Subject: [${orgName}] ${title}\n  Body: ${body}\n`);
+    return { sent: false, devMode: true };
+  }
+  // In production we don't want a misconfigured Resend to bring down the
+  // ingest path — just record it.
+  logger.error({ to, title }, "Resend not configured in production — notification email dropped");
+  return { sent: false, devMode: false };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Supplier ESG Audit emails
 // ─────────────────────────────────────────────────────────────────────────────
 

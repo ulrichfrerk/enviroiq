@@ -41,6 +41,7 @@ import securityRouter from "./security.js";
 import compliancePublicRouter from "./compliance-public.js";
 import recommendationsRouter from "./recommendations.js";
 import documentArchivesRouter from "./document-archives.js";
+import notificationsRouter from "./notifications.js";
 
 const router = Router();
 
@@ -73,6 +74,7 @@ router.use("/organisations/:orgId/subcontractors", subcontractorsRouter);
 router.use("/organisations/:orgId/advisor", advisorRouter);
 router.use("/organisations/:orgId/compliance", complianceRouter);
 router.use("/organisations/:orgId/document-archives", documentArchivesRouter);
+router.use("/organisations/:orgId/notifications", notificationsRouter);
 router.use("/organisations/:orgId/suppliers", suppliersRouter);
 router.use("/organisations/:orgId/supplier-audit-templates", supplierAuditTemplatesRouter);
 router.use("/organisations/:orgId/supplier-audits", supplierAuditsRouter);
