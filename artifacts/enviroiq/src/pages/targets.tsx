@@ -12,6 +12,21 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 
+interface TargetProgress {
+  /**
+   * - `collecting` — < 3 months of emissions data; no percentage shown.
+   * - `estimated`  — 3–11 months of data, annualised to a full year.
+   * - `actual`     — ≥ 12 months of data, exact trailing-12-month figure.
+   */
+  mode: "collecting" | "estimated" | "actual";
+  monthsOfData: number;
+  currentAnnualisedKg: number | null;
+  progressPct: number | null;
+  onTrack: boolean | null;
+  overdue: boolean;
+  caption: string;
+}
+
 interface EmissionTarget {
   id: string;
   baselineYear: number;
@@ -21,13 +36,12 @@ interface EmissionTarget {
   label?: string;
   framework?: string;
   createdAt: string;
+  /** Server-computed annualised progress vs. baseline. See api-server/src/lib/target-progress.ts. */
+  progress?: TargetProgress | null;
 }
 
 interface TargetWithProgress extends EmissionTarget {
   targetCo2eKg: number;
-  currentCo2eKg?: number;     // actual current-year emissions (from API summary)
-  progressPct?: number;        // how far along the reduction path
-  onTrack?: boolean;
 }
 
 const FRAMEWORKS = [
@@ -132,18 +146,9 @@ export default function Targets() {
     },
   });
 
-  // Fetch current emissions for progress calculation
-  const { data: summary } = useQuery<{ totalCo2eKg: number }>({
-    queryKey: ["org-summary", orgId],
-    enabled: !!orgId,
-    queryFn: async () => {
-      const res = await fetch(`/api/organisations/${orgId}/summary`, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch summary");
-      return res.json();
-    },
-  });
-
-  // Last-12-month emissions — used by the Target Assistant to seed baseline
+  // Last-12-month emissions — used by the Target Assistant to seed baseline.
+  // (Per-target progress no longer comes from /summary; it's computed
+  // server-side and returned as `progress` on each row of /targets.)
   const { data: trailing12m, isLoading: trailing12mLoading } = useQuery<{ totalCo2eKg: number }>({
     queryKey: ["org-summary-12m", orgId],
     enabled: !!orgId,
@@ -307,24 +312,14 @@ export default function Targets() {
     },
   });
 
-  // Enrich targets with progress
-  const currentYear = new Date().getFullYear();
-  const targets: TargetWithProgress[] = (data?.items ?? []).map(t => {
-    const targetCo2eKg = t.baselineCo2eKg * (1 - t.targetPctReduction / 100);
-    const yearsElapsed = currentYear - t.baselineYear;
-    const totalYears   = t.targetYear - t.baselineYear;
-    const expectedProgress = totalYears > 0 ? Math.min((yearsElapsed / totalYears) * 100, 100) : 0;
-    const currentKg = summary?.totalCo2eKg;
-    let progressPct: number | undefined;
-    let onTrack: boolean | undefined;
-    if (currentKg != null) {
-      const reductionAchieved = t.baselineCo2eKg - currentKg;
-      const reductionNeeded   = t.baselineCo2eKg - targetCo2eKg;
-      progressPct = reductionNeeded > 0 ? Math.max(0, (reductionAchieved / reductionNeeded) * 100) : 0;
-      onTrack = progressPct >= expectedProgress * 0.8;
-    }
-    return { ...t, targetCo2eKg, currentCo2eKg: currentKg, progressPct, onTrack };
-  });
+  // Enrich targets with the server-computed progress block. Progress logic
+  // (trailing-12-month, partial-year annualisation, "collecting" mode for
+  // < 3 months of data) lives in api-server/src/lib/target-progress.ts so
+  // that it can't drift between the dashboard widget and this page.
+  const targets: TargetWithProgress[] = (data?.items ?? []).map(t => ({
+    ...t,
+    targetCo2eKg: t.baselineCo2eKg * (1 - t.targetPctReduction / 100),
+  }));
 
   const fmt = (kg: number) =>
     kg >= 1000 ? `${(kg / 1000).toFixed(1)}k kg` : `${Math.round(kg).toLocaleString()} kg`;
@@ -359,15 +354,29 @@ export default function Targets() {
         </Card>
       ) : (
         <div className="space-y-4">
-          {targets.map(t => (
+          {targets.map(t => {
+            const progress = t.progress ?? null;
+            const isCollecting = !progress || progress.mode === "collecting";
+            const isEstimated = progress?.mode === "estimated";
+            const pct = progress?.progressPct ?? 0;
+            return (
             <Card key={t.id} className="p-6 border-border/50">
               <div className="flex flex-col md:flex-row items-start gap-6">
                 {/* Ring */}
                 <div className="relative shrink-0">
-                  <ProgressRing pct={t.progressPct ?? 0} size={88} />
+                  <ProgressRing pct={isCollecting ? 0 : pct} size={88} />
                   <div className="absolute inset-0 flex flex-col items-center justify-center">
-                    <span className="text-lg font-bold tabular-nums">{Math.round(t.progressPct ?? 0)}%</span>
-                    <span className="text-[10px] text-muted-foreground">done</span>
+                    {isCollecting ? (
+                      <>
+                        <span className="text-xs font-semibold text-muted-foreground">{progress?.monthsOfData ?? 0}/12</span>
+                        <span className="text-[10px] text-muted-foreground">months</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="text-lg font-bold tabular-nums">{Math.round(pct)}%</span>
+                        <span className="text-[10px] text-muted-foreground">done</span>
+                      </>
+                    )}
                   </div>
                 </div>
 
@@ -382,15 +391,37 @@ export default function Targets() {
                         {t.framework}
                       </span>
                     )}
-                    {t.onTrack != null && (
+                    {!isCollecting && progress?.onTrack != null && (
                       <span className={`flex items-center gap-1 text-xs px-2.5 py-0.5 rounded-full font-medium ${
-                        t.onTrack ? "bg-emerald-900/40 text-emerald-300" : "bg-amber-900/40 text-amber-300"
+                        progress.onTrack ? "bg-emerald-900/40 text-emerald-300" : "bg-amber-900/40 text-amber-300"
                       }`}>
-                        {t.onTrack ? <CheckCircle2 className="w-3 h-3" /> : <AlertTriangle className="w-3 h-3" />}
-                        {t.onTrack ? "On track" : "Needs attention"}
+                        {progress.onTrack ? <CheckCircle2 className="w-3 h-3" /> : <AlertTriangle className="w-3 h-3" />}
+                        {progress.onTrack
+                          ? (progress.overdue ? "Target met" : "On track")
+                          : (progress.overdue ? "Missed target" : "Needs attention")}
+                      </span>
+                    )}
+                    {isEstimated && (
+                      <span
+                        className="text-xs bg-amber-900/30 text-amber-300 px-2.5 py-0.5 rounded-full font-medium"
+                        title={`Annualised from ${progress!.monthsOfData} months of data — figure will firm up at 12 months.`}
+                      >
+                        Estimated
+                      </span>
+                    )}
+                    {isCollecting && (
+                      <span className="text-xs bg-secondary/60 text-muted-foreground px-2.5 py-0.5 rounded-full font-medium">
+                        Collecting baseline
                       </span>
                     )}
                   </div>
+
+                  {isCollecting && (
+                    <p className="text-xs text-muted-foreground mb-3">
+                      We need at least 3 months of emissions data before showing a like-for-like
+                      annual figure. Currently at {progress?.monthsOfData ?? 0} of 12 months.
+                    </p>
+                  )}
 
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm mt-3">
                     <div>
@@ -405,11 +436,13 @@ export default function Targets() {
                       <p className="text-xs text-muted-foreground uppercase tracking-wide font-medium">Required reduction</p>
                       <p className="font-semibold text-foreground">↓{t.targetPctReduction}% ({fmt(t.baselineCo2eKg - t.targetCo2eKg)})</p>
                     </div>
-                    {t.currentCo2eKg != null && (
+                    {progress?.currentAnnualisedKg != null && (
                       <div>
-                        <p className="text-xs text-muted-foreground uppercase tracking-wide font-medium">Current (12M)</p>
-                        <p className={`font-semibold ${t.currentCo2eKg <= t.targetCo2eKg ? "text-emerald-400" : "text-foreground"}`}>
-                          {fmt(t.currentCo2eKg)}
+                        <p className="text-xs text-muted-foreground uppercase tracking-wide font-medium">
+                          {isEstimated ? "Current (annualised)" : "Current (last 12 mo)"}
+                        </p>
+                        <p className={`font-semibold ${progress.currentAnnualisedKg <= t.targetCo2eKg ? "text-emerald-400" : "text-foreground"}`}>
+                          {fmt(progress.currentAnnualisedKg)}
                         </p>
                       </div>
                     )}
@@ -423,10 +456,17 @@ export default function Targets() {
                     </div>
                     <div className="h-2 bg-secondary/40 rounded-full overflow-hidden">
                       <div
-                        className="h-full rounded-full bg-gradient-to-r from-primary to-emerald-400 transition-all duration-700"
-                        style={{ width: `${Math.min(t.progressPct ?? 0, 100)}%` }}
+                        className={`h-full rounded-full transition-all duration-700 ${
+                          isCollecting
+                            ? "bg-secondary/60"
+                            : "bg-gradient-to-r from-primary to-emerald-400"
+                        }`}
+                        style={{ width: `${isCollecting ? 0 : Math.min(pct, 100)}%` }}
                       />
                     </div>
+                    {progress?.caption && (
+                      <p className="mt-2 text-xs text-muted-foreground">{progress.caption}</p>
+                    )}
                   </div>
                 </div>
 
@@ -450,7 +490,8 @@ export default function Targets() {
                 </div>
               </div>
             </Card>
-          ))}
+            );
+          })}
         </div>
       )}
 

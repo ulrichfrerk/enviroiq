@@ -151,6 +151,16 @@ interface MaturityResult {
   dimensions: { id: string; label: string; score: number; max: number; tips: string[] }[];
 }
 
+interface TargetProgress {
+  mode: "collecting" | "estimated" | "actual";
+  monthsOfData: number;
+  currentAnnualisedKg: number | null;
+  progressPct: number | null;
+  onTrack: boolean | null;
+  overdue: boolean;
+  caption: string;
+}
+
 interface EmissionTarget {
   id: string;
   baselineYear: number;
@@ -159,6 +169,7 @@ interface EmissionTarget {
   targetPctReduction: number;
   label?: string;
   framework?: string;
+  progress?: TargetProgress | null;
 }
 
 export default function Dashboard() {
@@ -561,15 +572,16 @@ export default function Dashboard() {
           ) : (
             <div className="space-y-4">
               {targetsData.items.slice(0, 3).map(t => {
-                const targetKg = t.baselineCo2eKg * (1 - t.targetPctReduction / 100);
-                const currentKg = summary?.totalCo2eKg;
-                const reductionNeeded = t.baselineCo2eKg - targetKg;
-                const reductionAchieved = currentKg != null ? Math.max(0, t.baselineCo2eKg - currentKg) : null;
-                const progressPct = reductionAchieved != null && reductionNeeded > 0
-                  ? Math.min((reductionAchieved / reductionNeeded) * 100, 100)
-                  : 0;
+                // Progress is now computed server-side using a trailing-12-
+                // month annualised figure, so it doesn't drift with the
+                // dashboard's time filter and it handles seasonality
+                // (Christmas, plant shutdowns, etc.) properly. See
+                // api-server/src/lib/target-progress.ts for the modes.
+                const progress = t.progress ?? null;
                 const yearsLeft = t.targetYear - new Date().getFullYear();
-                const onTrack = progressPct >= ((new Date().getFullYear() - t.baselineYear) / (t.targetYear - t.baselineYear)) * 100 * 0.8;
+                const isCollecting = !progress || progress.mode === "collecting";
+                const pct = progress?.progressPct ?? 0;
+                const onTrack = progress?.onTrack;
 
                 return (
                   <div key={t.id} className="space-y-2">
@@ -577,22 +589,35 @@ export default function Dashboard() {
                       <span className="text-sm font-medium text-foreground flex-1 truncate">
                         {t.label || `↓${t.targetPctReduction}% by ${t.targetYear}`}
                       </span>
-                      {reductionAchieved != null && (
+                      {!isCollecting && onTrack != null && (
                         <span className={`flex items-center gap-1 text-xs ${onTrack ? "text-emerald-400" : "text-amber-400"}`}>
                           {onTrack ? <CheckCircle2 className="w-3 h-3" /> : <AlertTriangle className="w-3 h-3" />}
-                          {onTrack ? "On track" : "Needs attention"}
+                          {onTrack
+                            ? (progress?.overdue ? "Target met" : "On track")
+                            : (progress?.overdue ? "Missed target" : "Needs attention")}
                         </span>
+                      )}
+                      {isCollecting && (
+                        <span className="text-xs text-muted-foreground">Collecting data</span>
                       )}
                     </div>
                     <div className="h-2.5 bg-secondary/40 rounded-full overflow-hidden">
                       <div
-                        className="h-full rounded-full bg-gradient-to-r from-primary to-emerald-400 transition-all"
-                        style={{ width: `${progressPct}%` }}
+                        className={`h-full rounded-full transition-all ${
+                          isCollecting
+                            ? "bg-secondary/60"
+                            : "bg-gradient-to-r from-primary to-emerald-400"
+                        }`}
+                        style={{ width: `${isCollecting ? 0 : pct}%` }}
                       />
                     </div>
                     <div className="flex justify-between text-xs text-muted-foreground">
-                      <span>{Math.round(progressPct)}% reduction achieved</span>
-                      <span>{yearsLeft > 0 ? `${yearsLeft}yr${yearsLeft !== 1 ? "s" : ""} to go` : "Due now"}</span>
+                      <span className="truncate pr-2">
+                        {progress
+                          ? progress.caption
+                          : "Collecting baseline — 0 of 12 months"}
+                      </span>
+                      <span className="shrink-0">{yearsLeft > 0 ? `${yearsLeft}yr${yearsLeft !== 1 ? "s" : ""} to go` : "Due now"}</span>
                     </div>
                   </div>
                 );

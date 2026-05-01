@@ -5,10 +5,16 @@ import { eq, and, desc } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
 import { requireAuth, requireOrgAccess, requireOrgAdmin } from "../lib/auth.js";
 import { logAudit } from "../lib/audit.js";
+import { computeTargetProgress, loadOrgEmissionsContext } from "../lib/target-progress.js";
 
 const router = Router({ mergeParams: true });
 
 // GET /organisations/:orgId/targets
+//
+// Each row is enriched with a `progress` block computed on the server so
+// that the dashboard widget and the targets page show the same number, and
+// neither has to reimplement the (subtle) annualisation logic. See
+// `lib/target-progress.ts` for the rationale and modes.
 router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
   try {
     const orgId = req.params.orgId as string;
@@ -18,7 +24,15 @@ router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
       .where(eq(emissionTargetsTable.organisationId, orgId))
       .orderBy(desc(emissionTargetsTable.targetYear));
 
-    res.json({ items: rows, total: rows.length });
+    // One DB round-trip for org-wide emissions context; per-target progress
+    // is then derived in pure JS.
+    const ctx = rows.length > 0 ? await loadOrgEmissionsContext(orgId) : null;
+    const items = rows.map((t) => ({
+      ...t,
+      progress: ctx ? computeTargetProgress(t, ctx) : null,
+    }));
+
+    res.json({ items, total: items.length });
   } catch (err) {
     req.log.error({ err }, "List emission targets failed");
     res.status(500).json({ error: "Internal Server Error" });
