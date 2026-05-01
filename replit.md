@@ -181,6 +181,49 @@ v1** — every payload is snake_case, every response uses the standard envelope.
 - Spec: `GET /api/v1/openapi.json` (OpenAPI 3.1, includes `x-fgc-standard` extension
   listing all reason codes + webhook events) + `/crm-api-spec.md` (human brief).
 
+## Compliance Document Archive (6-month retention)
+
+Every PDF/document ingested for analytics is automatically copied to the
+`document_archives` table for compliance purposes, then permanently purged 6
+months after capture by the daily scheduler.
+
+**Sources captured:**
+- `energy_bill_upload` — single-file uploads via `POST /organisations/:orgId/energy/upload`
+- `energy_bill_batch_upload` — bulk uploads via `POST /organisations/:orgId/energy/upload-batch`
+- `energy_bill_email` — PDF attachments from inbound webhook `POST /webhooks/energy/inbound-email`
+
+**Schema** (`document_archives`): `id`, `organisation_id`, `source_type`,
+`source_id` (FK to source row, e.g. energy_readings.id), `original_filename`,
+`content_type`, `size_bytes`, `sha256` (integrity proof), `content` (bytea —
+raw bytes, nullified on purge), `captured_at`, `expires_at`,
+`captured_by_user_id` / `_email`, `sender_email` (for inbound mail),
+`retention_policy` (default `6mo_default`), `purged_at`, `notes`. Indexed
+on `(organisation_id, captured_at)`, `(expires_at)`, and `(source_type, source_id)`.
+
+**Lifecycle:** `archiveDocument()` in `lib/documentArchive.ts` is called from
+each ingestion site (failures swallowed — must never break the primary flow).
+The daily prune job runs every 24h and `UPDATE…SET content=NULL, purged_at=now()`
+on rows where `expires_at <= now() AND content IS NOT NULL`. The metadata row
+is **retained forever** as evidence the document was held + lawfully purged
+(filename, size, SHA-256, capture/purge timestamps).
+
+**Access:** `GET /api/organisations/:orgId/document-archives` (org members,
+metadata + retention summary) and `GET …/:id/download` (org admin only,
+audit-logged on every access; returns `410 Gone` with metadata if purged).
+
+**Regulatory alignment:**
+- **NZ Privacy Act 2020 (IPP 9)** — info shall not be kept longer than required;
+  6-month analytics retention is well within bounds.
+- **GDPR Art. 5(1)(e)** — storage limitation principle satisfied.
+- **SOC 2 CC6.5** — secure disposal evidenced by `purged_at` + retained hash.
+- **Conflict warning:** NZ IRD requires tax-invoice originals for **7 years**
+  (Tax Administration Act 1994, s.22). EnviroIQ holds *analytics copies only* —
+  customers must retain tax originals via their accounting system. The
+  retention page in the UI surfaces this disclaimer.
+- **Per-org override:** `retention_policy` column allows future per-org
+  configuration (e.g. 13mo for orgs needing climate-disclosure audit trails
+  matching the grid intensity retention window).
+
 ## Key Environment Variables
 
 - `DATABASE_URL` — PostgreSQL connection (auto-set by Replit)

@@ -24,3 +24,4 @@ export * from "./billing-profiles";
 export * from "./provisioning-requests";
 export * from "./support-tickets";
 export * from "./idempotency-keys";
+export * from "./document-archives";

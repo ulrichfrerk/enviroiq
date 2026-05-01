@@ -4,6 +4,7 @@ import { logger } from "./logger.js";
 import { calcSustainabilityScore } from "./emissions.js";
 import { sqlRow, numCol } from "./sql-result.js";
 import { fetchAndStoreEm6Intensity, clearIntensityCache, pruneOldGridSnapshots } from "./em6.js";
+import { pruneExpiredDocumentArchives } from "./documentArchive.js";
 
 interface OrgMetrics {
   fleetCo2eKg: number;
@@ -92,6 +93,7 @@ async function refreshAllOrgMetrics(): Promise<void> {
 let schedulerHandle: ReturnType<typeof setInterval> | null = null;
 let em6Handle: ReturnType<typeof setInterval> | null = null;
 let pruneHandle: ReturnType<typeof setInterval> | null = null;
+let archivePruneHandle: ReturnType<typeof setInterval> | null = null;
 const REFRESH_INTERVAL_MS = 15 * 60 * 1000;     // 15 minutes
 const EM6_INTERVAL_MS = 30 * 60 * 1000;          // 30 minutes — matches em6 trading period
 const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;   // 24 hours
@@ -120,6 +122,14 @@ export function startScheduler(): void {
     void pruneOldGridSnapshots();
   }, PRUNE_INTERVAL_MS);
   logger.info({ intervalMs: PRUNE_INTERVAL_MS, retentionMonths: 13 }, "Grid intensity prune job scheduled");
+
+  // Daily compliance archive prune — purge document blobs older than 6 months
+  // (metadata row retained as evidence the doc was held + lawfully purged)
+  void pruneExpiredDocumentArchives();
+  archivePruneHandle = setInterval(() => {
+    void pruneExpiredDocumentArchives();
+  }, PRUNE_INTERVAL_MS);
+  logger.info({ intervalMs: PRUNE_INTERVAL_MS, retentionMonths: 6 }, "Document archive prune job scheduled");
 }
 
 export function stopScheduler(): void {
@@ -134,6 +144,10 @@ export function stopScheduler(): void {
   if (pruneHandle) {
     clearInterval(pruneHandle);
     pruneHandle = null;
+  }
+  if (archivePruneHandle) {
+    clearInterval(archivePruneHandle);
+    archivePruneHandle = null;
   }
   logger.info("Schedulers stopped");
 }

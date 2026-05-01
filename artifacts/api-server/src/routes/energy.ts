@@ -8,6 +8,7 @@ import { logAudit } from "../lib/audit.js";
 import { calcEnergyCo2e, resolveElectricityFactor } from "../lib/emissions.js";
 import { getCurrentGridIntensity } from "../lib/em6.js";
 import { parseBillText } from "../lib/billParser.js";
+import { archiveDocument } from "../lib/documentArchive.js";
 import { createRequire } from "module";
 // pdf-parse v2 is ESM-first — load the CJS build via createRequire so it works from our ESM bundle
 const { PDFParse } = createRequire(import.meta.url)("pdf-parse") as {
@@ -222,6 +223,18 @@ router.post("/upload", requireAuth, requireOrgAdmin, upload.single("file"), asyn
       rawText: fileText.substring(0, 1000),
     }).returning();
 
+    // Compliance archive — store original PDF (auto-purge after 6 months)
+    await archiveDocument({
+      organisationId: orgId,
+      sourceType: "energy_bill_upload",
+      sourceId: reading.id,
+      buffer: req.file.buffer,
+      filename: req.file.originalname,
+      contentType: req.file.mimetype || "application/pdf",
+      capturedByUserId: req.user?.id ?? null,
+      capturedByEmail: req.user?.email ?? null,
+    });
+
     await logAudit({
       req,
       action: "energy_bill.upload",
@@ -349,6 +362,18 @@ router.post("/upload-batch", requireAuth, requireOrgAdmin, uploadBatch.array("fi
           source: "pdf_upload",
           originalFileName: file.originalname,
           rawText: fileText.substring(0, 1000),
+        });
+
+        // Compliance archive — store original PDF (auto-purge after 6 months)
+        await archiveDocument({
+          organisationId: orgId,
+          sourceType: "energy_bill_batch_upload",
+          sourceId: readingId,
+          buffer: file.buffer,
+          filename: file.originalname,
+          contentType: file.mimetype || "application/pdf",
+          capturedByUserId: req.user?.id ?? null,
+          capturedByEmail: req.user?.email ?? null,
         });
 
         results.push({
@@ -540,7 +565,12 @@ energyEmailWebhookRouter.post("/inbound-email", async (req, res) => {
           req.log?.warn({ filename: attachment.filename }, "Failed to download attachment");
           continue;
         }
-        const pdfText = await dlResp.text(); // text extraction from PDF bytes (best-effort)
+        const pdfBytes = Buffer.from(await dlResp.arrayBuffer());
+        // Proper PDF text extraction (handles compressed/FlateDecode streams)
+        const pdfText  = await extractPdfText(pdfBytes).catch((e) => {
+          req.log?.warn({ err: e, filename: attachment.filename }, "extractPdfText failed for inbound attachment");
+          return "";
+        });
 
         // Extract kWh from PDF text content (NZ electricity bill patterns)
         const combinedText = pdfText + "\n" + emailText;
@@ -595,6 +625,19 @@ energyEmailWebhookRouter.post("/inbound-email", async (req, res) => {
           rawText: `From: ${from}\nSubject: ${subject}\n${emailText}`.substring(0, 1000),
         });
         insertedIds.push(readingId);
+
+        // Compliance archive — store original PDF (auto-purge after 6 months)
+        await archiveDocument({
+          organisationId: org.id,
+          sourceType: "energy_bill_email",
+          sourceId: readingId,
+          buffer: pdfBytes,
+          filename: attachment.filename,
+          contentType: attachment.content_type || "application/pdf",
+          senderEmail: bareEmail(from),
+          notes: subject ? `Email subject: ${subject}` : null,
+        });
+
         req.log?.info({ readingId, filename: attachment.filename, usageKwh }, "Energy reading created from email attachment");
       } catch (attachErr) {
         req.log?.error({ attachErr, filename: attachment.filename }, "Failed to process attachment");
