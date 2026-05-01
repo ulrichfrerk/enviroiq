@@ -1,0 +1,55 @@
+
+Now I have the full picture. Here's how this would actually fit:
+
+What can fail today (the "sources" we'd wire up)
+You've already got the four obvious ingestion points and they all log structured failures to audit_logs — which is exactly the substrate a notification system wants:
+
+Source	Where	What can fail
+Power bill PDF upload	energy.ts POST /upload (multer + pdf-parse + AI)	PDF unreadable, no kWh found, supplier not recognised, file > 10MB
+Fleet CSV km import	fleet.ts POST /import-km	Bad headers, unknown vehicle reg, dates out of range
+Telematics webhook (Navman/Blackhawk/generic)	fleet.ts webhookRouter	invalid_api_key, device_not_registered (currently silent → 200 OK)
+Magic-link email	auth.ts via mailer.ts	Resend API failure, bounce
+ESG board pack PDF generation	reports.ts	Snapshot timeout, missing data, render error
+The fact that all of these already call logAudit({ outcome: "failure", details: {...} }) means we're not instrumenting from scratch — we already know when things fail. We just don't surface it to humans.
+
+What you have for delivery already
+Resend is wired up in lib/mailer.ts with a configurable from: address, per-org branding hooks, and the same template pattern used for magic links. Adding a "notification email" template is ~30 lines.
+Role-based admin lookup is already in place — org_admin and super_admin roles, queried per-org via users table. So "all admins of that tenant" is a one-line SQL query, not a new concept.
+Audit log table already has organisation_id, outcome, action, details JSONB. It can either be the notification source directly, or we can write a separate notifications table that references audit rows.
+The real design choices (this is the conversation worth having before any code)
+1. Notification table, or read directly off audit_logs?
+
+Option A — derived view: notifications are just audit_logs WHERE outcome='failure' AND action IN (allowlist). Cheapest, but no per-user read/dismiss state and no email-sent state.
+Option B — separate notifications table: when a watched audit row is written, fan out to a notifications row per admin, tracking read_at, dismissed_at, email_sent_at. More tables, but this is the only way you can have a real bell-icon dropdown that says "3 unread".
+I'd push for B. The cost is one new table (notifications + maybe notification_preferences); the upside is everything else (digest emails, Slack later, mobile push later) plugs in cleanly.
+2. Immediate vs digest emails. "File failed to import at 3:47am" → do you want all admins woken up? Three flavours, pick one or offer all three:
+
+Per-event — fires immediately. Right for severe stuff (bill upload failed, webhook auth invalid).
+Hourly digest — quiet hours friendly. Right for noisy categories (single device dropping a few packets).
+Daily summary — 8am rollup. Right for "didn't get done" stuff (the missing-bill-for-this-month detector).
+Per-user preference table with three columns (one per channel) is the clean version. Sensible defaults: per-event for severity='error', digest for severity='warn'.
+
+3. The "didn't get done" half — this is harder than "failed". A bill that never arrives doesn't fire any code. You need a proactive scanner:
+
+Daily cron that asks "for each org, which months in the last 12 have zero bills uploaded?" → emit a missing_bill notification.
+Same idea for telematics: "which active vehicles have had no events in 7 days?" → stale_telematics notification.
+Same for reports: "which orgs are due to file Q-end and haven't generated a board pack?"
+The board pack PDF code already has the "Awaiting bill" gap detector — we'd lift that into a generic scanForGaps() worker that runs nightly.
+
+4. In-app surface. Bell icon top-right of the app shell, badge with unread count, dropdown showing last 10, link to a full /notifications page with filters. Standard SaaS pattern. WebSocket / SSE for live updates is nice but probably v2 — polling every 60s on the client is fine to start.
+
+5. Recipient scope edge cases.
+
+Org has zero admins → fall back to super_admin and log a separate "orphaned org" alert.
+Admin is inactive (isActive=false) → skip, don't email.
+Admin has been added but hasn't completed first sign-in → email but don't create in-app notif.
+Super admins of the platform: do they get a separate global stream of all-tenant failures? (Worth asking — this is your operations early-warning system.)
+What I'd suggest as the actual scope
+This is genuinely two or three project tasks, not one:
+
+Foundation — notifications + notification_preferences tables, fan-out service, in-app bell icon + dropdown + dismiss/read APIs. Wire up the three highest-value failure sources (bill upload, fleet CSV import, webhook auth failures). Email channel via Resend with per-event + daily-digest.
+Gap detector — nightly worker for "didn't get done" cases (missing bills, stale telematics, overdue reports).
+Preferences UI — per-user opt-in/opt-out, quiet hours, super-admin global feed.
+Doing all three at once is a 4–5 day chunk. Doing just #1 is a credible 1.5–2 day first delivery that already covers the original ask ("file fails → admins get told").
+
+My recommendation: switch me to Plan mode and I'll write this up properly as 2–3 dependent tasks so you can pick the scope that matches your urgency. If you'd rather I just build the foundation (Task #1 above) right now in this session, I can do that too — but the design choices in points 1, 2, and 3 above (table shape, digest cadence, gap detection) really do want a thumbs-up from you before I commit to one direction. Which way do you want to go?
