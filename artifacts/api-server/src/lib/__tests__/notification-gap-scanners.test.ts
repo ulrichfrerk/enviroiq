@@ -31,6 +31,7 @@ const dbState: {
   orgs: OrgRow[];
   events: EventRow[];
   notifications: NotificationRow[];
+  claimedRunMarkers: Set<string>;
 } = {
   readings: [],
   vehicles: [],
@@ -39,7 +40,13 @@ const dbState: {
   orgs: [],
   events: [],
   notifications: [],
+  claimedRunMarkers: new Set<string>(),
 };
+
+// Tests pass a frozen `now` to the scanners; the SQL mock needs to know that
+// same value so its synthesized "missing months" align with the scanner's
+// expected window. Tests set this in beforeEach when they freeze a date.
+let scannerWindowEnd: Date | null = null;
 
 function reset() {
   dbState.readings = [];
@@ -49,6 +56,8 @@ function reset() {
   dbState.orgs = [];
   dbState.events = [];
   dbState.notifications = [];
+  dbState.claimedRunMarkers = new Set<string>();
+  scannerWindowEnd = null;
 }
 
 // Minimal SQL "interpreter" — recognises the specific shape of each query the
@@ -70,26 +79,45 @@ vi.mock("@workspace/db", () => {
           return "";
         };
         const text = flatten(q);
-        if (text.includes("FROM energy_readings") && text.includes("DISTINCT")) {
-          // List of (utilityType, provider) accounts active in trailing window.
+        if (text.includes("generate_series") && text.includes("WHERE r.id IS NULL")) {
+          // The new set-based scanMissingBills query. Find the orgId from
+          // the where clause params, then synthesize one row per missing
+          // (account, month) pair within the calendar window starting at
+          // (now - 12 months).
+          const orgIdMatch = text.match(/(org-[A-Za-z0-9_-]+)/);
+          const orgId = orgIdMatch?.[1];
+          if (!orgId) return { rows: [] };
+          const orgReadings = dbState.readings.filter((r) => r.organisationId === orgId);
           const accounts = new Map<string, { utility_type: string; provider: string }>();
-          for (const r of dbState.readings) {
+          for (const r of orgReadings) {
             const provider = r.provider ?? "";
             accounts.set(`${r.utilityType}|${provider}`, { utility_type: r.utilityType, provider });
           }
-          return { rows: Array.from(accounts.values()) };
-        }
-        if (text.includes("FROM energy_readings") && text.includes("GROUP BY 1")) {
-          // Per-account month list. The scanner runs this query once per
-          // account it found above, so just return every distinct YYYY-MM in
-          // dbState.readings — the scanner intersects the result with its
-          // expected month range so cross-account contamination is harmless.
-          const months = new Set<string>();
-          for (const r of dbState.readings) {
-            const m = `${r.periodStart.getUTCFullYear()}-${String(r.periodStart.getUTCMonth() + 1).padStart(2, "0")}`;
-            months.add(m);
+          // Build expected month set covering the trailing 12 calendar months
+          // from frozenScannerNow (set by tests via vi.setSystemTime() or via
+          // the now param surfacing inside generate_series). Tests set the
+          // expected window via `scannerWindowEnd` shared state below.
+          const winEnd = scannerWindowEnd ?? new Date();
+          const expectedMonths: string[] = [];
+          const cur = new Date(Date.UTC(winEnd.getUTCFullYear(), winEnd.getUTCMonth() - 12, 1));
+          const cutoff = new Date(Date.UTC(winEnd.getUTCFullYear(), winEnd.getUTCMonth(), 1));
+          while (cur < cutoff) {
+            expectedMonths.push(`${cur.getUTCFullYear()}-${String(cur.getUTCMonth() + 1).padStart(2, "0")}`);
+            cur.setUTCMonth(cur.getUTCMonth() + 1);
           }
-          return { rows: Array.from(months).map((month) => ({ month })) };
+          const out: Array<{ utility_type: string; provider: string; month: string }> = [];
+          for (const acc of accounts.values()) {
+            const present = new Set<string>();
+            for (const r of orgReadings) {
+              if (r.utilityType !== acc.utility_type) continue;
+              if ((r.provider ?? "") !== acc.provider) continue;
+              present.add(`${r.periodStart.getUTCFullYear()}-${String(r.periodStart.getUTCMonth() + 1).padStart(2, "0")}`);
+            }
+            for (const m of expectedMonths) {
+              if (!present.has(m)) out.push({ utility_type: acc.utility_type, provider: acc.provider, month: m });
+            }
+          }
+          return { rows: out };
         }
         if (text.includes("FROM vehicles v")) {
           const cutoff = new Date(Date.now() - 7 * 86400_000);
@@ -118,7 +146,7 @@ vi.mock("@workspace/db", () => {
           // scanned. We approximate by returning every report row; if a
           // report exists for any quarter in our seed it'll suppress.
           // Tests use distinct org ids per scenario so this is safe.
-          const orgIdMatch = text.match(/'(org-[^']+)'/);
+          const orgIdMatch = text.match(/(org-[A-Za-z0-9_-]+)/);
           const orgId = orgIdMatch?.[1];
           const reports = orgId
             ? dbState.reports.filter((r) => r.organisationId === orgId)
@@ -127,6 +155,19 @@ vi.mock("@workspace/db", () => {
         }
         return { rows: [] };
       }),
+      insert: vi.fn((tbl: { name?: string }) => ({
+        values: vi.fn((row: { dedupeKey?: string; category?: string; id?: string }) => ({
+          onConflictDoNothing: vi.fn(() => ({
+            returning: vi.fn(async () => {
+              if (tbl?.name !== "notification_events") return [];
+              const key = row.dedupeKey ?? "";
+              if (dbState.claimedRunMarkers.has(key)) return [];
+              dbState.claimedRunMarkers.add(key);
+              return [{ id: row.id ?? "evt-marker" }];
+            }),
+          })),
+        })),
+      })),
       select: vi.fn((cols?: Record<string, unknown>) => ({
         from: vi.fn((tbl: { _tag?: string; name?: string }) => ({
           where: vi.fn(async (whereClause: unknown) => {
@@ -169,7 +210,7 @@ vi.mock("@workspace/db", () => {
   };
 });
 
-import { scanMissingBills, scanStaleTelematics, scanOverdueReports, runGapDetectorOnce, resolveDedupeKey } from "../notification-gap-scanners.js";
+import { scanMissingBills, scanStaleTelematics, scanOverdueReports, runGapDetectorOnce, resolveDedupeKey, startGapDetector, stopGapDetector, __resetGapDetectorState } from "../notification-gap-scanners.js";
 import * as notificationsLib from "../notifications.js";
 
 const notifyMock = notificationsLib.notify as unknown as ReturnType<typeof vi.fn>;
@@ -180,11 +221,11 @@ beforeEach(() => {
 });
 
 describe("scanMissingBills", () => {
-  it("flags months in trailing window with zero bills, then stops once they're filled", async () => {
-    // Today (frozen to mid-2026) — last 12 months are 2025-05 .. 2026-04.
-    const now = new Date(Date.UTC(2026, 4, 15)); // 2026-05-15
-    // One account for electricity / Contact Energy with bills for every month
-    // EXCEPT 2026-03 (so we expect exactly that month flagged).
+  it("emits one notification per (account, month) gap, with month in the dedupe key", async () => {
+    const now = new Date(Date.UTC(2026, 4, 15)); // 2026-05-15 → window 2025-05..2026-04
+    scannerWindowEnd = now;
+    // One account for electricity/Contact Energy with bills for every month
+    // EXCEPT 2026-03. Expect exactly one gap row.
     const months = ["2025-05","2025-06","2025-07","2025-08","2025-09","2025-10","2025-11","2025-12","2026-01","2026-02","2026-04"];
     for (const m of months) {
       const [y, mo] = m.split("-").map(Number);
@@ -193,17 +234,50 @@ describe("scanMissingBills", () => {
     const gaps = await scanMissingBills("org-1", now);
     expect(gaps).toHaveLength(1);
     expect(gaps[0].category).toBe("missing_bill");
-    expect(gaps[0].baseKey).toBe("missing_bill:org-1:electricity:Contact Energy");
-    expect(gaps[0].body).toContain("2026-03");
-    // Now fill the gap.
-    dbState.readings.push({ organisationId: "org-1", utilityType: "electricity", provider: "Contact Energy", periodStart: new Date(Date.UTC(2026, 2, 5)) });
+    // Required by spec: dedupe key includes the month.
+    expect(gaps[0].baseKey).toBe("missing_bill:org-1:electricity:Contact Energy:2026-03");
+    expect(gaps[0].title).toContain("2026-03");
+  });
+
+  it("emits multiple per-(account, month) rows when multiple months are missing", async () => {
+    const now = new Date(Date.UTC(2026, 4, 15));
+    scannerWindowEnd = now;
+    // Bills for every month except 2026-02 AND 2026-03.
+    const months = ["2025-05","2025-06","2025-07","2025-08","2025-09","2025-10","2025-11","2025-12","2026-01","2026-04"];
+    for (const m of months) {
+      const [y, mo] = m.split("-").map(Number);
+      dbState.readings.push({ organisationId: "org-1", utilityType: "gas", provider: "Genesis", periodStart: new Date(Date.UTC(y, mo - 1, 5)) });
+    }
+    const gaps = await scanMissingBills("org-1", now);
+    const keys = gaps.map((g) => g.baseKey).sort();
+    expect(keys).toEqual([
+      "missing_bill:org-1:gas:Genesis:2026-02",
+      "missing_bill:org-1:gas:Genesis:2026-03",
+    ]);
+  });
+
+  it("stops emitting a month once that month is back-filled (without affecting other still-missing months)", async () => {
+    const now = new Date(Date.UTC(2026, 4, 15));
+    scannerWindowEnd = now;
+    const months = ["2025-05","2025-06","2025-07","2025-08","2025-09","2025-10","2025-11","2025-12","2026-01","2026-04"];
+    for (const m of months) {
+      const [y, mo] = m.split("-").map(Number);
+      dbState.readings.push({ organisationId: "org-1", utilityType: "gas", provider: "Genesis", periodStart: new Date(Date.UTC(y, mo - 1, 5)) });
+    }
+    // Initially missing 2026-02 and 2026-03.
+    expect((await scanMissingBills("org-1", now)).map((g) => g.baseKey).sort()).toEqual([
+      "missing_bill:org-1:gas:Genesis:2026-02",
+      "missing_bill:org-1:gas:Genesis:2026-03",
+    ]);
+    // Back-fill just 2026-02.
+    dbState.readings.push({ organisationId: "org-1", utilityType: "gas", provider: "Genesis", periodStart: new Date(Date.UTC(2026, 1, 5)) });
     const gaps2 = await scanMissingBills("org-1", now);
-    expect(gaps2).toHaveLength(0);
+    expect(gaps2.map((g) => g.baseKey)).toEqual(["missing_bill:org-1:gas:Genesis:2026-03"]);
   });
 });
 
 describe("scanStaleTelematics", () => {
-  it("flags vehicles with no events in the trailing 7 days, then stops once an event lands", async () => {
+  it("emits one notification per stale vehicle (per-vehicle dedupe key, stable across set churn)", async () => {
     const now = Date.now();
     vi.setSystemTime(now);
     dbState.vehicles.push(
@@ -211,21 +285,23 @@ describe("scanStaleTelematics", () => {
       { id: "v-2", organisationId: "org-1", isActive: true, gpsProvider: "blackhawk", name: "Truck B", registration: "DEF456" },
       { id: "v-3", organisationId: "org-1", isActive: true, gpsProvider: "none", name: "Manual Van", registration: null },
     );
-    // v-2 has a fresh event; v-1 has only an old one.
+    // v-1 last reported 30d ago, v-2 30d ago — both stale. v-3 is excluded
+    // because gpsProvider='none'.
     dbState.fleetEvents.push(
       { vehicleId: "v-1", recordedAt: new Date(now - 30 * 86400_000) },
-      { vehicleId: "v-2", recordedAt: new Date(now - 1 * 86400_000) },
+      { vehicleId: "v-2", recordedAt: new Date(now - 30 * 86400_000) },
     );
     const gaps = await scanStaleTelematics("org-1", new Date(now));
-    expect(gaps).toHaveLength(1);
-    expect(gaps[0].title).toContain("1 vehicle");
-    expect(gaps[0].body).toContain("Truck A");
-    expect(gaps[0].body).not.toContain("Truck B");
-    expect(gaps[0].body).not.toContain("Manual Van"); // gpsProvider=none excluded
-    // Now v-1 reports.
+    const keys = gaps.map((g) => g.baseKey).sort();
+    expect(keys).toEqual(["stale_telematics:org-1:v-1", "stale_telematics:org-1:v-2"]);
+    // Verify Manual Van was excluded.
+    expect(gaps.some((g) => g.body.includes("Manual Van"))).toBe(false);
+
+    // Now v-1 reports — its row drops out, but v-2's dedupe key MUST be stable
+    // (i.e. it must NOT be affected by v-1 leaving the set).
     dbState.fleetEvents.push({ vehicleId: "v-1", recordedAt: new Date(now - 1 * 86400_000) });
     const gaps2 = await scanStaleTelematics("org-1", new Date(now));
-    expect(gaps2).toHaveLength(0);
+    expect(gaps2.map((g) => g.baseKey)).toEqual(["stale_telematics:org-1:v-2"]);
     vi.useRealTimers();
   });
 });
@@ -256,13 +332,12 @@ describe("scanOverdueReports", () => {
 });
 
 describe("runGapDetectorOnce", () => {
-  it("walks active orgs, calls notify() for each gap, and skips inactive orgs", async () => {
+  it("walks active orgs, calls notify() with severity=warn for each gap, and skips inactive orgs", async () => {
     const now = new Date(Date.UTC(2026, 4, 15));
+    scannerWindowEnd = now;
     dbState.orgs.push({ id: "org-1", isActive: true }, { id: "org-2", isActive: false });
-    // org-1: one missing bill gap.
     dbState.readings.push({ organisationId: "org-1", utilityType: "gas", provider: "Genesis", periodStart: new Date(Date.UTC(2026, 0, 5)) });
     await runGapDetectorOnce({ now });
-    // At least one notify() call against org-1, none against org-2.
     expect(notifyMock).toHaveBeenCalled();
     for (const call of notifyMock.mock.calls) {
       expect(call[0].organisationId).toBe("org-1");
@@ -272,6 +347,7 @@ describe("runGapDetectorOnce", () => {
 
   it("dryRun=true never calls notify()", async () => {
     const now = new Date(Date.UTC(2026, 4, 15));
+    scannerWindowEnd = now;
     dbState.orgs.push({ id: "org-1", isActive: true });
     dbState.readings.push({ organisationId: "org-1", utilityType: "gas", provider: "Genesis", periodStart: new Date(Date.UTC(2026, 0, 5)) });
     const summary = await runGapDetectorOnce({ now, dryRun: true });
@@ -282,6 +358,7 @@ describe("runGapDetectorOnce", () => {
 
   it("isolates per-org failures so one bad org does not block the rest", async () => {
     const now = new Date(Date.UTC(2026, 4, 15));
+    scannerWindowEnd = now;
     dbState.orgs.push(
       { id: "org-bad", isActive: true },
       { id: "org-good", isActive: true },
@@ -347,5 +424,130 @@ describe("resolveDedupeKey", () => {
     dbState.events.push({ id: "evt-1", dedupeKey: baseKey });
     // No recipient rows — happens when the org has no active admins at fire time.
     expect(await resolveDedupeKey(baseKey)).toBeNull();
+  });
+});
+
+describe("startGapDetector (timezone-aware daily trigger)", () => {
+  /**
+   * Helper: seed dbState so a scanner run on the given window WILL produce
+   * exactly one missing_bill gap (and therefore one notify() call). We pick
+   * a single (gas, Genesis) reading 11 months back inside the trailing-12
+   * window — that establishes the account, and every other month inside the
+   * window is missing. The first such missing month produces the notify call
+   * we assert on.
+   */
+  function seedSingleGapWindow(orgId: string, winEnd: Date) {
+    dbState.orgs.push({ id: orgId, isActive: true });
+    // One reading 11 months back, so account exists but ~11 months are missing.
+    const past = new Date(Date.UTC(winEnd.getUTCFullYear(), winEnd.getUTCMonth() - 11, 5));
+    dbState.readings.push({ organisationId: orgId, utilityType: "gas", provider: "Genesis", periodStart: past });
+    scannerWindowEnd = winEnd;
+  }
+
+  beforeEach(() => {
+    __resetGapDetectorState();
+    stopGapDetector();
+    notifyMock.mockClear();
+  });
+
+  it("FIRES at the configured local hour, then is idempotent within the same local day", async () => {
+    process.env.GAP_DETECTOR_HOUR = "6";
+    process.env.GAP_DETECTOR_TZ = "Pacific/Auckland";
+    vi.useFakeTimers();
+    // 17:30 UTC on 2026-02-14 → 06:30 NZDT 2026-02-15 (NZDT = UTC+13 in Feb).
+    vi.setSystemTime(new Date("2026-02-14T17:30:00Z"));
+    seedSingleGapWindow("org-tz1", new Date("2026-02-14T17:30:00Z"));
+    startGapDetector();
+    await vi.runOnlyPendingTimersAsync();
+    // PROOF the daily run executed: notify() was called at least once for
+    // the seeded missing_bill gaps.
+    expect(notifyMock).toHaveBeenCalled();
+    const firstCallCount = notifyMock.mock.calls.length;
+    expect(firstCallCount).toBeGreaterThan(0);
+
+    // Advance one hour — local hour is now 07, so the tick must NOT re-fire.
+    vi.setSystemTime(new Date("2026-02-14T18:30:00Z"));
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+    expect(notifyMock.mock.calls.length).toBe(firstCallCount);
+
+    // Advance back into hour 06 of the SAME local day (impossible in real
+    // wall-clock but we simulate by rewinding). The lastDailyRunYmd in-memory
+    // guard must still suppress.
+    vi.setSystemTime(new Date("2026-02-14T17:45:00Z"));
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+    expect(notifyMock.mock.calls.length).toBe(firstCallCount);
+    stopGapDetector();
+    vi.useRealTimers();
+    delete process.env.GAP_DETECTOR_HOUR;
+    delete process.env.GAP_DETECTOR_TZ;
+  });
+
+  it("does not fire when the configured local hour is not the current local hour", async () => {
+    process.env.GAP_DETECTOR_HOUR = "6";
+    process.env.GAP_DETECTOR_TZ = "Pacific/Auckland";
+    vi.useFakeTimers();
+    // 12:00 UTC on 2026-02-14 → 01:00 NZDT 2026-02-15 — well outside hour=6.
+    vi.setSystemTime(new Date("2026-02-14T12:00:00Z"));
+    seedSingleGapWindow("org-tz2", new Date("2026-02-14T12:00:00Z"));
+    startGapDetector();
+    await vi.runOnlyPendingTimersAsync();
+    expect(notifyMock).not.toHaveBeenCalled();
+    stopGapDetector();
+    vi.useRealTimers();
+    delete process.env.GAP_DETECTOR_HOUR;
+    delete process.env.GAP_DETECTOR_TZ;
+  });
+
+  it("survives process restart inside the trigger window (DB-backed claim prevents same-day double-fire)", async () => {
+    process.env.GAP_DETECTOR_HOUR = "6";
+    process.env.GAP_DETECTOR_TZ = "Pacific/Auckland";
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-14T17:30:00Z")); // 06:30 NZDT
+    seedSingleGapWindow("org-tz3", new Date("2026-02-14T17:30:00Z"));
+
+    // First boot: runs.
+    startGapDetector();
+    await vi.runOnlyPendingTimersAsync();
+    const firstCalls = notifyMock.mock.calls.length;
+    expect(firstCalls).toBeGreaterThan(0);
+    stopGapDetector();
+
+    // Simulate a process restart 10 minutes later — still inside the local
+    // hour-6 window. The in-memory `lastDailyRunYmd` is reset, but the DB
+    // marker row remains, so the claim must fail and the scanner must NOT
+    // run again.
+    __resetGapDetectorState();
+    notifyMock.mockClear();
+    vi.setSystemTime(new Date("2026-02-14T17:40:00Z")); // 06:40 NZDT same day
+    startGapDetector();
+    await vi.runOnlyPendingTimersAsync();
+    expect(notifyMock).not.toHaveBeenCalled();
+    stopGapDetector();
+    vi.useRealTimers();
+    delete process.env.GAP_DETECTOR_HOUR;
+    delete process.env.GAP_DETECTOR_TZ;
+  });
+
+  it("DST transition (NZDT→NZST 2026-04-05): fires once on the transition day at local hour=6", async () => {
+    process.env.GAP_DETECTOR_HOUR = "6";
+    process.env.GAP_DETECTOR_TZ = "Pacific/Auckland";
+    vi.useFakeTimers();
+    // 2026-04-05 03:00 NZST (after DST end) corresponds to 2026-04-04 15:00 UTC.
+    // To hit local hour=6 on 2026-04-05 (NZST = UTC+12 post-transition):
+    //   06:00 NZST 2026-04-05 = 18:00 UTC 2026-04-04.
+    vi.setSystemTime(new Date("2026-04-04T18:30:00Z"));
+    seedSingleGapWindow("org-dst", new Date("2026-04-04T18:30:00Z"));
+    startGapDetector();
+    await vi.runOnlyPendingTimersAsync();
+    expect(notifyMock).toHaveBeenCalled();
+    const firstCalls = notifyMock.mock.calls.length;
+    // Same local day, hour later — must not re-fire.
+    vi.setSystemTime(new Date("2026-04-04T19:30:00Z"));
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+    expect(notifyMock.mock.calls.length).toBe(firstCalls);
+    stopGapDetector();
+    vi.useRealTimers();
+    delete process.env.GAP_DETECTOR_HOUR;
+    delete process.env.GAP_DETECTOR_TZ;
   });
 });

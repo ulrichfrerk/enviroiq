@@ -1,7 +1,8 @@
 // Nightly gap detector — finds data that *should* exist but doesn't and emits
 // warn-severity notifications via the foundation `notify()`. See replit.md.
 
-import { and, eq, isNull, or, sql, like } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import { eq, or, sql, like } from "drizzle-orm";
 import {
   db,
   notificationEventsTable,
@@ -28,10 +29,6 @@ function appBase(): string {
   const dom = process.env.REPLIT_DOMAINS?.split(",")[0]?.trim();
   if (dom) return `https://${dom}/app`;
   return "http://localhost:5173";
-}
-
-function ymd(d: Date): string {
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
 function quarterOf(d: Date): { year: number; q: 1 | 2 | 3 | 4 } {
@@ -64,47 +61,56 @@ export async function scanMissingBills(orgId: string, now: Date): Promise<GapDes
   // (false negatives). Both query and the expected-month enumerator below
   // must share the same calendar-month boundary.
   const horizon = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - TRAILING_MONTHS, 1));
-  const accounts = await db.execute(sql`
-    SELECT DISTINCT
-      utility_type AS utility_type,
-      COALESCE(provider, '') AS provider
-    FROM energy_readings
-    WHERE organisation_id = ${orgId}
-      AND period_start >= ${horizon}
-  `);
-  const rows = (accounts.rows ?? accounts) as Array<{ utility_type: string; provider: string }>;
-  const out: GapDescriptor[] = [];
-  for (const acc of rows) {
-    const bills = await db.execute(sql`
-      SELECT TO_CHAR(DATE_TRUNC('month', period_start), 'YYYY-MM') AS month
+  const cutoff = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  // Single set-based query — cross-join every (utility_type, provider) account
+  // active in the trailing window with the generated month series, then anti-
+  // join against the actual bills. Postgres returns one row per missing
+  // (account, month) pair — exactly the granularity we emit notifications at.
+  // No N+1 fanout per account.
+  const result = await db.execute(sql`
+    WITH accounts AS (
+      SELECT DISTINCT
+        utility_type AS utility_type,
+        COALESCE(provider, '') AS provider
       FROM energy_readings
       WHERE organisation_id = ${orgId}
-        AND utility_type = ${acc.utility_type}
-        AND COALESCE(provider, '') = ${acc.provider}
         AND period_start >= ${horizon}
-      GROUP BY 1
-    `);
-    const billRows = (bills.rows ?? bills) as Array<{ month: string }>;
-    const present = new Set<string>(billRows.map((r) => r.month));
-
-    const missing: string[] = [];
-    const cur = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - TRAILING_MONTHS, 1));
-    const cutoff = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-    while (cur < cutoff) {
-      const m = ymd(cur);
-      if (!present.has(m)) missing.push(m);
-      cur.setUTCMonth(cur.getUTCMonth() + 1);
-    }
-    if (missing.length === 0) continue;
-    const providerLabel = acc.provider || "(no provider on file)";
+    ),
+    months AS (
+      SELECT generate_series(${horizon}::timestamp, ${cutoff}::timestamp - INTERVAL '1 month', INTERVAL '1 month') AS month_start
+    ),
+    expected AS (
+      SELECT a.utility_type, a.provider, m.month_start
+      FROM accounts a CROSS JOIN months m
+    )
+    SELECT
+      e.utility_type AS utility_type,
+      e.provider AS provider,
+      TO_CHAR(e.month_start, 'YYYY-MM') AS month
+    FROM expected e
+    LEFT JOIN energy_readings r
+      ON r.organisation_id = ${orgId}
+      AND r.utility_type = e.utility_type
+      AND COALESCE(r.provider, '') = e.provider
+      AND DATE_TRUNC('month', r.period_start) = e.month_start
+    WHERE r.id IS NULL
+    ORDER BY e.utility_type, e.provider, e.month_start
+  `);
+  const rows = (result.rows ?? result) as Array<{ utility_type: string; provider: string; month: string }>;
+  const out: GapDescriptor[] = [];
+  for (const row of rows) {
+    const providerLabel = row.provider || "(no provider on file)";
     out.push({
       orgId,
       category: "missing_bill",
-      baseKey: `missing_bill:${orgId}:${acc.utility_type}:${acc.provider}`,
-      title: `Missing ${acc.utility_type} bills for ${providerLabel} (${missing.length} month${missing.length === 1 ? "" : "s"})`,
-      body: `No bill uploaded for: ${missing.join(", ")}.`,
+      // Per-(account, month) dedupe so each gap-month is its own bell row.
+      // A back-fill of one month never hides other still-missing months for
+      // the same account, and re-broken months re-fire via :v{N} bumps.
+      baseKey: `missing_bill:${orgId}:${row.utility_type}:${row.provider}:${row.month}`,
+      title: `Missing ${row.utility_type} bill for ${providerLabel} — ${row.month}`,
+      body: `No ${row.utility_type} reading was uploaded for ${providerLabel} covering ${row.month}.`,
       linkUrl: `${appBase()}/energy`,
-      context: { utilityType: acc.utility_type, provider: acc.provider, missingMonths: missing },
+      context: { utilityType: row.utility_type, provider: row.provider, month: row.month },
     });
   }
   return out;
@@ -112,8 +118,10 @@ export async function scanMissingBills(orgId: string, now: Date): Promise<GapDes
 
 /**
  * Scan for active vehicles whose telematics provider should be sending events
- * but haven't in the trailing 7 days. Rolls up into a single org-level
- * notification listing the vehicles.
+ * but haven't in the trailing 7 days. One notification per stale vehicle so
+ * the dedupe identity is stable per-gap — when one vehicle starts reporting
+ * again, that vehicle's event is the only one that resolves; the still-stale
+ * neighbours' undismissed bell rows are unaffected.
  */
 export async function scanStaleTelematics(orgId: string, now: Date): Promise<GapDescriptor[]> {
   const cutoff = new Date(now.getTime() - STALE_TELEMATICS_DAYS * 86400_000);
@@ -130,18 +138,24 @@ export async function scanStaleTelematics(orgId: string, now: Date): Promise<Gap
     HAVING MAX(fe.recorded_at) IS NULL OR MAX(fe.recorded_at) < ${cutoff}
   `);
   const rows = (result.rows ?? result) as Array<{ id: string; name: string; registration: string | null; last_event: Date | string | null }>;
-  if (rows.length === 0) return [];
-  const labels = rows.map((r) => r.registration ? `${r.name} (${r.registration})` : r.name);
-  const idsKey = rows.map((r) => r.id).sort().join(",");
-  return [{
-    orgId,
-    category: "stale_telematics",
-    baseKey: `stale_telematics:${orgId}:${idsKey}`,
-    title: `${rows.length} vehicle${rows.length === 1 ? "" : "s"} haven't reported in over ${STALE_TELEMATICS_DAYS} days`,
-    body: labels.join(", "),
-    linkUrl: `${appBase()}/fleet`,
-    context: { vehicleIds: rows.map((r) => r.id), staleSinceDays: STALE_TELEMATICS_DAYS },
-  }];
+  return rows.map((r) => {
+    const label = r.registration ? `${r.name} (${r.registration})` : r.name;
+    const lastSeen = r.last_event
+      ? `last event ${new Date(r.last_event).toISOString().slice(0, 10)}`
+      : "no events on record";
+    return {
+      orgId,
+      category: "stale_telematics" as const,
+      // Stable per-vehicle dedupe — this gap's identity is the vehicle, not
+      // the set of currently-stale vehicles. A re-broken vehicle re-fires
+      // via :v{N} bumps after the prior bell row was dismissed.
+      baseKey: `stale_telematics:${orgId}:${r.id}`,
+      title: `Vehicle ${label} hasn't reported in over ${STALE_TELEMATICS_DAYS} days`,
+      body: `${label}: ${lastSeen}.`,
+      linkUrl: `${appBase()}/fleet`,
+      context: { vehicleId: r.id, staleSinceDays: STALE_TELEMATICS_DAYS },
+    };
+  });
 }
 
 /**
@@ -301,13 +315,105 @@ export async function runGapDetectorOnce(opts: {
 }
 
 let gapDetectorHandle: ReturnType<typeof setInterval> | null = null;
+let lastDailyRunYmd: string | null = null;
 
-/** Boots the gap detector. Fires once at boot, then daily. */
-export function startGapDetector(intervalMs = 24 * 60 * 60 * 1000): void {
+/**
+ * Atomically claim the daily-run slot for the given (tz, ymd) using
+ * notification_events.dedupe_key UNIQUE as a distributed lock. Returns true
+ * iff THIS process won the race (and therefore should run the scanners).
+ *
+ * This survives restarts: a process that crashes/restarts mid-window still
+ * sees the existing marker row and skips the run, even though the in-memory
+ * `lastDailyRunYmd` was reset to null.
+ *
+ * The marker row is intentionally orphan (zero recipients): `resolveDedupeKey`
+ * already suppresses orphan-event re-fires, so the marker doesn't pollute any
+ * user-facing surface — it's a pure synchronisation token.
+ */
+async function tryClaimDailyRun(tz: string, ymd: string): Promise<boolean> {
+  const dedupeKey = `gap_detector:run:${tz}:${ymd}`;
+  const inserted = await db
+    .insert(notificationEventsTable)
+    .values({
+      id: randomUUID(),
+      organisationId: "PLATFORM",
+      category: "gap_detector_run_marker",
+      severity: "info",
+      title: "Gap detector daily run marker",
+      body: `tz=${tz} ymd=${ymd}`,
+      dedupeKey,
+    })
+    .onConflictDoNothing({ target: notificationEventsTable.dedupeKey })
+    .returning({ id: notificationEventsTable.id });
+  return inserted.length > 0;
+}
+
+/**
+ * Compute the local Y-M-D and hour for a given timezone using Intl.
+ * Falls back to Pacific/Auckland if the supplied tz is invalid.
+ */
+function localPartsForTz(tz: string, when: Date): { hour: number; ymd: string } {
+  const tryFormat = (timeZone: string) => {
+    const fmt = new Intl.DateTimeFormat("en-NZ", {
+      timeZone,
+      hour: "2-digit",
+      hour12: false,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    const parts = Object.fromEntries(fmt.formatToParts(when).map((p) => [p.type, p.value]));
+    return { hour: Number(parts.hour), ymd: `${parts.year}-${parts.month}-${parts.day}` };
+  };
+  try {
+    return tryFormat(tz);
+  } catch {
+    return tryFormat("Pacific/Auckland");
+  }
+}
+
+/**
+ * Boots the gap detector. Ticks every hour and fires the daily run when the
+ * configured timezone reports the configured local hour. Defaults to 06:00
+ * Pacific/Auckland. The per-day guard (`lastDailyRunYmd`) ensures exactly one
+ * run per local day even if the tick window catches multiple in-hour ticks.
+ *
+ * Configurable via env: GAP_DETECTOR_HOUR (0-23, default 6),
+ * GAP_DETECTOR_TZ (IANA tz, default Pacific/Auckland).
+ */
+export function startGapDetector(): void {
   if (gapDetectorHandle) return;
-  void runGapDetectorOnce();
-  gapDetectorHandle = setInterval(() => { void runGapDetectorOnce(); }, intervalMs);
-  logger.info({ intervalMs }, "Notification gap detector started");
+  const rawHour = Number(process.env.GAP_DETECTOR_HOUR);
+  const hour = Number.isFinite(rawHour) && rawHour >= 0 && rawHour <= 23
+    ? Math.floor(rawHour)
+    : 6;
+  const tz = process.env.GAP_DETECTOR_TZ || "Pacific/Auckland";
+  const tick = async () => {
+    try {
+      const { hour: localHour, ymd } = localPartsForTz(tz, new Date());
+      if (localHour !== hour) return;
+      // Fast in-memory short-circuit: if we already ran today inside *this*
+      // process, skip without hitting the DB.
+      if (lastDailyRunYmd === ymd) return;
+      // Cross-restart guard: claim the (tz, ymd) slot atomically via the
+      // notification_events.dedupe_key UNIQUE constraint. If another process
+      // (or a previous incarnation of this one) already claimed it, skip.
+      const won = await tryClaimDailyRun(tz, ymd);
+      lastDailyRunYmd = ymd; // remember either way to avoid re-querying
+      if (!won) {
+        logger.info({ tz, ymd }, "Gap detector daily run already claimed by another process — skipping");
+        return;
+      }
+      await runGapDetectorOnce();
+    } catch (err) {
+      logger.error({ err }, "Gap detector tick failed");
+    }
+  };
+  // Run an initial tick at boot in case the server starts up inside the
+  // configured hour window. The lastDailyRunYmd guard makes this idempotent.
+  void tick();
+  gapDetectorHandle = setInterval(() => { void tick(); }, 60 * 60 * 1000);
+  logger.info({ hour, tz }, "Notification gap detector started (per-day local-time trigger)");
 }
 
 export function stopGapDetector(): void {
@@ -315,6 +421,11 @@ export function stopGapDetector(): void {
     clearInterval(gapDetectorHandle);
     gapDetectorHandle = null;
   }
+}
+
+/** Test-only: reset the per-day guard between assertions. */
+export function __resetGapDetectorState(): void {
+  lastDailyRunYmd = null;
 }
 
 // Constants exported for tests + admin endpoint shape.
