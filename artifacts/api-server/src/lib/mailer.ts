@@ -197,16 +197,21 @@ export interface NotificationEmailItem {
  * `/emails/batch` accepts up to 100 personalised emails per call, which is
  * how the foundation notification fan-out (`notify()` in notifications.ts)
  * stays within rate limits when an org has many admins or when the daily
- * digest sweeps every recipient at once. Returns the number actually sent
- * and never throws — failures are logged so the caller's ingest flow keeps
- * running.
+ * digest sweeps every recipient at once.
  *
- * Behaviour matches `sendNotificationEmail` for the dev/console fallback.
+ * Returns a per-item `results` array preserving input order. Each entry is
+ * `{ ok: true }` only when Resend confirmed dispatch — callers MUST use this
+ * to decide which `notifications` rows to stamp `email_sent_at`. Anything
+ * else (provider error, batch threw, dev-console fallback, missing
+ * configuration in production) is `{ ok: false }` so unsent rows stay
+ * unstamped and roll into a future digest. Never throws — the caller's
+ * ingest flow keeps running.
  */
 export async function sendNotificationEmailBatch(
   items: NotificationEmailItem[],
-): Promise<{ sent: number; devMode: boolean }> {
-  if (items.length === 0) return { sent: 0, devMode: false };
+): Promise<{ sent: number; devMode: boolean; results: Array<{ ok: boolean; error?: string }> }> {
+  if (items.length === 0) return { sent: 0, devMode: false, results: [] };
+  const results: Array<{ ok: boolean; error?: string }> = items.map(() => ({ ok: false }));
   const resend = await getResendClient();
   if (resend) {
     // Chunk to Resend's 100-email batch limit.
@@ -224,26 +229,41 @@ export async function sendNotificationEmailBatch(
         const { data, error } = await resend.client.batch.send(payload);
         if (error) {
           logger.error({ error, count: chunk.length }, "Resend batch failed");
+          for (let j = 0; j < chunk.length; j++) results[i + j] = { ok: false, error: error.message };
           continue;
         }
-        const sentForChunk = Array.isArray(data?.data) ? data.data.length : chunk.length;
-        totalSent += sentForChunk;
-        logger.info({ count: sentForChunk, batchIds: Array.isArray(data?.data) ? data.data.map((d: { id?: string }) => d.id) : undefined }, "Notification emails sent via Resend batch");
+        const ids = Array.isArray(data?.data) ? (data.data as Array<{ id?: string }>) : [];
+        // Resend returns one id per item in the order we sent them. Anything
+        // beyond the returned-id count is treated as not sent so the row
+        // remains unstamped (we'd rather double-email than silently drop).
+        for (let j = 0; j < chunk.length; j++) {
+          if (ids[j]?.id) {
+            results[i + j] = { ok: true };
+            totalSent += 1;
+          } else {
+            results[i + j] = { ok: false, error: "no_id_returned" };
+          }
+        }
+        logger.info({ count: ids.length, batchIds: ids.map((d) => d.id) }, "Notification emails sent via Resend batch");
       } catch (err) {
         logger.error({ err, count: chunk.length }, "Resend batch send threw");
+        for (let j = 0; j < chunk.length; j++) results[i + j] = { ok: false, error: err instanceof Error ? err.message : String(err) };
       }
     }
-    return { sent: totalSent, devMode: false };
+    return { sent: totalSent, devMode: false, results };
   }
   if (process.env.NODE_ENV !== "production") {
     for (const item of items) {
       // eslint-disable-next-line no-console
       console.log(`\n[NOTIFICATION EMAIL — RESEND NOT CONFIGURED]\n  To: ${item.to}\n  Subject: [${item.orgName}] ${item.title}\n  Body: ${item.body}\n`);
     }
-    return { sent: 0, devMode: true };
+    // Dev-console fallback is NOT a real send — leave results as { ok: false }
+    // so the rows stay unstamped and roll into the next digest if Resend
+    // gets configured between now and then.
+    return { sent: 0, devMode: true, results };
   }
   logger.error({ count: items.length }, "Resend not configured in production — notification batch dropped");
-  return { sent: 0, devMode: false };
+  return { sent: 0, devMode: false, results };
 }
 
 /**

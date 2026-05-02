@@ -48,7 +48,11 @@ vi.mock("../logger.js", () => ({
 vi.mock("../mailer.js", () => ({
   // Both the immediate-error and digest paths now use the batched send.
   sendNotificationEmail: vi.fn(async () => ({ sent: true })),
-  sendNotificationEmailBatch: vi.fn(async (items: unknown[]) => ({ sent: items.length, devMode: false })),
+  sendNotificationEmailBatch: vi.fn(async (items: unknown[]) => ({
+    sent: items.length,
+    devMode: false,
+    results: (items as unknown[]).map(() => ({ ok: true })),
+  })),
 }));
 
 interface UserRow {
@@ -266,6 +270,7 @@ beforeEach(() => {
   sendBatchMock.mockImplementation(async (items: Array<unknown>) => ({
     sent: items.length,
     devMode: false,
+    results: items.map(() => ({ ok: true })),
   }));
   dbState.org = { id: "org-1", name: "Test Org" };
 });
@@ -713,5 +718,96 @@ describe("sendNotificationDigests() — daily warn rollup", () => {
     expect(newbieRow.emailSentAt).toBeFalsy();
     const activeRow = dbState.notifications.find((n) => n.recipientUserId === "u-active")!;
     expect(activeRow.emailSentAt).toBeTruthy();
+  });
+
+  it("only stamps email_sent_at for users whose Resend dispatch was confirmed (failed users stay unstamped)", async () => {
+    // Two active warn rows for two different recipients. We force the
+    // batched send to confirm only the first item — the second's row
+    // must NOT be stamped, so the next digest tick can retry it.
+    const u1 = user({ id: "u-1", email: "ok@example.com", role: "org_admin", organisationId: "org-1", lastLoginAt: new Date() });
+    const u2 = user({ id: "u-2", email: "fail@example.com", role: "org_admin", organisationId: "org-1", lastLoginAt: new Date() });
+    dbState.notifications.push(
+      {
+        id: "n-1",
+        organisationId: "org-1",
+        recipientUserId: "u-1",
+        category: "upload.energy_bill",
+        severity: "warn",
+        title: "warn 1",
+        body: "b1",
+        linkUrl: undefined,
+        sourceAuditId: "a-1",
+        sourceEventId: "e-1",
+        emailSentAt: null,
+        dismissedAt: null,
+        createdAt: new Date(),
+      },
+      {
+        id: "n-2",
+        organisationId: "org-1",
+        recipientUserId: "u-2",
+        category: "upload.energy_bill",
+        severity: "warn",
+        title: "warn 2",
+        body: "b2",
+        linkUrl: undefined,
+        sourceAuditId: "a-2",
+        sourceEventId: "e-2",
+        emailSentAt: null,
+        dismissedAt: null,
+        createdAt: new Date(),
+      },
+    );
+
+    const userMap = new Map([["u-1", u1], ["u-2", u2]]);
+    const dbModule = (await import("@workspace/db")) as unknown as {
+      db: {
+        select: ReturnType<typeof vi.fn>;
+        query: { usersTable: { findFirst: ReturnType<typeof vi.fn> } };
+      };
+    };
+    dbModule.db.select.mockImplementationOnce(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(async () =>
+          dbState.notifications
+            .filter((n) => n.severity === "warn" && !n.emailSentAt && !n.dismissedAt)
+            .map((n) => ({
+              id: n.id,
+              recipientUserId: n.recipientUserId,
+              organisationId: n.organisationId,
+              category: n.category,
+              title: n.title,
+              body: n.body,
+              linkUrl: n.linkUrl,
+              createdAt: n.createdAt,
+            })),
+        ),
+      })),
+    }));
+    dbModule.db.query.usersTable.findFirst.mockImplementation(async (args?: { where?: unknown }) => {
+      const w = JSON.stringify(args?.where ?? {});
+      for (const [id, u] of userMap) if (w.includes(id)) return u;
+      return null;
+    });
+
+    sendBatchMock.mockImplementationOnce(async (items: Array<{ to: string }>) => ({
+      sent: 1,
+      devMode: false,
+      // Mark only the first item as confirmed; the second was a "no_id_returned"
+      // partial failure (or provider drop) and must stay unstamped.
+      results: items.map((item) => ({ ok: item.to === "ok@example.com", error: item.to === "ok@example.com" ? undefined : "no_id_returned" })),
+    }));
+
+    const out = await sendNotificationDigests();
+    expect(out.users).toBe(2);
+    expect(out.rows).toBe(2);
+
+    const okRow = dbState.notifications.find((n) => n.id === "n-1")!;
+    const failRow = dbState.notifications.find((n) => n.id === "n-2")!;
+    expect(okRow.emailSentAt).toBeTruthy();
+    // Critical regression guard: the failed user's row stays unstamped so
+    // the next digest tick can pick it up. Stamping all rows after a
+    // best-effort send would silently drop alerts.
+    expect(failRow.emailSentAt).toBeFalsy();
   });
 });

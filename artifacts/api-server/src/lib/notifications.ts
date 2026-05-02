@@ -219,16 +219,25 @@ export async function notify(input: NotifyInput): Promise<NotifyResult> {
         try {
           const result = await sendNotificationEmailBatch(items);
           emailsSent = result.sent;
-          if (emailsSent > 0) {
+          // Only stamp rows whose corresponding Resend dispatch was confirmed.
+          // Anything that failed (provider error, dev-console fallback, missing
+          // config) stays unstamped so the daily digest sweep can pick it up.
+          const stampIds = emailable
+            .map((p, i) => ({ id: p.row.id, ok: result.results[i]?.ok === true }))
+            .filter((x) => x.ok)
+            .map((x) => x.id);
+          if (stampIds.length > 0) {
             await db
               .update(notificationsTable)
               .set({ emailSentAt: new Date() })
-              .where(
-                inArray(
-                  notificationsTable.id,
-                  emailable.map((p) => p.row.id),
-                ),
-              );
+              .where(inArray(notificationsTable.id, stampIds));
+          }
+          const failed = emailable.length - stampIds.length;
+          if (failed > 0) {
+            logger.warn(
+              { failed, dedupeKey: input.dedupeKey },
+              "Notification email batch had unconfirmed sends — rows left unstamped for retry",
+            );
           }
         } catch (err) {
           logger.warn(
@@ -300,13 +309,13 @@ export async function sendNotificationDigests(
   }
 
   // Build one batch payload across all recipients, then send in a single
-  // Resend call (chunked at 100 by the mailer). Bell rows are stamped as
-  // emailed only for users we actually emailed; users who haven't completed
-  // first sign-in are skipped on the email channel and remain unstamped so
-  // they roll into tomorrow's digest (giving them a chance to sign in and
-  // see them in the bell first).
+  // Resend call (chunked at 100 by the mailer). For each batch entry we
+  // remember which `notifications` row ids belong to that user so that —
+  // after the batch returns its per-item ok/fail array — we stamp ONLY the
+  // rows whose user's email was actually dispatched. Failed users stay
+  // unstamped and get picked up on the next digest tick (idempotent).
   const items: NotificationEmailItem[] = [];
-  const stampIds: string[] = [];
+  const stampGroups: string[][] = [];
   let userCount = 0;
   let rowCount = 0;
 
@@ -328,7 +337,7 @@ export async function sendNotificationDigests(
       title: `Daily ESG data quality digest (${rows.length} item${rows.length === 1 ? "" : "s"})`,
       body: summary,
     });
-    stampIds.push(...rows.map((r) => r.id));
+    stampGroups.push(rows.map((r) => r.id));
     userCount++;
     rowCount += rows.length;
   }
@@ -339,12 +348,29 @@ export async function sendNotificationDigests(
   }
 
   try {
-    await sendNotificationEmailBatch(items);
-    const now = new Date();
-    await db
-      .update(notificationsTable)
-      .set({ emailSentAt: now })
-      .where(inArray(notificationsTable.id, stampIds));
+    const result = await sendNotificationEmailBatch(items);
+    const confirmedIds: string[] = [];
+    let failedUsers = 0;
+    for (let i = 0; i < items.length; i++) {
+      if (result.results[i]?.ok) {
+        confirmedIds.push(...stampGroups[i]);
+      } else {
+        failedUsers++;
+      }
+    }
+    if (confirmedIds.length > 0) {
+      const now = new Date();
+      await db
+        .update(notificationsTable)
+        .set({ emailSentAt: now })
+        .where(inArray(notificationsTable.id, confirmedIds));
+    }
+    if (failedUsers > 0) {
+      logger.warn(
+        { failedUsers, totalUsers: items.length },
+        "Daily digest had unconfirmed sends — those users' rows remain unstamped for next digest",
+      );
+    }
   } catch (err) {
     logger.warn({ err }, "Daily notification digest batch failed");
   }
