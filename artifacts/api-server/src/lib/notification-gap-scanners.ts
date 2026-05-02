@@ -23,6 +23,23 @@ export interface GapDescriptor {
 const STALE_TELEMATICS_DAYS = 7;
 const OVERDUE_REPORT_GRACE_DAYS = 14;
 const TRAILING_MONTHS = 12;
+/**
+ * Maximum number of completed quarters to walk backwards in `scanOverdueReports`
+ * before bailing out. Two purposes:
+ *   - Stops unbounded iteration on orgs that have never produced a board pack
+ *     (would otherwise emit a notification per quarter back to the start of
+ *     time on first scan — a noise flood).
+ *   - Bounds the per-run cost (one DB roundtrip per quarter examined).
+ * The scanner ALSO stops early as soon as it hits a quarter covered by a
+ * ready report (indicating the org had been keeping up before they fell
+ * behind), so the cap only applies to orgs with sustained non-reporting.
+ * Overridable via env var for ops/recovery scenarios.
+ */
+const OVERDUE_REPORT_MAX_LOOKBACK_QUARTERS = (() => {
+  const raw = Number(process.env.GAP_DETECTOR_OVERDUE_LOOKBACK_QUARTERS);
+  if (Number.isFinite(raw) && raw >= 1 && raw <= 40) return Math.floor(raw);
+  return 8; // ~2 years — covers the vast majority of compliance recovery windows.
+})();
 
 function appBase(): string {
   if (process.env.APP_BASE_URL) return process.env.APP_BASE_URL.replace(/\/$/, "");
@@ -160,16 +177,26 @@ export async function scanStaleTelematics(orgId: string, now: Date): Promise<Gap
 }
 
 /**
- * For each completed quarter older than (now - 14 days) with no `reports` row,
- * emit one notification. Looks back up to 4 completed quarters.
+ * For each completed quarter older than (now - 14 days) with no ready
+ * `reports` row, emit one notification. Walks backwards from the latest
+ * completed quarter and stops on either of two boundaries:
+ *   (a) the FIRST quarter that IS covered by a ready report — indicates the
+ *       org was keeping up until they fell behind, so older quarters are
+ *       irrelevant noise (no need to back-flag historical compliant ones).
+ *   (b) `OVERDUE_REPORT_MAX_LOOKBACK_QUARTERS` quarters back — safety cap for
+ *       orgs that have never reported at all (default 8 ≈ 2 years).
  */
 export async function scanOverdueReports(orgId: string, now: Date): Promise<GapDescriptor[]> {
   const out: GapDescriptor[] = [];
   let cur = previousQuarter(quarterOf(now).year, quarterOf(now).q);
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < OVERDUE_REPORT_MAX_LOOKBACK_QUARTERS; i++) {
     const qEnd = quarterEnd(cur.year, cur.q);
     const graceDeadline = new Date(qEnd.getTime() + OVERDUE_REPORT_GRACE_DAYS * 86400_000);
     if (now < graceDeadline) {
+      // Quarter is too recent for the grace window to have elapsed; skip
+      // this quarter but keep walking older ones (don't break — the lookback
+      // window is defined relative to "completed overdue", not "first
+      // missing").
       cur = previousQuarter(cur.year, cur.q);
       continue;
     }
@@ -198,8 +225,11 @@ export async function scanOverdueReports(orgId: string, now: Date): Promise<GapD
         linkUrl: `${appBase()}/reports`,
         context: { year: cur.year, quarter: cur.q },
       });
+      cur = previousQuarter(cur.year, cur.q);
+      continue;
     }
-    cur = previousQuarter(cur.year, cur.q);
+    // Boundary (a): hit a covered quarter — stop walking older ones.
+    break;
   }
   return out;
 }

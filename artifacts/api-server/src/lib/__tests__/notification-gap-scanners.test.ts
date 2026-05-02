@@ -74,6 +74,8 @@ vi.mock("@workspace/db", () => {
         // location into a single inspection string.
         const flatten = (x: unknown): string => {
           if (typeof x === "string") return x;
+          if (typeof x === "number" || typeof x === "boolean") return String(x);
+          if (x instanceof Date) return x.toISOString();
           if (Array.isArray(x)) return x.map(flatten).join(" ");
           if (x && typeof x === "object") return Object.values(x).map(flatten).join(" ");
           return "";
@@ -367,6 +369,35 @@ describe("scanOverdueReports", () => {
     // Q1 must no longer appear, but earlier overdue quarters (Q4 2025, etc.)
     // are still uncovered and should still surface.
     expect(gaps2.find((g) => g.baseKey === "overdue_report:org-1:2026-Q1")).toBeUndefined();
+  });
+
+  it("walks beyond 4 quarters when an org has not reported in over a year (no fixed 4-quarter cap)", async () => {
+    // 2026-05-15 → previous completed quarters going back: Q1 2026, Q4 2025,
+    // Q3 2025, Q2 2025, Q1 2025, Q4 2024, ... With no covering report at all,
+    // the scanner must surface MORE THAN 4 missing quarters before stopping.
+    const now = new Date(Date.UTC(2026, 4, 15));
+    const gaps = await scanOverdueReports("org-deep", now);
+    expect(gaps.length).toBeGreaterThan(4);
+    // Verify a 6+ quarter old gap is included to prove the loop genuinely
+    // extends past the old hard-coded 4-quarter limit.
+    expect(gaps.find((g) => g.baseKey === "overdue_report:org-deep:2024-Q4")).toBeDefined();
+  });
+
+  it("STOPS walking older quarters as soon as one is covered by a ready report", async () => {
+    const now = new Date(Date.UTC(2026, 4, 15));
+    // Q4 2025 is covered. Q1 2026 is missing. The scanner should emit Q1 2026
+    // and then stop — older quarters (Q3 2025, Q2 2025, ...) must NOT appear
+    // even though they have no covering report.
+    dbState.reports.push({
+      organisationId: "org-stops",
+      periodStart: new Date(Date.UTC(2025, 9, 1)),
+      periodEnd: new Date(Date.UTC(2025, 11, 31)),
+      status: "ready",
+    });
+    const gaps = await scanOverdueReports("org-stops", now);
+    expect(gaps.find((g) => g.baseKey === "overdue_report:org-stops:2026-Q1")).toBeDefined();
+    expect(gaps.find((g) => g.baseKey === "overdue_report:org-stops:2025-Q3")).toBeUndefined();
+    expect(gaps.find((g) => g.baseKey === "overdue_report:org-stops:2025-Q2")).toBeUndefined();
   });
 
   it("does NOT count status='generating' or status='failed' reports as covering a quarter", async () => {
