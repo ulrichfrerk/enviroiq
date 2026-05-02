@@ -18,7 +18,7 @@ vi.mock("../notifications.js", () => ({
 interface ReadingRow { organisationId: string; utilityType: string; provider: string | null; periodStart: Date }
 interface VehicleRow { id: string; organisationId: string; isActive: boolean; gpsProvider: string | null; name: string; registration: string | null }
 interface FleetEventRow { vehicleId: string; recordedAt: Date }
-interface ReportRow { organisationId: string; periodStart: Date; periodEnd: Date }
+interface ReportRow { organisationId: string; periodStart: Date; periodEnd: Date; status: string }
 interface OrgRow { id: string; isActive: boolean }
 interface EventRow { id: string; dedupeKey: string }
 interface NotificationRow { sourceEventId: string; dismissedAt: Date | null }
@@ -88,19 +88,23 @@ vi.mock("@workspace/db", () => {
           const orgId = orgIdMatch?.[1];
           if (!orgId) return { rows: [] };
           const orgReadings = dbState.readings.filter((r) => r.organisationId === orgId);
+          // Mirror the scanner's window: horizon = first day of (now - 12
+          // months), cutoff = first day of current month. An account is
+          // "active in the trailing window" only if it has at least one
+          // reading with horizon <= period_start < cutoff. Readings in the
+          // current month don't yet count as a backlog signal.
+          const winEnd = scannerWindowEnd ?? new Date();
+          const horizon = new Date(Date.UTC(winEnd.getUTCFullYear(), winEnd.getUTCMonth() - 12, 1));
+          const cutoff = new Date(Date.UTC(winEnd.getUTCFullYear(), winEnd.getUTCMonth(), 1));
           const accounts = new Map<string, { utility_type: string; provider: string }>();
           for (const r of orgReadings) {
+            if (r.periodStart < horizon || r.periodStart >= cutoff) continue;
             const provider = r.provider ?? "";
             accounts.set(`${r.utilityType}|${provider}`, { utility_type: r.utilityType, provider });
           }
-          // Build expected month set covering the trailing 12 calendar months
-          // from frozenScannerNow (set by tests via vi.setSystemTime() or via
-          // the now param surfacing inside generate_series). Tests set the
-          // expected window via `scannerWindowEnd` shared state below.
-          const winEnd = scannerWindowEnd ?? new Date();
+          // Build expected month set covering the trailing 12 calendar months.
           const expectedMonths: string[] = [];
-          const cur = new Date(Date.UTC(winEnd.getUTCFullYear(), winEnd.getUTCMonth() - 12, 1));
-          const cutoff = new Date(Date.UTC(winEnd.getUTCFullYear(), winEnd.getUTCMonth(), 1));
+          const cur = new Date(horizon);
           while (cur < cutoff) {
             expectedMonths.push(`${cur.getUTCFullYear()}-${String(cur.getUTCMonth() + 1).padStart(2, "0")}`);
             cur.setUTCMonth(cur.getUTCMonth() + 1);
@@ -136,22 +140,37 @@ vi.mock("@workspace/db", () => {
           return { rows: out };
         }
         if (text.includes("FROM reports")) {
-          // Scanner asks "is there ANY report covering this quarter?" Return
-          // the matching reports for the org if their period range overlaps.
-          // Both bound dates are passed as parameters and travel in a separate
-          // params slot we don't have visibility into — so we return *all*
-          // org reports and let the caller decide. Since the scanner only
-          // checks `length === 0`, we return a row whenever any report
-          // exists that overlaps the window for the org currently being
-          // scanned. We approximate by returning every report row; if a
-          // report exists for any quarter in our seed it'll suppress.
-          // Tests use distinct org ids per scenario so this is safe.
+          // Scanner asks "is there ANY report with status='ready' covering
+          // this specific quarter?" The flattened SQL contains ISO date
+          // strings for qEnd (period_start <= qEnd) and qStart
+          // (period_end >= qStart) — extract them so the mock can perform a
+          // real quarter-overlap check rather than returning rows for any
+          // report that exists.
           const orgIdMatch = text.match(/(org-[A-Za-z0-9_-]+)/);
           const orgId = orgIdMatch?.[1];
+          // The two date params land in the flattened text as ISO strings
+          // (with quotes from JSON.stringify of parameter Date objects).
+          const isoMatches = Array.from(text.matchAll(/(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}:\d{2}/g));
+          const dates = isoMatches.map((m) => new Date(`${m[0]}Z`));
           const reports = orgId
             ? dbState.reports.filter((r) => r.organisationId === orgId)
             : dbState.reports;
-          return { rows: reports.map((_, i) => ({ id: `r-${i}` })) };
+          // Status filter must match the scanner's requirement: only
+          // status='ready' counts as quarterly coverage.
+          const ready = reports.filter((r) => r.status === "ready");
+          if (dates.length >= 2) {
+            // dates are emitted in qEnd, qStart order matching the scanner SQL
+            // (period_start <= qEnd, period_end >= qStart). Sort ascending so
+            // we know which is which.
+            const sortedDates = [...dates].sort((a, b) => a.getTime() - b.getTime());
+            const qStart = sortedDates[0];
+            const qEnd = sortedDates[sortedDates.length - 1];
+            const overlapping = ready.filter(
+              (r) => r.periodStart <= qEnd && r.periodEnd >= qStart,
+            );
+            return { rows: overlapping.map((_, i) => ({ id: `r-${i}` })) };
+          }
+          return { rows: ready.map((_, i) => ({ id: `r-${i}` })) };
         }
         return { rows: [] };
       }),
@@ -274,6 +293,26 @@ describe("scanMissingBills", () => {
     const gaps2 = await scanMissingBills("org-1", now);
     expect(gaps2.map((g) => g.baseKey)).toEqual(["missing_bill:org-1:gas:Genesis:2026-03"]);
   });
+
+  it("does NOT flag a brand-new account whose first reading is in the current month (no false 12-month backlog)", async () => {
+    // Window is 2025-05..2026-04 inclusive (now = 2026-05-15).
+    // A new account first seen in 2026-05 (the current month) is NOT yet
+    // 'active' for the trailing-12 window — the prior code regression was
+    // that such an account synthesized 12 bogus missing_bill alerts.
+    const now = new Date(Date.UTC(2026, 4, 15));
+    scannerWindowEnd = now;
+    dbState.readings.push({
+      organisationId: "org-1",
+      utilityType: "electricity",
+      provider: "Mercury",
+      periodStart: new Date(Date.UTC(2026, 4, 3)), // 2026-05-03 — current month
+    });
+    const gaps = await scanMissingBills("org-1", now);
+    // The Mercury account must produce ZERO gaps (it isn't an "active in
+    // trailing window" account). A separate (gas, Contact) account, fully
+    // covered, also stays silent.
+    expect(gaps).toEqual([]);
+  });
 });
 
 describe("scanStaleTelematics", () => {
@@ -307,27 +346,49 @@ describe("scanStaleTelematics", () => {
 });
 
 describe("scanOverdueReports", () => {
-  it("flags overdue completed quarters, then stops once a covering report exists", async () => {
+  it("flags overdue completed quarters, then stops the specific quarter once a ready report covers it", async () => {
     // 2026-05-15 → previous completed quarter is Q1 2026 (Jan-Mar). Grace
     // window of +14 days ends 2026-04-14; we're past that, so Q1 is overdue.
-    // Q4 2025 also overdue. Q3 2025 also.
+    // Q4 2025 and Q3 2025 are also overdue.
     const now = new Date(Date.UTC(2026, 4, 15));
     const gaps = await scanOverdueReports("org-1", now);
     expect(gaps.length).toBeGreaterThanOrEqual(1);
     const q1Gap = gaps.find((g) => g.baseKey === "overdue_report:org-1:2026-Q1");
     expect(q1Gap).toBeDefined();
     expect(q1Gap?.title).toContain("Q1 2026");
-    // Now publish a report covering Q1 2026.
+    // Now publish a READY report covering Q1 2026.
     dbState.reports.push({
       organisationId: "org-1",
       periodStart: new Date(Date.UTC(2026, 0, 1)),
       periodEnd: new Date(Date.UTC(2026, 2, 31)),
+      status: "ready",
     });
     const gaps2 = await scanOverdueReports("org-1", now);
-    // After the report is filed, no new overdue notifications should be
-    // emitted for any quarter (the test mock returns rows for every report
-    // once any exist for the org — fine for confirming "filling fixes it").
-    expect(gaps2.length).toBe(0);
+    // Q1 must no longer appear, but earlier overdue quarters (Q4 2025, etc.)
+    // are still uncovered and should still surface.
+    expect(gaps2.find((g) => g.baseKey === "overdue_report:org-1:2026-Q1")).toBeUndefined();
+  });
+
+  it("does NOT count status='generating' or status='failed' reports as covering a quarter", async () => {
+    const now = new Date(Date.UTC(2026, 4, 15));
+    // A 'generating' report covering Q1 2026 — board pack hasn't actually
+    // been produced, so the overdue notification must still fire.
+    dbState.reports.push({
+      organisationId: "org-2",
+      periodStart: new Date(Date.UTC(2026, 0, 1)),
+      periodEnd: new Date(Date.UTC(2026, 2, 31)),
+      status: "generating",
+    });
+    // A 'failed' report covering Q4 2025 — same reasoning.
+    dbState.reports.push({
+      organisationId: "org-2",
+      periodStart: new Date(Date.UTC(2025, 9, 1)),
+      periodEnd: new Date(Date.UTC(2025, 11, 31)),
+      status: "failed",
+    });
+    const gaps = await scanOverdueReports("org-2", now);
+    expect(gaps.find((g) => g.baseKey === "overdue_report:org-2:2026-Q1")).toBeDefined();
+    expect(gaps.find((g) => g.baseKey === "overdue_report:org-2:2025-Q4")).toBeDefined();
   });
 });
 

@@ -75,6 +75,7 @@ export async function scanMissingBills(orgId: string, now: Date): Promise<GapDes
       FROM energy_readings
       WHERE organisation_id = ${orgId}
         AND period_start >= ${horizon}
+        AND period_start < ${cutoff}
     ),
     months AS (
       SELECT generate_series(${horizon}::timestamp, ${cutoff}::timestamp - INTERVAL '1 month', INTERVAL '1 month') AS month_start
@@ -173,9 +174,14 @@ export async function scanOverdueReports(orgId: string, now: Date): Promise<GapD
       continue;
     }
     const qStart = new Date(Date.UTC(cur.year, (cur.q - 1) * 3, 1));
+    // Only `status = 'ready'` reports satisfy quarterly coverage. Reports in
+    // 'generating' or 'failed' state never produced a deliverable board pack,
+    // so they must NOT suppress the overdue notification (would be a silent
+    // miss that's exactly the failure mode this scanner exists to surface).
     const existing = await db.execute(sql`
       SELECT id FROM reports
       WHERE organisation_id = ${orgId}
+        AND status = 'ready'
         AND period_start <= ${qEnd}
         AND period_end >= ${qStart}
       LIMIT 1
