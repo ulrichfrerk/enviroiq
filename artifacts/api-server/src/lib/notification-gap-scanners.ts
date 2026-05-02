@@ -10,6 +10,23 @@ import {
 } from "@workspace/db";
 import { logger } from "./logger.js";
 
+/**
+ * Two-stage dedupe contract.
+ *
+ * Scanners output `baseKey` (NOT the final `dedupeKey` used by `notify()`).
+ * The `runGapDetectorOnce` orchestrator passes each `baseKey` through
+ * `resolveDedupeKey()` which resolves the actual key written to the
+ * notification event:
+ *   - First fire ever         → uses `baseKey` as-is.
+ *   - Same gap still active   → returns null (suppress, dedupe will collapse).
+ *   - Re-fire after dismissal → bumps to `${baseKey}:v2`, then `:v3`, etc.
+ *
+ * This split exists because gap-detector notifications need a "user
+ * dismissed it but the underlying gap reappeared" lifecycle that pure
+ * UNIQUE-key dedupe cannot express. Keeping the two stages explicit in the
+ * type system means a future caller cannot accidentally pass a `baseKey`
+ * directly into `notify()` and bypass the version bump.
+ */
 export interface GapDescriptor {
   orgId: string;
   category: "missing_bill" | "stale_telematics" | "overdue_report";
@@ -423,21 +440,30 @@ function localPartsForTz(tz: string, when: Date): { hour: number; ymd: string } 
 }
 
 /**
- * Boots the gap detector. Ticks every hour and fires the daily run when the
- * configured timezone reports the configured local hour. Defaults to 06:00
- * Pacific/Auckland. The per-day guard (`lastDailyRunYmd`) ensures exactly one
- * run per local day even if the tick window catches multiple in-hour ticks.
+ * Boots the gap detector. Ticks every `intervalMs` (default 1 hour) and
+ * fires the daily run when the configured timezone reports the configured
+ * local hour. Defaults to 06:00 Pacific/Auckland. The per-day guard
+ * (`lastDailyRunYmd`) ensures exactly one run per local day even if the
+ * tick window catches multiple in-hour ticks.
  *
  * Configurable via env: GAP_DETECTOR_HOUR (0-23, default 6),
  * GAP_DETECTOR_TZ (IANA tz, default Pacific/Auckland).
+ *
+ * @param opts.intervalMs Override the tick interval (default 1 hour =
+ *   3,600,000 ms). Primarily exposed for deterministic test harnesses
+ *   that need to pump ticks faster than real time without faking timers.
+ *   Production should not override this.
  */
-export function startGapDetector(): void {
+export function startGapDetector(opts?: { intervalMs?: number }): void {
   if (gapDetectorHandle) return;
   const rawHour = Number(process.env.GAP_DETECTOR_HOUR);
   const hour = Number.isFinite(rawHour) && rawHour >= 0 && rawHour <= 23
     ? Math.floor(rawHour)
     : 6;
   const tz = process.env.GAP_DETECTOR_TZ || "Pacific/Auckland";
+  const intervalMs = opts?.intervalMs && opts.intervalMs > 0
+    ? opts.intervalMs
+    : 60 * 60 * 1000;
   const tick = async () => {
     try {
       const { hour: localHour, ymd } = localPartsForTz(tz, new Date());
@@ -462,8 +488,8 @@ export function startGapDetector(): void {
   // Run an initial tick at boot in case the server starts up inside the
   // configured hour window. The lastDailyRunYmd guard makes this idempotent.
   void tick();
-  gapDetectorHandle = setInterval(() => { void tick(); }, 60 * 60 * 1000);
-  logger.info({ hour, tz }, "Notification gap detector started (per-day local-time trigger)");
+  gapDetectorHandle = setInterval(() => { void tick(); }, intervalMs);
+  logger.info({ hour, tz, intervalMs }, "Notification gap detector started (per-day local-time trigger)");
 }
 
 export function stopGapDetector(): void {
