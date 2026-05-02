@@ -19,7 +19,7 @@ interface ReadingRow { organisationId: string; utilityType: string; provider: st
 interface VehicleRow { id: string; organisationId: string; isActive: boolean; gpsProvider: string | null; name: string; registration: string | null }
 interface FleetEventRow { vehicleId: string; recordedAt: Date }
 interface ReportRow { organisationId: string; periodStart: Date; periodEnd: Date; status: string }
-interface OrgRow { id: string; isActive: boolean }
+interface OrgRow { id: string; isActive: boolean; createdAt?: Date }
 interface EventRow { id: string; dedupeKey: string }
 interface NotificationRow { sourceEventId: string; dismissedAt: Date | null }
 
@@ -140,6 +140,19 @@ vi.mock("@workspace/db", () => {
             }
           }
           return { rows: out };
+        }
+        if (text.includes("FROM organisations") && text.includes("created_at")) {
+          // scanOverdueReports' upfront org lookup. Find the orgId in the
+          // flattened SQL and return its created_at — defaulting to a very
+          // old date (year 2000) when the test didn't set one explicitly,
+          // so legacy tests that don't care about the lower bound continue
+          // to walk back as expected.
+          const orgIdMatch = text.match(/(org-[A-Za-z0-9_-]+)/);
+          const orgId = orgIdMatch?.[1];
+          if (!orgId) return { rows: [] };
+          const org = dbState.orgs.find((o) => o.id === orgId);
+          const createdAt = org?.createdAt ?? new Date(Date.UTC(2000, 0, 1));
+          return { rows: [{ created_at: createdAt }] };
         }
         if (text.includes("FROM reports")) {
           // Scanner asks "is there ANY report with status='ready' covering
@@ -371,16 +384,47 @@ describe("scanOverdueReports", () => {
     expect(gaps2.find((g) => g.baseKey === "overdue_report:org-1:2026-Q1")).toBeUndefined();
   });
 
-  it("walks beyond 4 quarters when an org has not reported in over a year (no fixed 4-quarter cap)", async () => {
-    // 2026-05-15 → previous completed quarters going back: Q1 2026, Q4 2025,
-    // Q3 2025, Q2 2025, Q1 2025, Q4 2024, ... With no covering report at all,
-    // the scanner must surface MORE THAN 4 missing quarters before stopping.
+  it("walks ALL missing quarters back to the org's created_at — no fixed quarter cap", async () => {
+    // 2026-05-15 → walking backwards. Org was created in 2020, so we expect
+    // every completed overdue quarter from 2020-Q1 through 2026-Q1 to fire.
+    // That's >20 quarters, comfortably proving the scanner has no hidden
+    // 4- or 8-quarter cap.
     const now = new Date(Date.UTC(2026, 4, 15));
+    dbState.orgs.push({
+      id: "org-deep",
+      isActive: true,
+      createdAt: new Date(Date.UTC(2020, 0, 1)),
+    });
     const gaps = await scanOverdueReports("org-deep", now);
-    expect(gaps.length).toBeGreaterThan(4);
-    // Verify a 6+ quarter old gap is included to prove the loop genuinely
-    // extends past the old hard-coded 4-quarter limit.
-    expect(gaps.find((g) => g.baseKey === "overdue_report:org-deep:2024-Q4")).toBeDefined();
+    // 6 years × 4 quarters = 24, minus ~1 for a recent quarter still inside
+    // the 14-day grace window. Allow a wide bound here — the point is to
+    // prove we go MUCH further than 8.
+    expect(gaps.length).toBeGreaterThan(20);
+    // Spot-check oldest, mid, and recent quarters all surfaced.
+    expect(gaps.find((g) => g.baseKey === "overdue_report:org-deep:2020-Q1")).toBeDefined();
+    expect(gaps.find((g) => g.baseKey === "overdue_report:org-deep:2023-Q2")).toBeDefined();
+    expect(gaps.find((g) => g.baseKey === "overdue_report:org-deep:2026-Q1")).toBeDefined();
+  });
+
+  it("STOPS at the org's created_at — never flags quarters before the org existed", async () => {
+    // Org was created mid-2025-Q2 (2025-05-10). Quarters that ENDED before
+    // they existed (2025-Q1, 2024-Q4, ...) must never appear as gaps —
+    // the org cannot be "overdue" for a board pack period that pre-dates
+    // its very existence in the system.
+    const now = new Date(Date.UTC(2026, 4, 15));
+    dbState.orgs.push({
+      id: "org-young",
+      isActive: true,
+      createdAt: new Date(Date.UTC(2025, 4, 10)),
+    });
+    const gaps = await scanOverdueReports("org-young", now);
+    // Should include quarters from 2025-Q3 onward (the first quarter that
+    // STARTS on/after the org's creation date). 2025-Q2 starts 2025-04-01,
+    // BEFORE the org's 2025-05-10 createdAt → boundary (b) excludes it.
+    expect(gaps.find((g) => g.baseKey === "overdue_report:org-young:2025-Q3")).toBeDefined();
+    expect(gaps.find((g) => g.baseKey === "overdue_report:org-young:2025-Q2")).toBeUndefined();
+    expect(gaps.find((g) => g.baseKey === "overdue_report:org-young:2025-Q1")).toBeUndefined();
+    expect(gaps.find((g) => g.baseKey === "overdue_report:org-young:2024-Q4")).toBeUndefined();
   });
 
   it("STOPS walking older quarters as soon as one is covered by a ready report", async () => {
