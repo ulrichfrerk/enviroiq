@@ -1,7 +1,7 @@
 // Notification fan-out service. See replit.md → Notifications for contract.
 
 import { randomUUID } from "node:crypto";
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import {
   db,
   notificationEventsTable,
@@ -42,6 +42,8 @@ interface ResolvedRecipient {
   name: string | null;
   /** NULL = user has never signed in; email channel is suppressed. */
   lastLoginAt: Date | null;
+  /** Recipient's home org — used to file orphan-fallback bell rows so they surface in-app. */
+  organisationId: string | null;
 }
 
 
@@ -55,6 +57,7 @@ async function resolveRecipients(orgId: string): Promise<{
       email: usersTable.email,
       name: usersTable.name,
       lastLoginAt: usersTable.lastLoginAt,
+      organisationId: usersTable.organisationId,
     })
     .from(usersTable)
     .where(
@@ -67,14 +70,13 @@ async function resolveRecipients(orgId: string): Promise<{
 
   if (admins.length > 0) return { recipients: admins, orphanFallback: false };
 
-  // Fall back to platform super_admins (no orgId or any orgId), filtered to
-  // active. These rows are typically the EnviroIQ ops team.
   const platform = await db
     .select({
       id: usersTable.id,
       email: usersTable.email,
       name: usersTable.name,
       lastLoginAt: usersTable.lastLoginAt,
+      organisationId: usersTable.organisationId,
     })
     .from(usersTable)
     .where(and(eq(usersTable.role, "super_admin"), eq(usersTable.isActive, true)));
@@ -94,9 +96,12 @@ export async function notify(input: NotifyInput): Promise<NotifyResult> {
 
     const eventId = randomUUID();
     const now = new Date();
+    // For orphan fallback, file the bell row under the recipient's home org so
+    // it surfaces in their normal in-app context (the source org is preserved
+    // on the parent event row + in the category tag).
     const rows = recipients.map((r) => ({
       id: randomUUID(),
-      organisationId: input.organisationId,
+      organisationId: orphanFallback ? r.organisationId ?? input.organisationId : input.organisationId,
       recipientUserId: r.id,
       category: orphanFallback ? `${input.category} (orphaned_org_no_admins)` : input.category,
       severity: input.severity,
@@ -320,5 +325,3 @@ export async function sendNotificationDigests(
 }
 
 export type { Notification };
-
-void sql;

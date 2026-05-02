@@ -1,8 +1,4 @@
-// /notifications — full inbox view backed by GET /organisations/:orgId/notifications
-// with category + severity + read/unread filters and dismiss/read actions
-// per row. Drives the same dataset as the bell popover; deliberately reuses
-// no shared component because the inbox is a richer table whereas the bell
-// is a compact summary.
+// /notifications — full inbox with category + severity + read/unread filters.
 
 import { useState, useMemo, useEffect } from "react";
 import { Link } from "wouter";
@@ -75,8 +71,7 @@ export default function NotificationsPage() {
   const [page, setPage] = useState<number>(1);
   const PAGE_SIZE = 25;
 
-  // Reset to page 1 whenever a filter changes — otherwise a filter applied
-  // on page 3 can land on an empty page.
+  // Reset to page 1 on filter change.
   useEffect(() => {
     setPage(1);
   }, [severity, status, category]);
@@ -101,9 +96,7 @@ export default function NotificationsPage() {
 
   const totalPages = Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE));
 
-  // Build the category options dynamically from whatever the inbox has
-  // currently surfaced. Keeps the filter useful as new failure sources are
-  // wired in without us having to maintain a hardcoded list of categories.
+  // Categories derived from the current page so new sources show up automatically.
   const categoryOptions = useMemo(() => {
     const set = new Set<string>();
     for (const n of data?.items ?? []) set.add(n.category);

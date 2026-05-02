@@ -282,10 +282,6 @@ router.post("/upload", requireAuth, requireOrgAdmin, upload.single("file"), asyn
     });
   } catch (err) {
     req.log.error({ err }, "Upload energy bill failed");
-    // Notify org admins — single bill upload crashed entirely. We persist
-    // a failure audit row first and dedupe the notification on its id, so
-    // every distinct failure event produces exactly one notification row
-    // and the audit log row is the source of truth the email links back to.
     const orgId = req.params.orgId as string;
     const filename = req.file?.originalname ?? "unknown.pdf";
     const failAuditId = await logAudit({

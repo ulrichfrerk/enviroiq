@@ -1,14 +1,4 @@
-// Notification bell — header icon + popover surfacing the most recent
-// in-app notifications fanned out by the foundation notification system.
-//
-// Behaviour:
-//   * Polls /unread-count every 60s while the user is signed in (cheap COUNT,
-//     not the full list) so the badge updates without a page reload.
-//   * Opening the popover lazily fetches the latest 10 active rows.
-//   * Marking an item read calls POST /:id/read; clicking the link first
-//     marks it read then navigates.
-//   * "Mark all read" calls POST /mark-all-read, which clears the badge.
-//   * Dismiss soft-deletes the row from the bell + page.
+// Header notification bell — polls unread-count, lazily loads latest 10 on open.
 
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";

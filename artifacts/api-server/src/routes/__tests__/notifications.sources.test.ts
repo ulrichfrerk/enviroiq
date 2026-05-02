@@ -50,6 +50,22 @@ vi.mock("../../lib/auth.js", () => ({
 vi.mock("../../lib/emissions.js", () => ({
   calcFleetCo2e: () => 0,
   vehicleClassEmissionFactor: () => 0,
+  calcEnergyCo2e: () => 0,
+  resolveElectricityFactor: () => ({ factorKgCo2PerKwh: 0.1, method: "test", note: "" }),
+}));
+
+vi.mock("../../lib/em6.js", () => ({
+  getCurrentGridIntensity: vi.fn(async () => null),
+}));
+
+vi.mock("../../lib/billParser.js", () => ({
+  parseBillText: vi.fn(() => {
+    throw new Error("parser blew up");
+  }),
+}));
+
+vi.mock("../../lib/documentArchive.js", () => ({
+  archiveDocument: vi.fn(async () => undefined),
 }));
 
 // ─── In-memory DB stand-in ──────────────────────────────────────────────────
@@ -131,6 +147,7 @@ vi.mock("@workspace/db", () => {
     vehiclesTable: { id: "id", organisationId: "organisationId", gpsDeviceId: "gpsDeviceId", name: "name", registration: "registration" },
     fleetEventsTable: {},
     organisationsTable: { id: "id", apiKey: "apiKey" },
+    energyReadingsTable: {},
   };
 });
 
@@ -138,6 +155,7 @@ vi.mock("@workspace/db", () => {
 import * as notifications from "../../lib/notifications.js";
 import * as audit from "../../lib/audit.js";
 import fleetRouter, { webhookRouter } from "../fleet.js";
+import energyRouter from "../energy.js";
 
 const notifyMock = notifications.notify as unknown as ReturnType<typeof vi.fn>;
 const logAuditMock = audit.logAudit as unknown as ReturnType<typeof vi.fn>;
@@ -166,6 +184,7 @@ function makeApp() {
   });
   app.use("/webhooks/fleet", webhookRouter);
   app.use("/api/organisations/:orgId/fleet", fleetRouter);
+  app.use("/api/organisations/:orgId/energy", energyRouter);
   return app;
 }
 
@@ -182,7 +201,7 @@ describe("Fleet webhook → notify wiring", () => {
     const auditReturn = await logAuditMock.mock.results[0].value;
     const callArg = notifyMock.mock.calls[0][0];
     expect(callArg.organisationId).toBe("PLATFORM");
-    expect(callArg.severity).toBe("warn");
+    expect(callArg.severity).toBe("error");
     expect(callArg.category).toBe("webhook.fleet.invalid_api_key");
     expect(callArg.sourceAuditId).toBe(auditReturn);
     // Per-event dedupe (audit-id-anchored, not day-capped).
@@ -251,6 +270,31 @@ describe("Fleet /import-km → notify wiring", () => {
     expect(arg.sourceAuditId).toBe(auditId);
     expect(arg.dedupeKey).toBe(`import.fleet_csv.error:org-1:${auditId}`);
     // No calendar-day suffix that would coalesce distinct crashes.
+    expect(arg.dedupeKey).not.toMatch(/\d{4}-\d{2}-\d{2}$/);
+  });
+});
+
+describe("Energy /upload → notify wiring", () => {
+  it("crash path persists failure audit row first, then fires error notify with audit-id-anchored dedupe", async () => {
+    const app = makeApp();
+    // parseBillText is mocked at module top to throw — drives the catch path.
+    const fakePdf = Buffer.from("%PDF-1.4 fake");
+    const res = await request(app)
+      .post("/api/organisations/org-1/energy/upload")
+      .attach("file", fakePdf, "bill.pdf");
+
+    expect(res.status).toBe(500);
+    expect(logAuditMock).toHaveBeenCalledTimes(1);
+    expect(logAuditMock.mock.calls[0][0].outcome).toBe("failure");
+    expect(logAuditMock.mock.calls[0][0].action).toBe("energy_bill.upload");
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    const auditId = await logAuditMock.mock.results[0].value;
+    const arg = notifyMock.mock.calls[0][0];
+    expect(arg.organisationId).toBe("org-1");
+    expect(arg.category).toBe("upload.energy_bill");
+    expect(arg.severity).toBe("error");
+    expect(arg.sourceAuditId).toBe(auditId);
+    expect(arg.dedupeKey).toBe(`upload.energy_bill:${auditId}`);
     expect(arg.dedupeKey).not.toMatch(/\d{4}-\d{2}-\d{2}$/);
   });
 });

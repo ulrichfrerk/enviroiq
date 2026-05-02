@@ -373,7 +373,7 @@ webhookRouter.post("/navman", async (req, res) => {
       void notify({
         organisationId: "PLATFORM",
         category: "webhook.fleet.invalid_api_key",
-        severity: "warn",
+        severity: "error",
         title: "Telematics webhook rejected — bad credentials",
         body: `A Navman telematics webhook was rejected because the API key did not match any organisation. If a provider has just been onboarded, double-check the api key configured in the integration.`,
         linkUrl: "/fleet",
@@ -434,7 +434,7 @@ webhookRouter.post("/blackhawk", async (req, res) => {
       void notify({
         organisationId: "PLATFORM",
         category: "webhook.fleet.invalid_api_key",
-        severity: "warn",
+        severity: "error",
         title: "Telematics webhook rejected — bad credentials",
         body: `A Blackhawk telematics webhook was rejected because the token did not match any organisation. If a provider has just been onboarded, double-check the token configured in the integration.`,
         linkUrl: "/fleet",
@@ -496,7 +496,7 @@ webhookRouter.post("/generic", async (req, res) => {
       void notify({
         organisationId: "PLATFORM",
         category: "webhook.fleet.invalid_api_key",
-        severity: "warn",
+        severity: "error",
         title: "Telematics webhook rejected — bad credentials",
         body: `A telematics webhook (generic provider) was rejected because the API key did not match any organisation. If a provider has just been onboarded, double-check the api key configured in the integration.`,
         linkUrl: "/fleet",
