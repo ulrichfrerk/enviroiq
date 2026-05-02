@@ -6,6 +6,7 @@ import { sqlRow, sqlRows, numCol, intCol, strCol } from "../lib/sql-result.js";
 import { calcFleetCo2e, calcEnergyCo2e, resolveElectricityFactor } from "../lib/emissions.js";
 import { logAudit } from "../lib/audit.js";
 import { openai } from "@workspace/integrations-openai-ai-server";
+import { runGapDetectorOnce } from "../lib/notification-gap-scanners.js";
 
 const router = Router();
 
@@ -291,6 +292,25 @@ Rules:
   } catch (err) {
     req.log.error({ err }, "Onboarding analyse failed");
     res.status(500).json({ error: "Internal Server Error", message: "Failed to analyse business" });
+  }
+});
+
+// POST /admin/notifications/run-scanner — ad-hoc gap detector run.
+// `?dryRun=true` walks every active org but never persists or emails anything.
+router.post("/notifications/run-scanner", requireRole("super_admin"), async (req, res) => {
+  try {
+    const dryRun = req.query.dryRun === "true";
+    const summary = await runGapDetectorOnce({ dryRun });
+    await logAudit({
+      req,
+      action: dryRun ? "notification.gap_scanner.dry_run" : "notification.gap_scanner.run",
+      resourceType: "notification_scanner",
+      details: summary as unknown as Record<string, unknown>,
+    });
+    res.json({ dryRun, ...summary });
+  } catch (err) {
+    req.log.error({ err }, "Gap scanner run failed");
+    res.status(500).json({ error: "Internal Server Error", message: "Failed to run gap scanner" });
   }
 });
 

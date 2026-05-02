@@ -2,6 +2,7 @@ import app from "./app";
 import { logger } from "./lib/logger";
 import { startScheduler, stopScheduler } from "./lib/scheduler";
 import { startSupplierAuditScheduler } from "./lib/scheduler-supplier-audits";
+import { startGapDetector, stopGapDetector } from "./lib/notification-gap-scanners";
 import { ensureDefaultSupplierAuditTemplate } from "./lib/supplier-audit-default-template";
 import { ensureCrmApiKeyTables } from "./lib/crm-api-keys";
 import { db } from "@workspace/db";
@@ -353,11 +354,13 @@ ensureSessionTable()
       logger.info({ port }, "Server listening");
       startScheduler();
       startSupplierAuditScheduler();
+      startGapDetector();
     });
 
     process.on("SIGTERM", () => {
       logger.info("SIGTERM received, shutting down gracefully");
       stopScheduler();
+      stopGapDetector();
       server.close(() => {
         logger.info("Server closed");
         process.exit(0);
@@ -366,6 +369,7 @@ ensureSessionTable()
 
     process.on("SIGINT", () => {
       stopScheduler();
+      stopGapDetector();
       server.close(() => process.exit(0));
     });
   })
