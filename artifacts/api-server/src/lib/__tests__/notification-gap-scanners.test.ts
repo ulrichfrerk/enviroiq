@@ -141,51 +141,72 @@ vi.mock("@workspace/db", () => {
           }
           return { rows: out };
         }
-        if (text.includes("FROM organisations") && text.includes("created_at")) {
-          // scanOverdueReports' upfront org lookup. Find the orgId in the
-          // flattened SQL and return its created_at — defaulting to a very
-          // old date (year 2000) when the test didn't set one explicitly,
-          // so legacy tests that don't care about the lower bound continue
-          // to walk back as expected.
+        if (text.includes("FROM quarter_series qs") && text.includes("generate_series")) {
+          // The new set-based scanOverdueReports query. Reproduce the CTE
+          // semantics in JS:
+          //   - lower_q = max(org.created_at_quarter,
+          //                   latest_ready_report_period_end_quarter + 1Q)
+          //              (or just created_at_quarter if no ready reports)
+          //   - upper_q = quarter_start(now - 3 months)
+          //   - emit each quarter in [lower_q, upper_q] step 3 months that:
+          //       * is past the 14-day grace deadline AND
+          //       * is NOT covered by any status='ready' report
+          //   - one row per missing quarter, ordered DESC.
           const orgIdMatch = text.match(/(org-[A-Za-z0-9_-]+)/);
           const orgId = orgIdMatch?.[1];
           if (!orgId) return { rows: [] };
+          // The flattened SQL contains the `now` Date param emitted twice
+          // (once for upper_q, once for the grace WHERE clause). Pick any
+          // ISO timestamp from the flattened text as `now`.
+          const isoMatches = Array.from(text.matchAll(/(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}:\d{2}/g));
+          if (isoMatches.length === 0) return { rows: [] };
+          const now = new Date(`${isoMatches[0][0]}Z`);
+
           const org = dbState.orgs.find((o) => o.id === orgId);
           const createdAt = org?.createdAt ?? new Date(Date.UTC(2000, 0, 1));
-          return { rows: [{ created_at: createdAt }] };
-        }
-        if (text.includes("FROM reports")) {
-          // Scanner asks "is there ANY report with status='ready' covering
-          // this specific quarter?" The flattened SQL contains ISO date
-          // strings for qEnd (period_start <= qEnd) and qStart
-          // (period_end >= qStart) — extract them so the mock can perform a
-          // real quarter-overlap check rather than returning rows for any
-          // report that exists.
-          const orgIdMatch = text.match(/(org-[A-Za-z0-9_-]+)/);
-          const orgId = orgIdMatch?.[1];
-          // The two date params land in the flattened text as ISO strings
-          // (with quotes from JSON.stringify of parameter Date objects).
-          const isoMatches = Array.from(text.matchAll(/(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}:\d{2}/g));
-          const dates = isoMatches.map((m) => new Date(`${m[0]}Z`));
-          const reports = orgId
-            ? dbState.reports.filter((r) => r.organisationId === orgId)
-            : dbState.reports;
-          // Status filter must match the scanner's requirement: only
-          // status='ready' counts as quarterly coverage.
-          const ready = reports.filter((r) => r.status === "ready");
-          if (dates.length >= 2) {
-            // dates are emitted in qEnd, qStart order matching the scanner SQL
-            // (period_start <= qEnd, period_end >= qStart). Sort ascending so
-            // we know which is which.
-            const sortedDates = [...dates].sort((a, b) => a.getTime() - b.getTime());
-            const qStart = sortedDates[0];
-            const qEnd = sortedDates[sortedDates.length - 1];
-            const overlapping = ready.filter(
-              (r) => r.periodStart <= qEnd && r.periodEnd >= qStart,
-            );
-            return { rows: overlapping.map((_, i) => ({ id: `r-${i}` })) };
+          const truncQuarter = (d: Date): Date => {
+            const m = d.getUTCMonth();
+            const qStartMonth = m - (m % 3);
+            return new Date(Date.UTC(d.getUTCFullYear(), qStartMonth, 1));
+          };
+          const addQuarters = (d: Date, n: number): Date => {
+            return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 3 * n, 1));
+          };
+
+          const orgReports = dbState.reports.filter((r) => r.organisationId === orgId);
+          const readyReports = orgReports.filter((r) => r.status === "ready");
+          const createdQ = truncQuarter(createdAt);
+          const latestQ = readyReports.length > 0
+            ? truncQuarter(new Date(Math.max(...readyReports.map((r) => r.periodEnd.getTime()))))
+            : null;
+          const lowerQ = latestQ
+            ? new Date(Math.max(createdQ.getTime(), addQuarters(latestQ, 1).getTime()))
+            : createdQ;
+          const upperQ = truncQuarter(new Date(now.getTime() - 90 * 86400_000)); // approx now - 3 months → quarter
+
+          const out: Array<{ year: number; quarter: number }> = [];
+          let qs = new Date(lowerQ);
+          while (qs.getTime() <= upperQ.getTime()) {
+            const qEnd = addQuarters(qs, 1);
+            // Past 14-day grace window?
+            const graceDeadline = new Date(qEnd.getTime() + 14 * 86400_000);
+            if (graceDeadline.getTime() <= now.getTime()) {
+              // Anti-join: any ready report overlapping this quarter?
+              const covered = readyReports.some(
+                (r) => r.periodStart.getTime() <= qEnd.getTime() - 1
+                       && r.periodEnd.getTime() >= qs.getTime(),
+              );
+              if (!covered) {
+                const year = qs.getUTCFullYear();
+                const quarter = Math.floor(qs.getUTCMonth() / 3) + 1;
+                out.push({ year, quarter });
+              }
+            }
+            qs = addQuarters(qs, 1);
           }
-          return { rows: ready.map((_, i) => ({ id: `r-${i}` })) };
+          // Emulate ORDER BY q_start DESC.
+          out.reverse();
+          return { rows: out };
         }
         return { rows: [] };
       }),
@@ -406,11 +427,33 @@ describe("scanOverdueReports", () => {
     expect(gaps.find((g) => g.baseKey === "overdue_report:org-deep:2026-Q1")).toBeDefined();
   });
 
-  it("STOPS at the org's created_at — never flags quarters before the org existed", async () => {
-    // Org was created mid-2025-Q2 (2025-05-10). Quarters that ENDED before
-    // they existed (2025-Q1, 2024-Q4, ...) must never appear as gaps —
-    // the org cannot be "overdue" for a board pack period that pre-dates
-    // its very existence in the system.
+  it("issues exactly ONE database roundtrip regardless of backlog depth (set-based, no N+1)", async () => {
+    // Whether the org has missed 1 quarter or 25 quarters, the scanner must
+    // execute the same fixed number of SQL roundtrips. This locks in the
+    // set-based architectural requirement and prevents future regressions
+    // back into the per-quarter loop pattern.
+    const now = new Date(Date.UTC(2026, 4, 15));
+    dbState.orgs.push({
+      id: "org-deep-2",
+      isActive: true,
+      createdAt: new Date(Date.UTC(2020, 0, 1)),
+    });
+    // Reset the spy so prior tests don't pollute the count.
+    const dbModule = await import("@workspace/db");
+    const executeSpy = dbModule.db.execute as unknown as ReturnType<typeof vi.fn>;
+    executeSpy.mockClear();
+    const gaps = await scanOverdueReports("org-deep-2", now);
+    expect(gaps.length).toBeGreaterThan(20);
+    // The whole scanner must be ONE SQL execute(), not one per quarter.
+    expect(executeSpy.mock.calls.length).toBe(1);
+  });
+
+  it("STOPS at the org's created_at quarter — never flags quarters that ended before the org existed", async () => {
+    // Org was created mid-2025-Q2 (2025-05-10). The org IS liable for Q2
+    // 2025 because the quarter ended (2025-06-30) AFTER they existed —
+    // they had ~6 weeks plus the 14-day grace to produce a report. But
+    // they are NOT liable for Q1 2025 (ended 2025-03-31, before the org
+    // existed) or any earlier quarter.
     const now = new Date(Date.UTC(2026, 4, 15));
     dbState.orgs.push({
       id: "org-young",
@@ -418,13 +461,13 @@ describe("scanOverdueReports", () => {
       createdAt: new Date(Date.UTC(2025, 4, 10)),
     });
     const gaps = await scanOverdueReports("org-young", now);
-    // Should include quarters from 2025-Q3 onward (the first quarter that
-    // STARTS on/after the org's creation date). 2025-Q2 starts 2025-04-01,
-    // BEFORE the org's 2025-05-10 createdAt → boundary (b) excludes it.
+    // Q2 2025 onward: liable.
+    expect(gaps.find((g) => g.baseKey === "overdue_report:org-young:2025-Q2")).toBeDefined();
     expect(gaps.find((g) => g.baseKey === "overdue_report:org-young:2025-Q3")).toBeDefined();
-    expect(gaps.find((g) => g.baseKey === "overdue_report:org-young:2025-Q2")).toBeUndefined();
+    // Q1 2025 and earlier: ended before org existed — must NOT fire.
     expect(gaps.find((g) => g.baseKey === "overdue_report:org-young:2025-Q1")).toBeUndefined();
     expect(gaps.find((g) => g.baseKey === "overdue_report:org-young:2024-Q4")).toBeUndefined();
+    expect(gaps.find((g) => g.baseKey === "overdue_report:org-young:2024-Q1")).toBeUndefined();
   });
 
   it("STOPS walking older quarters as soon as one is covered by a ready report", async () => {

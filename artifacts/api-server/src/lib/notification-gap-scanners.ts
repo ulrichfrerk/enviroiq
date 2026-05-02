@@ -31,20 +31,13 @@ function appBase(): string {
   return "http://localhost:5173";
 }
 
-function quarterOf(d: Date): { year: number; q: 1 | 2 | 3 | 4 } {
-  const m = d.getUTCMonth();
-  const q = (Math.floor(m / 3) + 1) as 1 | 2 | 3 | 4;
-  return { year: d.getUTCFullYear(), q };
-}
-
+// quarterEnd is still used by the result-formatting step in
+// scanOverdueReports to compute the human-readable grace deadline that
+// appears in the notification body. The set-based SQL itself does all
+// quarter math in Postgres.
 function quarterEnd(year: number, q: 1 | 2 | 3 | 4): Date {
   const endMonth = q * 3; // 3,6,9,12
   return new Date(Date.UTC(year, endMonth, 0, 23, 59, 59)); // last day of month
-}
-
-function previousQuarter(year: number, q: 1 | 2 | 3 | 4): { year: number; q: 1 | 2 | 3 | 4 } {
-  if (q === 1) return { year: year - 1, q: 4 };
-  return { year, q: (q - 1) as 1 | 2 | 3 | 4 };
 }
 
 /**
@@ -160,88 +153,99 @@ export async function scanStaleTelematics(orgId: string, now: Date): Promise<Gap
 }
 
 /**
- * For each completed quarter older than (now - 14 days) with no ready
- * `reports` row, emit one notification. Walks backwards from the latest
- * completed quarter and stops on whichever boundary comes first:
+ * Set-based overdue-report scanner. ONE SQL roundtrip per org regardless of
+ * how far back the org has missed reports — explicitly avoids the per-
+ * quarter N+1 anti-pattern.
  *
- *   (a) the FIRST quarter that IS covered by a ready report — indicates the
- *       org was keeping up until they fell behind, so older quarters are
- *       irrelevant noise (no need to back-flag historical compliant ones).
+ * Boundaries (intrinsic to the data, no arbitrary fixed-quarter cap):
  *
- *   (b) the quarter whose start predates the organisation's `created_at` —
- *       the org cannot be overdue for a quarter that ended before they even
- *       existed in the system. This is the principled lower bound that
- *       both keeps iteration finite and avoids fabricating notifications
- *       for periods no human ever owed a report for.
+ *   (a) Upper bound: the previous completed quarter that has cleared its
+ *       14-day grace window.
  *
- * No artificial fixed-quarter cap is applied; both boundaries above are
- * intrinsic to the data so the scanner emits one notification per genuine
- * missing overdue quarter no matter how long an org has been falling
- * behind.
+ *   (b) Lower bound: GREATEST of
+ *         (i) the org's `created_at` quarter — the org cannot be overdue
+ *             for periods that ended before they existed in the system.
+ *         (ii) (latest ready-report `period_end` truncated to quarter) +
+ *              one quarter — once we hit a quarter the org HAS reported
+ *              on, older quarters are irrelevant ("they were keeping up
+ *              before they fell behind"). This was the original walking
+ *              loop's "stop at first covered quarter" boundary,
+ *              expressed as a SQL window.
+ *
+ * The query then anti-joins a `generate_series` of quarter starts against
+ * the `reports` table filtered to `status = 'ready'` (filter is critical:
+ * `'generating'` and `'failed'` reports never produced a deliverable
+ * board pack, so they must NOT suppress the overdue notification).
  */
 export async function scanOverdueReports(orgId: string, now: Date): Promise<GapDescriptor[]> {
-  const out: GapDescriptor[] = [];
-  // Look up the org's signup date as the principled lower bound. If the row
-  // is missing for any reason we fall back to "no lower bound" (epoch),
-  // letting the covered-quarter boundary be the only stop — failing closed
-  // toward "alert" is correct for a gap detector.
-  const orgRow = await db.execute(sql`
-    SELECT created_at FROM organisations WHERE id = ${orgId} LIMIT 1
-  `);
-  const orgRows = (orgRow.rows ?? orgRow) as Array<{ created_at: string | Date }>;
-  const orgCreatedAt = orgRows[0]?.created_at
-    ? new Date(orgRows[0].created_at)
-    : new Date(0);
-
-  let cur = previousQuarter(quarterOf(now).year, quarterOf(now).q);
-  // Hard upper bound on the loop as pure defence-in-depth against bad
-  // input (e.g. a corrupt `created_at` in the future). Two centuries of
-  // quarters is comfortably more than any real org backlog.
-  const HARD_LIMIT = 800;
-  for (let i = 0; i < HARD_LIMIT; i++) {
-    const qStart = new Date(Date.UTC(cur.year, (cur.q - 1) * 3, 1));
-    // Boundary (b): quarter started before the org existed → stop.
-    if (qStart < orgCreatedAt) break;
-
-    const qEnd = quarterEnd(cur.year, cur.q);
-    const graceDeadline = new Date(qEnd.getTime() + OVERDUE_REPORT_GRACE_DAYS * 86400_000);
-    if (now < graceDeadline) {
-      // Quarter is too recent for the grace window to have elapsed; skip
-      // this quarter but keep walking older ones.
-      cur = previousQuarter(cur.year, cur.q);
-      continue;
-    }
-    // Only `status = 'ready'` reports satisfy quarterly coverage. Reports in
-    // 'generating' or 'failed' state never produced a deliverable board pack,
-    // so they must NOT suppress the overdue notification (would be a silent
-    // miss that's exactly the failure mode this scanner exists to surface).
-    const existing = await db.execute(sql`
-      SELECT id FROM reports
+  const result = await db.execute(sql`
+    WITH org AS (
+      SELECT date_trunc('quarter', created_at)::timestamptz AS created_q
+      FROM organisations
+      WHERE id = ${orgId}
+    ),
+    latest_covered AS (
+      SELECT date_trunc('quarter', MAX(period_end))::timestamptz AS latest_q
+      FROM reports
       WHERE organisation_id = ${orgId}
         AND status = 'ready'
-        AND period_start <= ${qEnd}
-        AND period_end >= ${qStart}
-      LIMIT 1
-    `);
-    const existsRows = (existing.rows ?? existing) as Array<{ id: string }>;
-    if (existsRows.length === 0) {
-      const label = `Q${cur.q} ${cur.year}`;
-      out.push({
-        orgId,
-        category: "overdue_report",
-        baseKey: `overdue_report:${orgId}:${cur.year}-Q${cur.q}`,
-        title: `${label} board pack is overdue`,
-        body: `No report has been generated covering ${label}. The grace window ended ${graceDeadline.toISOString().slice(0, 10)}.`,
-        linkUrl: `${appBase()}/reports`,
-        context: { year: cur.year, quarter: cur.q },
-      });
-      cur = previousQuarter(cur.year, cur.q);
-      continue;
-    }
-    // Boundary (a): hit a covered quarter — stop walking older ones.
-    break;
-  }
-  return out;
+    ),
+    bounds AS (
+      SELECT
+        GREATEST(
+          (SELECT created_q FROM org),
+          COALESCE(
+            (SELECT latest_q FROM latest_covered) + interval '3 months',
+            (SELECT created_q FROM org)
+          )
+        ) AS lower_q,
+        date_trunc('quarter', ${now}::timestamptz - interval '3 months') AS upper_q
+    ),
+    quarter_series AS (
+      SELECT generate_series(
+        (SELECT lower_q FROM bounds),
+        (SELECT upper_q FROM bounds),
+        interval '3 months'
+      )::timestamptz AS q_start
+    )
+    SELECT
+      EXTRACT(YEAR FROM qs.q_start)::int AS year,
+      (((EXTRACT(MONTH FROM qs.q_start)::int - 1) / 3) + 1)::int AS quarter
+    FROM quarter_series qs
+    WHERE
+      -- Past the 14-day grace window (qEnd + 14d <= now)
+      qs.q_start + interval '3 months' + interval '14 days' <= ${now}::timestamptz
+      -- Belt-and-suspenders: even though the lower-bound CTE already
+      -- excludes covered quarters, anti-join here as defence-in-depth
+      -- against partial-coverage edge cases (sparse reports). Filter to
+      -- status='ready' only — 'generating' and 'failed' reports must not
+      -- suppress the overdue notification.
+      AND NOT EXISTS (
+        SELECT 1 FROM reports r
+        WHERE r.organisation_id = ${orgId}
+          AND r.status = 'ready'
+          AND r.period_start <= qs.q_start + interval '3 months' - interval '1 microsecond'
+          AND r.period_end >= qs.q_start
+      )
+    ORDER BY qs.q_start DESC
+  `);
+  const rows = (result.rows ?? result) as Array<{ year: number; quarter: number }>;
+  return rows.map((r) => {
+    const year = Number(r.year);
+    const quarter = Number(r.quarter) as 1 | 2 | 3 | 4;
+    const qEnd = quarterEnd(year, quarter);
+    const graceDeadline = new Date(qEnd.getTime() + OVERDUE_REPORT_GRACE_DAYS * 86400_000);
+    const label = `Q${quarter} ${year}`;
+    return {
+      orgId,
+      category: "overdue_report" as const,
+      baseKey: `overdue_report:${orgId}:${year}-Q${quarter}`,
+      title: `${label} board pack is overdue`,
+      body: `No report has been generated covering ${label}. The grace window ended ${graceDeadline.toISOString().slice(0, 10)}.`,
+      linkUrl: `${appBase()}/reports`,
+      context: { year, quarter },
+    };
+  });
 }
 
 /**
