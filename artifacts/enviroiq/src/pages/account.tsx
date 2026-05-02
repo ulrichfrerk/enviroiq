@@ -184,6 +184,19 @@ export default function Account() {
     },
   });
 
+  const unlinkPasskeyMutation = useMutation({
+    mutationFn: (id: string) =>
+      jsonFetch(`/api/auth/passkeys/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    onSuccess: () => {
+      toast({ title: "Passkey removed" });
+      void qc.invalidateQueries({ queryKey: ["passkeys", targetUserId] });
+    },
+    onError: (err: unknown) => {
+      const message = err instanceof Error ? err.message : "Could not remove passkey";
+      toast({ variant: "destructive", title: "Unable to remove passkey", description: message });
+    },
+  });
+
   // Inline rename state — only one passkey is editable at a time. Storing the
   // id (not a boolean) lets us close the previous editor automatically when
   // the user clicks Rename on a different row.
@@ -247,6 +260,12 @@ export default function Account() {
     unlinkMutation.mutate(identity.id);
   };
 
+  const handleUnlinkPasskey = (pk: PasskeySummary) => {
+    const name = pk.label?.trim() || defaultPasskeyName(pk);
+    if (!confirm(`Remove passkey "${name}"? You won't be able to sign in from this device until you re-enrol.`)) return;
+    unlinkPasskeyMutation.mutate(pk.id);
+  };
+
   const roleLabel = (role: string) =>
     role.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
@@ -281,8 +300,14 @@ export default function Account() {
 
   // "Last sign-in path" guard mirrors the server: an unlink would strand the
   // user only if they have zero passkeys AND only one SSO identity remaining.
-  const isLastSignInPath = (i: SsoIdentitySummary) =>
+  const isLastSignInPath = (_i: SsoIdentitySummary) =>
     !isViewingOther && passkeys.length === 0 && identities.length <= 1;
+
+  // Mirror of the server-side guard in `DELETE /auth/passkeys/:id`: removing
+  // this passkey would strand the user when it's their only passkey and they
+  // also have no SSO identities linked.
+  const isLastPasskeySignInPath = (_pk: PasskeySummary) =>
+    !isViewingOther && passkeys.length <= 1 && identities.length === 0;
 
   return (
     <div className="space-y-8 pb-10 max-w-2xl">
@@ -393,6 +418,10 @@ export default function Account() {
                 const displayName = pk.label?.trim() || defaultPasskeyName(pk);
                 const isRenamePending =
                   renameMutation.isPending && renameMutation.variables?.id === pk.id;
+                const lastBlockPk = isLastPasskeySignInPath(pk);
+                const isUnlinkPending =
+                  unlinkPasskeyMutation.isPending &&
+                  unlinkPasskeyMutation.variables === pk.id;
                 return (
                   <li
                     key={pk.id}
@@ -507,18 +536,44 @@ export default function Account() {
                             </Button>
                           </>
                         ) : (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="text-muted-foreground hover:text-foreground gap-1.5"
-                            onClick={() => startRename(pk)}
-                            disabled={renameMutation.isPending}
-                            data-testid={`button-passkey-rename-${pk.id}`}
-                            title="Rename this passkey"
-                          >
-                            <Pencil className="w-4 h-4" />
-                            Rename
-                          </Button>
+                          <>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-muted-foreground hover:text-foreground gap-1.5"
+                              onClick={() => startRename(pk)}
+                              disabled={renameMutation.isPending || isUnlinkPending}
+                              data-testid={`button-passkey-rename-${pk.id}`}
+                              title="Rename this passkey"
+                            >
+                              <Pencil className="w-4 h-4" />
+                              Rename
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-muted-foreground hover:text-destructive gap-1.5"
+                              onClick={() => handleUnlinkPasskey(pk)}
+                              disabled={
+                                lastBlockPk ||
+                                isUnlinkPending ||
+                                renameMutation.isPending
+                              }
+                              title={
+                                lastBlockPk
+                                  ? "This is your only sign-in method — add another passkey or link an SSO account first."
+                                  : "Remove this passkey"
+                              }
+                              data-testid={`button-passkey-unlink-${pk.id}`}
+                            >
+                              {isUnlinkPending ? (
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="w-4 h-4" />
+                              )}
+                              Unlink
+                            </Button>
+                          </>
                         )}
                       </div>
                     )}
@@ -526,6 +581,12 @@ export default function Account() {
                 );
               })}
             </ul>
+          )}
+
+          {!isViewingOther && passkeys.length === 1 && identities.length === 0 && (
+            <p className="text-xs text-muted-foreground" data-testid="text-last-passkey-hint">
+              Add another passkey or link an SSO account before removing your last sign-in method.
+            </p>
           )}
 
           {!isViewingOther && (

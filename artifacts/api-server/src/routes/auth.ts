@@ -612,16 +612,51 @@ router.get("/passkeys", requireAuth, async (req, res) => {
   );
 });
 
-/** DELETE /auth/passkeys/:id — remove a passkey (owner only). */
+/**
+ * DELETE /auth/passkeys/:id — remove a passkey (owner only).
+ *
+ * Refuses to remove the user's *only* strong sign-in path (mirrors the
+ * `DELETE /auth/sso/identities/:id` guard): if removing this passkey would
+ * leave them with zero passkeys AND zero linked SSO identities, the request
+ * is rejected with 409 `last_sign_in_path`. Magic-link recovery via verified
+ * email remains available even after removal, but we never strand a user
+ * with no enrolled strong factors.
+ */
 router.delete("/passkeys/:id", requireAuth, async (req, res) => {
   const id = req.params.id as string;
+  const userId = req.user!.id;
   const passkey = await db.query.passkeysTable.findFirst({ where: eq(passkeysTable.id, id) });
-  if (!passkey || passkey.userId !== req.user!.id) {
+  if (!passkey || passkey.userId !== userId) {
     res.status(404).json({ error: "Not found" });
     return;
   }
+
+  // Compute remaining sign-in factors AFTER this delete.
+  const [remainingPasskeys, remainingIdentities] = await Promise.all([
+    db.query.passkeysTable.findMany({ where: eq(passkeysTable.userId, userId) }),
+    db.query.ssoIdentitiesTable.findMany({ where: eq(ssoIdentitiesTable.userId, userId) }),
+  ]);
+  const otherPasskeyCount = remainingPasskeys.filter((p) => p.id !== id).length;
+  const identityCount = remainingIdentities.length;
+
+  if (otherPasskeyCount === 0 && identityCount === 0) {
+    await logAudit({
+      req,
+      action: "auth.passkey.delete",
+      outcome: "failure",
+      userId,
+      details: { passkeyId: id, reason: "would_leave_no_sign_in_path" },
+    });
+    res.status(409).json({
+      error: "last_sign_in_path",
+      message:
+        "This is your only sign-in method. Add another passkey or link an SSO provider before removing it.",
+    });
+    return;
+  }
+
   await db.delete(passkeysTable).where(eq(passkeysTable.id, id));
-  await logAudit({ req, action: "auth.passkey.delete", outcome: "success", userId: req.user!.id, details: { passkeyId: id } });
+  await logAudit({ req, action: "auth.passkey.delete", outcome: "success", userId, details: { passkeyId: id } });
   res.json({ ok: true });
 });
 

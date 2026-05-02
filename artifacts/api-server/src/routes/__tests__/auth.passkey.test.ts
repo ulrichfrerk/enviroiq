@@ -115,6 +115,16 @@ const dbState: {
   user: Record<string, unknown> | null;
   organisation: Record<string, unknown> | null;
   passkey: PasskeyRow | null;
+  // Extra passkey rows beyond the primary `passkey` field. The DELETE
+  // handler counts ALL of the user's passkeys to enforce its
+  // "would leave no sign-in path" guard, so the unlink tests need to be
+  // able to model "user has more than one passkey" without rewriting the
+  // login/register tests that assume a single row.
+  extraPasskeys: PasskeyRow[];
+  // Linked SSO identities for the user. The DELETE /passkeys/:id guard
+  // also consults this to decide whether removing the last passkey would
+  // strand the user.
+  ssoIdentities: { id: string; userId: string }[];
   challenge: ChallengeRow | null;
   insertedPasskey: Record<string, unknown> | null;
   counterUpdate: { id: string; counter: string } | null;
@@ -132,6 +142,8 @@ const dbState: {
   user: null,
   organisation: null,
   passkey: null,
+  extraPasskeys: [],
+  ssoIdentities: [],
   challenge: null,
   insertedPasskey: null,
   counterUpdate: null,
@@ -261,14 +273,26 @@ vi.mock("@workspace/db", () => {
       usersTable: { findFirst: vi.fn(async () => dbState.user) },
       organisationsTable: { findFirst: vi.fn(async () => dbState.organisation) },
       magicLinksTable: { findFirst: vi.fn(async () => null) },
-      ssoIdentitiesTable: { findFirst: vi.fn(async () => null) },
+      ssoIdentitiesTable: {
+        findFirst: vi.fn(async () => null),
+        // The DELETE /passkeys/:id guard counts the user's linked SSO
+        // identities to decide whether removing this passkey would leave
+        // them with no sign-in path. Tests can populate
+        // `dbState.ssoIdentities` to model "this user also has SSO".
+        findMany: vi.fn(async () => dbState.ssoIdentities.map((i) => ({ ...i }))),
+      },
       passkeysTable: {
         // Return a shallow snapshot so callers see a stable view of the row
         // even if a later mock-side mutation (e.g. update mock writing
         // `label`) changes the underlying dbState. Mirrors real Drizzle
         // behaviour where `findFirst` returns a fresh row object per call.
         findFirst: vi.fn(async () => (dbState.passkey ? { ...dbState.passkey } : null)),
-        findMany: vi.fn(async () => (dbState.passkey ? [{ ...dbState.passkey }] : [])),
+        findMany: vi.fn(async () => {
+          const rows: PasskeyRow[] = [];
+          if (dbState.passkey) rows.push({ ...dbState.passkey });
+          for (const p of dbState.extraPasskeys) rows.push({ ...p });
+          return rows;
+        }),
       },
       webAuthnChallengesTable: {
         findFirst: vi.fn(async (args?: { where?: unknown }) => {
@@ -478,6 +502,8 @@ beforeEach(() => {
   dbState.labelUpdate = null;
   dbState.deletedChallengeIds = [];
   dbState.deletedPasskeyIds = [];
+  dbState.extraPasskeys = [];
+  dbState.ssoIdentities = [];
   // Restore default verification stubs (individual tests may override).
   // The factories use the upstream return types so a future shape change
   // in @simplewebauthn/server breaks compilation here, not silently at
@@ -1030,5 +1056,106 @@ describe("PATCH /api/auth/passkeys/:id", () => {
 
     expect(res.status).toBe(401);
     expect(dbState.labelUpdate).toBeNull();
+  });
+});
+
+// ─── DELETE /passkeys/:id (unlink) ──────────────────────────────────────────
+describe("DELETE /api/auth/passkeys/:id", () => {
+  it("removes the passkey when the user has another passkey, and audits auth.passkey.delete success", async () => {
+    // Two passkeys total: deleting one still leaves a sign-in path.
+    dbState.passkey = { ...basePasskey };
+    dbState.extraPasskeys = [{ ...basePasskey, id: "pk-2", credentialId: "cred-2" }];
+
+    const app = makeApp();
+    const agent = request.agent(app);
+    await agent.post("/__test/login");
+
+    const res = await agent.delete(`/api/auth/passkeys/${basePasskey.id}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+    expect(dbState.deletedPasskeyIds).toEqual([basePasskey.id]);
+
+    const audits = getAuditCalls().filter((a) => a.action === "auth.passkey.delete");
+    expect(audits).toHaveLength(1);
+    expect(audits[0]).toMatchObject({
+      action: "auth.passkey.delete",
+      outcome: "success",
+      userId: baseUser.id,
+      details: { passkeyId: basePasskey.id },
+    });
+  });
+
+  it("removes the passkey when the user has a linked SSO identity instead", async () => {
+    // Only one passkey, but an SSO identity remains as the fallback factor.
+    dbState.passkey = { ...basePasskey };
+    dbState.extraPasskeys = [];
+    dbState.ssoIdentities = [{ id: "sso-1", userId: baseUser.id }];
+
+    const app = makeApp();
+    const agent = request.agent(app);
+    await agent.post("/__test/login");
+
+    const res = await agent.delete(`/api/auth/passkeys/${basePasskey.id}`);
+
+    expect(res.status).toBe(200);
+    expect(dbState.deletedPasskeyIds).toEqual([basePasskey.id]);
+  });
+
+  it("refuses with 409 last_sign_in_path when removing would leave no passkey and no SSO identity", async () => {
+    // Only one passkey, no SSO — this is the user's only sign-in path.
+    dbState.passkey = { ...basePasskey };
+    dbState.extraPasskeys = [];
+    dbState.ssoIdentities = [];
+
+    const app = makeApp();
+    const agent = request.agent(app);
+    await agent.post("/__test/login");
+
+    const res = await agent.delete(`/api/auth/passkeys/${basePasskey.id}`);
+
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ error: "last_sign_in_path" });
+    // Crucially: the row must NOT have been deleted.
+    expect(dbState.deletedPasskeyIds).toEqual([]);
+
+    // A failure audit row pinpoints the reason so admins can see refusals
+    // and so any future regression that silently allows the delete shows
+    // up as a missing failure row here.
+    const audits = getAuditCalls().filter((a) => a.action === "auth.passkey.delete");
+    expect(audits).toHaveLength(1);
+    expect(audits[0]).toMatchObject({
+      outcome: "failure",
+      userId: baseUser.id,
+      details: { passkeyId: basePasskey.id, reason: "would_leave_no_sign_in_path" },
+    });
+  });
+
+  it("returns 404 (not 403) when the passkey belongs to another user", async () => {
+    // Mirrors the PATCH handler: don't leak existence of other users' rows.
+    dbState.passkey = { ...basePasskey, userId: "someone-else" };
+
+    const app = makeApp();
+    const agent = request.agent(app);
+    await agent.post("/__test/login");
+
+    const res = await agent.delete(`/api/auth/passkeys/${basePasskey.id}`);
+
+    expect(res.status).toBe(404);
+    expect(dbState.deletedPasskeyIds).toEqual([]);
+    expect(
+      getAuditCalls().some((a) => a.action === "auth.passkey.delete"),
+    ).toBe(false);
+  });
+
+  it("requires authentication", async () => {
+    dbState.passkey = { ...basePasskey };
+
+    const app = makeApp();
+    // No /__test/login first — request must be rejected by requireAuth.
+    const res = await request(app).delete(`/api/auth/passkeys/${basePasskey.id}`);
+
+    expect(res.status).toBe(401);
+    expect(dbState.deletedPasskeyIds).toEqual([]);
   });
 });
