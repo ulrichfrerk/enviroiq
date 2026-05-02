@@ -369,12 +369,6 @@ webhookRouter.post("/navman", async (req, res) => {
     const { deviceId, eventType, latitude, longitude, speed, odometer, timestamp, apiKey } = req.body;
     const org = await validateWebhookSecret(apiKey);
     if (!org) {
-      // Persist audit row first; reuse its id as both the notification's
-      // sourceAuditId AND the dedupeKey anchor so each distinct rejected
-      // webhook gets its own bell row and only true retries of the same
-      // event coalesce. (Spam control should be handled by fixing the
-      // upstream credentials — silently dropping subsequent failures
-      // hides the problem.)
       const auditId = await logAudit({ req, action: "webhook.fleet.navman", outcome: "failure", details: { reason: "invalid_api_key", deviceId } });
       void notify({
         organisationId: "PLATFORM",
@@ -394,9 +388,6 @@ webhookRouter.post("/navman", async (req, res) => {
     const vehicle = await findVehicleByDeviceId(deviceId, org.id);
     if (!vehicle) {
       const auditId = await logAudit({ req, action: "webhook.fleet.navman", outcome: "failure", details: { reason: "device_not_registered", deviceId }, organisationId: org.id });
-      // Per-event dedupe (audit id) — every distinct rejected event gets
-      // its own bell row so admins see the true volume of misrouted
-      // telematics traffic.
       void notify({
         organisationId: org.id,
         category: "webhook.fleet.device_not_registered",
@@ -663,11 +654,6 @@ router.post("/import-km", requireAuth, requireOrgAdmin, async (req, res) => {
       organisationId: orgId,
     });
 
-    // Notify admins when one or more rows in the CSV import were skipped.
-    // The audit row id is the deterministic event anchor: every import
-    // attempt is its own audit row, so the same import never produces
-    // two notifications even if the route is replayed, and a re-import
-    // with the same shape still notifies (different audit id).
     if (errors.length > 0) {
       const errorPreview = errors.slice(0, 5).join("\n");
       const more = errors.length > 5 ? `\n…and ${errors.length - 5} more` : "";
@@ -688,9 +674,6 @@ router.post("/import-km", requireAuth, requireOrgAdmin, async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "Fleet KM import failed");
     const orgId = req.params.orgId as string;
-    // Persist a failure audit row first so the notification has a
-    // canonical event anchor; daily-cap the alert via dedupe so a
-    // persistently broken integration doesn't spam admins.
     const failAuditId = await logAudit({
       req,
       action: "fleet.import_km",

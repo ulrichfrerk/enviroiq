@@ -1,17 +1,4 @@
-// Foundation notification system — fans out a single domain event into
-// per-recipient `notifications` rows, with idempotency keyed on `dedupeKey`,
-// and dispatches an email via Resend when the severity warrants immediate
-// delivery (severity=error). Severity=warn rows are picked up by the daily
-// 8am NZ digest scheduler in scheduler.ts.
-//
-// v1 contract (no per-user prefs UI yet):
-//   * recipients = every active org_admin/super_admin in the org.
-//   * If the org has zero eligible recipients we fall back to platform
-//     super_admins and tag the email/notification with category
-//     `orphaned_org_no_admins` so platform ops can investigate.
-//   * Users without a clerkUserId (pre-existing passkey-era users who haven't
-//     signed in via Clerk yet) still receive notifications; the email channel
-//     uses the email column, the bell icon binds to user id.
+// Notification fan-out service. See replit.md → Notifications for contract.
 
 import { randomUUID } from "node:crypto";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
@@ -34,23 +21,15 @@ export interface NotifyInput {
   severity: NotificationSeverity;
   title: string;
   body: string;
-  /** Deep link into the app (e.g. `/energy?tab=upload`). Optional. */
   linkUrl?: string;
-  /** Audit row this event was raised from. Optional but strongly recommended. */
   sourceAuditId?: string;
-  /** Free-form structured context surfaced in the digest email. */
   context?: Record<string, unknown>;
-  /**
-   * Idempotency key. Typical patterns:
-   *   - `upload.energy_bill:${orgId}:${auditId}` for one-off events
-   *   - `webhook.fleet.invalid_api_key:${orgId}:${ymd}` for noisy daily caps
-   * Repeat fires of the same key produce no rows.
-   */
+  /** Idempotency key. Repeat fires no-op. */
   dedupeKey: string;
 }
 
 export interface NotifyResult {
-  /** False when the dedupeKey already existed (no fan-out, no emails). */
+  /** False when the dedupeKey already existed. */
   created: boolean;
   eventId: string | null;
   recipientCount: number;
@@ -61,21 +40,11 @@ interface ResolvedRecipient {
   id: string;
   email: string;
   name: string | null;
-  /**
-   * Last successful sign-in. NULL means the user has never completed first
-   * sign-in (e.g. an admin invited yesterday but who hasn't clicked their
-   * magic link yet). The email channel is suppressed for these users — they
-   * still get the in-app bell row, so when they do sign in the alert is
-   * waiting in the inbox.
-   */
+  /** NULL = user has never signed in; email channel is suppressed. */
   lastLoginAt: Date | null;
 }
 
-/**
- * Resolve the set of users who should receive a notification for `orgId`.
- * v1: every active org_admin / super_admin in the org. If zero, fall back to
- * platform super_admins so the event isn't lost.
- */
+
 async function resolveRecipients(orgId: string): Promise<{
   recipients: ResolvedRecipient[];
   orphanFallback: boolean;
@@ -113,16 +82,9 @@ async function resolveRecipients(orgId: string): Promise<{
   return { recipients: platform, orphanFallback: true };
 }
 
-/**
- * Fire a notification. Idempotent on `dedupeKey`. Safe to call from request
- * handlers — never throws (errors are logged so they don't crash the parent
- * audit/upload flow).
- */
+/** Fire a notification. Idempotent on `dedupeKey`. Never throws. */
 export async function notify(input: NotifyInput): Promise<NotifyResult> {
   try {
-    // Step 1 (outside tx): resolve recipients + load org for email branding.
-    // These are read-only and we don't want them inside the tx — they widen
-    // the lock window and the data wouldn't change inside a single fan-out.
     const [{ recipients, orphanFallback }, org] = await Promise.all([
       resolveRecipients(input.organisationId),
       db.query.organisationsTable.findFirst({
@@ -146,12 +108,7 @@ export async function notify(input: NotifyInput): Promise<NotifyResult> {
       createdAt: now,
     }));
 
-    // Step 2 (inside tx): insert event row + fan out recipient rows
-    // atomically. If the dedupeKey already exists, the event insert returns
-    // 0 rows and we short-circuit. If the recipient-row insert *throws*,
-    // the event row rolls back too — so a retry with the same dedupeKey
-    // can re-attempt the full fan-out instead of being silently skipped
-    // (the bug the architect flagged on review).
+    // Event + fan-out atomic: dedupe row rolls back if recipient insert throws.
     const txResult = await db.transaction(async (tx) => {
       const inserted = await tx
         .insert(notificationEventsTable)
@@ -176,7 +133,6 @@ export async function notify(input: NotifyInput): Promise<NotifyResult> {
     });
 
     if (txResult.duplicated) {
-      // Already fanned out for this dedupeKey.
       return { created: false, eventId: null, recipientCount: 0, emailsSent: 0 };
     }
 
@@ -188,11 +144,8 @@ export async function notify(input: NotifyInput): Promise<NotifyResult> {
       return { created: true, eventId, recipientCount: 0, emailsSent: 0 };
     }
 
-    // Step 4: email side-channel — one batched Resend call for severity=error
-    // (warns are rolled into the per-user daily digest by the scheduler).
-    // First-sign-in gate: users whose lastLoginAt is NULL haven't completed
-    // sign-in yet, so we skip their email and rely on the bell icon waiting
-    // for them. The bell row IS still created above for everyone.
+    // severity=error → one batched Resend call. severity=warn → daily digest.
+    // First-sign-in users are excluded from email; bell row still created.
     let emailsSent = 0;
     if (input.severity === "error") {
       const orgName = org?.name ?? "your organisation";
@@ -219,9 +172,7 @@ export async function notify(input: NotifyInput): Promise<NotifyResult> {
         try {
           const result = await sendNotificationEmailBatch(items);
           emailsSent = result.sent;
-          // Only stamp rows whose corresponding Resend dispatch was confirmed.
-          // Anything that failed (provider error, dev-console fallback, missing
-          // config) stays unstamped so the daily digest sweep can pick it up.
+          // Stamp only rows whose Resend dispatch was confirmed; failed rows roll into next digest.
           const stampIds = emailable
             .map((p, i) => ({ id: p.row.id, ok: result.results[i]?.ok === true }))
             .filter((x) => x.ok)
@@ -268,12 +219,7 @@ export async function notify(input: NotifyInput): Promise<NotifyResult> {
   }
 }
 
-/**
- * Daily digest tick. Picks every notification row where severity=warn AND
- * email_sent_at IS NULL, optionally restricted to a single organisationId
- * (used by the per-org-time scheduler to fire at the right local 8am for
- * each org), groups by recipient, and sends one rollup email per user.
- */
+/** Daily digest. Groups unsent severity=warn rows by recipient and emails one rollup per user. */
 export async function sendNotificationDigests(
   options: { organisationId?: string } = {},
 ): Promise<{ users: number; rows: number }> {
@@ -308,12 +254,7 @@ export async function sendNotificationDigests(
     byRecipient.set(row.recipientUserId, arr);
   }
 
-  // Build one batch payload across all recipients, then send in a single
-  // Resend call (chunked at 100 by the mailer). For each batch entry we
-  // remember which `notifications` row ids belong to that user so that —
-  // after the batch returns its per-item ok/fail array — we stamp ONLY the
-  // rows whose user's email was actually dispatched. Failed users stay
-  // unstamped and get picked up on the next digest tick (idempotent).
+  // Track which row ids belong to each batch entry so we only stamp confirmed sends.
   const items: NotificationEmailItem[] = [];
   const stampGroups: string[][] = [];
   let userCount = 0;
@@ -380,6 +321,4 @@ export async function sendNotificationDigests(
 
 export type { Notification };
 
-// Drizzle import is referenced through the SQL helper in some queries; keep
-// to avoid unused-import noise if tree-shaken differently in tests.
 void sql;

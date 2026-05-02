@@ -133,15 +133,7 @@ export function startScheduler(): void {
   }, PRUNE_INTERVAL_MS);
   logger.info({ intervalMs: PRUNE_INTERVAL_MS, retentionMonths: 6 }, "Document archive prune job scheduled");
 
-  // Notification digest — every hour we walk every active organisation and,
-  // for any org whose *local* time is currently 8am (using its
-  // organisations.default_timezone column, defaulting to Pacific/Auckland),
-  // send a single rollup email per recipient summarising every severity=warn
-  // notification still pending (no email_sent_at). A per-org `lastDigestDay`
-  // map stops us from sending twice in the same local day if the tick
-  // overlaps. severity=error is dispatched immediately by notify() and is
-  // not part of the digest. Hourly cadence keeps the scheduler robust to
-  // DST transitions and per-org timezone differences without a cron string.
+  // Notification digest — hourly tick fires per-org digest at that org's local 8am.
   const lastDigestDayByOrg = new Map<string, string>();
   const orgLocalParts = (timezone: string) => {
     try {
@@ -156,8 +148,7 @@ export function startScheduler(): void {
       const parts = Object.fromEntries(fmt.formatToParts(new Date()).map((p) => [p.type, p.value]));
       return { hour: Number(parts.hour), ymd: `${parts.year}-${parts.month}-${parts.day}` };
     } catch {
-      // Fall back to NZ if the timezone string is bad — better than silently
-      // dropping the digest for that org.
+      // Fall back to NZ on bad timezone string.
       const fmt = new Intl.DateTimeFormat("en-NZ", {
         timeZone: "Pacific/Auckland",
         hour: "2-digit",

@@ -231,6 +231,7 @@ async function ensureDocumentArchiveSchema(): Promise<void> {
  *   - notifications: per-recipient fan-out drives the bell icon + email.
  */
 async function ensureNotificationsSchema(): Promise<void> {
+  // Step 1: CREATE TABLE IF NOT EXISTS for both tables.
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS notification_events (
       id                 text PRIMARY KEY,
@@ -246,12 +247,6 @@ async function ensureNotificationsSchema(): Promise<void> {
       created_at         timestamptz NOT NULL DEFAULT now()
     )
   `);
-  await db.execute(
-    sql`CREATE UNIQUE INDEX IF NOT EXISTS notification_events_dedupe_key_uq ON notification_events (dedupe_key)`,
-  );
-  await db.execute(
-    sql`CREATE INDEX IF NOT EXISTS notification_events_org_created_idx ON notification_events (organisation_id, created_at)`,
-  );
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS notifications (
       id                  text PRIMARY KEY,
@@ -270,15 +265,8 @@ async function ensureNotificationsSchema(): Promise<void> {
       created_at          timestamptz NOT NULL DEFAULT now()
     )
   `);
-  await db.execute(
-    sql`CREATE INDEX IF NOT EXISTS notifications_recipient_created_idx ON notifications (recipient_user_id, created_at)`,
-  );
-  await db.execute(
-    sql`CREATE INDEX IF NOT EXISTS notifications_org_created_idx ON notifications (organisation_id, created_at)`,
-  );
-  // ADD COLUMN guards — protect against schema drift if the tables existed
-  // from an earlier partial deploy that lacked some of the columns we now
-  // depend on. Each statement is idempotent.
+  // Step 2: ADD COLUMN IF NOT EXISTS guards heal partial-deploy drift before
+  // any index that depends on a column tries to create itself.
   for (const stmt of [
     sql`ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS organisation_id text NOT NULL DEFAULT ''`,
     sql`ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS category text NOT NULL DEFAULT ''`,
@@ -306,6 +294,19 @@ async function ensureNotificationsSchema(): Promise<void> {
   ]) {
     await db.execute(stmt);
   }
+  // Step 3: indexes (after columns are guaranteed to exist).
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS notification_events_dedupe_key_uq ON notification_events (dedupe_key)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS notification_events_org_created_idx ON notification_events (organisation_id, created_at)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS notifications_recipient_created_idx ON notifications (recipient_user_id, created_at)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS notifications_org_created_idx ON notifications (organisation_id, created_at)`,
+  );
   logger.info("Notifications schema ready");
 }
 

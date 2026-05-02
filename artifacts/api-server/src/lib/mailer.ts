@@ -193,19 +193,9 @@ export interface NotificationEmailItem {
 }
 
 /**
- * Send a batch of notification emails in a single Resend API call. Resend's
- * `/emails/batch` accepts up to 100 personalised emails per call, which is
- * how the foundation notification fan-out (`notify()` in notifications.ts)
- * stays within rate limits when an org has many admins or when the daily
- * digest sweeps every recipient at once.
- *
- * Returns a per-item `results` array preserving input order. Each entry is
- * `{ ok: true }` only when Resend confirmed dispatch — callers MUST use this
- * to decide which `notifications` rows to stamp `email_sent_at`. Anything
- * else (provider error, batch threw, dev-console fallback, missing
- * configuration in production) is `{ ok: false }` so unsent rows stay
- * unstamped and roll into a future digest. Never throws — the caller's
- * ingest flow keeps running.
+ * Send a batch of notification emails via Resend's batch endpoint (≤100/call).
+ * Returns a per-item `results` array in input order; `ok:true` only when
+ * Resend confirmed dispatch. Never throws.
  */
 export async function sendNotificationEmailBatch(
   items: NotificationEmailItem[],
@@ -233,9 +223,7 @@ export async function sendNotificationEmailBatch(
           continue;
         }
         const ids = Array.isArray(data?.data) ? (data.data as Array<{ id?: string }>) : [];
-        // Resend returns one id per item in the order we sent them. Anything
-        // beyond the returned-id count is treated as not sent so the row
-        // remains unstamped (we'd rather double-email than silently drop).
+        // Resend returns ids in input order; anything past returned count = unstamped.
         for (let j = 0; j < chunk.length; j++) {
           if (ids[j]?.id) {
             results[i + j] = { ok: true };
@@ -257,21 +245,14 @@ export async function sendNotificationEmailBatch(
       // eslint-disable-next-line no-console
       console.log(`\n[NOTIFICATION EMAIL — RESEND NOT CONFIGURED]\n  To: ${item.to}\n  Subject: [${item.orgName}] ${item.title}\n  Body: ${item.body}\n`);
     }
-    // Dev-console fallback is NOT a real send — leave results as { ok: false }
-    // so the rows stay unstamped and roll into the next digest if Resend
-    // gets configured between now and then.
+    // Dev-console fallback is not a real send — results stay { ok: false }.
     return { sent: 0, devMode: true, results };
   }
   logger.error({ count: items.length }, "Resend not configured in production — notification batch dropped");
   return { sent: 0, devMode: false, results };
 }
 
-/**
- * Send a data-quality / failure notification email. Used by the foundation
- * notification system in `lib/notifications.ts`. Returns sent=false in dev
- * when Resend isn't configured (logs to console instead) — never throws so
- * a failed email doesn't crash the parent ingest flow.
- */
+/** Single-recipient notification email. Logs to console in dev, never throws. */
 export async function sendNotificationEmail(
   to: string,
   recipientName: string,
@@ -301,8 +282,6 @@ export async function sendNotificationEmail(
     console.log(`\n[NOTIFICATION EMAIL — RESEND NOT CONFIGURED]\n  To: ${to}\n  Subject: [${orgName}] ${title}\n  Body: ${body}\n`);
     return { sent: false, devMode: true };
   }
-  // In production we don't want a misconfigured Resend to bring down the
-  // ingest path — just record it.
   logger.error({ to, title }, "Resend not configured in production — notification email dropped");
   return { sent: false, devMode: false };
 }
