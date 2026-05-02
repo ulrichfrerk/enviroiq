@@ -544,6 +544,13 @@ describe("POST /api/auth/passkey/login/options", () => {
     expect(res.status).toBe(403);
     expect(res.body).toMatchObject({
       error: expect.stringMatching(/passkey/i),
+      // Task #19: the response carries a structured `code` + `source` so
+      // the sign-in page can render the same friendly amber restriction
+      // callout the SSO callback flow uses. The code is `passkey_*` (mirrors
+      // the SSO `sso_*` codes) and the source reflects the deciding policy.
+      // For an org-level refusal (no per-user override) source MUST be "org".
+      code: "passkey_method_not_allowed",
+      source: "org",
     });
 
     // The challenge MUST NOT have been written for a refused request — a
@@ -557,7 +564,52 @@ describe("POST /api/auth/passkey/login/options", () => {
     expect(fail).toHaveLength(1);
     expect(fail[0]).toMatchObject({
       userId: baseUser.id,
-      details: { reason: "method_not_allowed", stage: "options" },
+      // `source` is also persisted in the audit trail so admins can
+      // distinguish per-user-override refusals from org-wide ones when
+      // diagnosing why a user couldn't sign in.
+      details: { reason: "method_not_allowed", stage: "options", source: "org" },
+    });
+  });
+
+  it("returns source=user when a per-user override (not org policy) is what refused passkey", async () => {
+    // Task #19: wording on the sign-in page must match the deciding
+    // policy source, so the API has to surface "user" vs "org". This
+    // exercises the per-user-override branch end-to-end so a future
+    // refactor that drops `policy.source` in the response would fail
+    // here even if the org-level test above keeps passing.
+    dbState.organisation = {
+      ...baseOrg,
+      // Org would allow passkey on its own.
+      allowedSignInMethods: ["magic_link", "google_sso", "passkey"],
+    };
+    dbState.user = {
+      ...baseUser,
+      // …but this single user is restricted to magic_link only.
+      allowedSignInMethods: ["magic_link"],
+    };
+
+    const app = makeApp();
+    const res = await request(app)
+      .post("/api/auth/passkey/login/options")
+      .send({ email: baseUser.email });
+
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({
+      code: "passkey_method_not_allowed",
+      source: "user",
+      // Wording reflects "your account" rather than "your organisation"
+      // so a curl/test caller debugging without the UI sees the same
+      // distinction the sign-in page would render.
+      error: expect.stringMatching(/your account/i),
+    });
+
+    const fail = getAuditCalls().filter(
+      (a) => a.action === "auth.passkey.login" && a.outcome === "failure",
+    );
+    expect(fail).toHaveLength(1);
+    expect(fail[0]).toMatchObject({
+      userId: baseUser.id,
+      details: { reason: "method_not_allowed", stage: "options", source: "user" },
     });
   });
 
@@ -725,6 +777,17 @@ describe("POST /api/auth/passkey/login/verify", () => {
     // would surface here even if the response shape stayed the same.
     const me = await agent.get("/__test/whoami");
     expect(me.body).toMatchObject({ userId: null, email: null, role: null });
+
+    // Task #19: the verify-stage refusal MUST also carry the structured
+    // `code` + `source` fields so the sign-in page can render the same
+    // friendly amber restriction callout it shows for SSO refusals. A
+    // future regression that returned only the legacy `error` string would
+    // silently downgrade the UX to the small inline error banner.
+    expect(res.body).toMatchObject({
+      code: "passkey_method_not_allowed",
+      source: "org",
+      error: expect.stringMatching(/passkey/i),
+    });
   });
 
   it("on success: rotates the session id, updates the credential counter, deletes the challenge, and audits success", async () => {

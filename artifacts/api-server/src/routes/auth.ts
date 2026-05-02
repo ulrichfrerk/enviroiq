@@ -135,6 +135,24 @@ router.post("/logout", async (req, res) => {
  *
  * Always returns 200 with the same generic message — never reveals whether the
  * email is registered (account-enumeration defence).
+ *
+ * Restriction-message decision (see task #19):
+ *   The SSO callback and passkey-login flows return a `code` + `source` on a
+ *   policy refusal so the sign-in page can render the friendly amber
+ *   "this method isn't available" callout. We DELIBERATELY do NOT do that
+ *   here. Magic-link is the only sign-in method that accepts a raw email
+ *   address from an unauthenticated caller — surfacing "this email exists
+ *   but its policy forbids magic-link" would turn the request endpoint into
+ *   an account-enumeration oracle (and leak the per-user override state for
+ *   that account). The amber callout is therefore intentionally reserved
+ *   for flows where the caller has already proven control of the email
+ *   (completed an SSO assertion at the IdP, or completed a WebAuthn
+ *   assertion against an enrolled credential). The generic 200 response is
+ *   the right answer here even though it means a user whose account is
+ *   restricted to SSO will see "Check your email" and never receive one.
+ *   The `Some sign-in methods may be disabled by your administrator` hint
+ *   already rendered on the sign-in page covers this case at the page
+ *   level without leaking which accounts are restricted.
  */
 router.post("/magic-link/request", async (req, res) => {
   const email = String(req.body?.email || "").trim().toLowerCase();
@@ -380,6 +398,24 @@ router.post("/passkey/register/verify", requireAuth, async (req, res) => {
 // Passkey — Login (no auth required)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Human-readable fallback shown if a non-UI client surfaces the `error`
+ * field directly. The browser sign-in page does NOT use this — it reads
+ * the structured `code` + `source` and renders its own amber callout via
+ * `restrictionMessage()`. This wording deliberately mentions "passkey" so
+ * curl-based debugging and existing test assertions remain readable.
+ *
+ * Wording varies by `policy.source` so an org_admin who has overridden a
+ * single user gets back "your account" instead of "your organisation"
+ * (matches task #19's "wording matches the deciding policy source").
+ */
+function passkeyPolicyMessage(source: "user" | "org" | undefined): string {
+  if (source === "user") {
+    return "Passkey sign-in is not enabled for your account. Please use another sign-in method.";
+  }
+  return "Passkey sign-in is not enabled for your organisation. Please use another sign-in method.";
+}
+
 router.post("/passkey/login/options", async (req, res) => {
   const { rpID } = getWebAuthnContext(req);
   const email = String(req.body?.email || "").trim().toLowerCase();
@@ -397,9 +433,20 @@ router.post("/passkey/login/options", async (req, res) => {
           action: "auth.passkey.login",
           outcome: "failure",
           userId: user.id,
-          details: { reason: policy.reason, stage: "options" },
+          details: { reason: policy.reason, stage: "options", source: policy.source },
         });
-        res.status(403).json({ error: "Passkey sign-in is not enabled for your organisation. Please use the SSO option." });
+        // Surface `code` + `source` so the sign-in page can render the same
+        // amber restriction callout as the SSO callback flow, with wording
+        // that matches whether the deciding policy is per-user vs org-wide.
+        // This is safe because the caller proved knowledge of an existing
+        // email (we only reach this branch after looking the user up); we
+        // do NOT respond with policy detail for unknown emails — that path
+        // returns generic options above.
+        res.status(403).json({
+          error: passkeyPolicyMessage(policy.source),
+          code: `passkey_${policy.reason ?? "method_not_allowed"}`,
+          source: policy.source,
+        });
         return;
       }
       const passkeys = await db.query.passkeysTable.findMany({ where: eq(passkeysTable.userId, user.id) });
@@ -509,9 +556,16 @@ router.post("/passkey/login/verify", async (req, res) => {
         action: "auth.passkey.login",
         outcome: "failure",
         userId: user.id,
-        details: { reason: policy.reason, stage: "verify" },
+        details: { reason: policy.reason, stage: "verify", source: policy.source },
       });
-      res.status(403).json({ error: policy.message ?? "Passkey sign-in is not enabled for your organisation." });
+      // Same structured payload as /options so the sign-in page can render
+      // the friendly amber restriction callout regardless of which stage
+      // refused the assertion.
+      res.status(403).json({
+        error: passkeyPolicyMessage(policy.source),
+        code: `passkey_${policy.reason ?? "method_not_allowed"}`,
+        source: policy.source,
+      });
       return;
     }
 

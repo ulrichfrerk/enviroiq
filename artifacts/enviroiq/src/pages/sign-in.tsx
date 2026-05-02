@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { Loader2, Mail, KeyRound, CheckCircle2, AlertCircle, ShieldAlert, Info } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
-import { isPasskeySupported, signInWithPasskey } from "@/lib/webauthn";
+import { isPasskeySupported, signInWithPasskey, PasskeyRestrictionError } from "@/lib/webauthn";
 
 const ERRORS: Record<string, string> = {
   expired: "That sign-in link has expired or already been used. Request a new one below.",
@@ -31,30 +31,49 @@ const ERRORS: Record<string, string> = {
 };
 
 /**
- * Error codes that mean "the IdP authenticated you but your org/account
- * policy forbids this method". These get a more prominent, helpful UI
- * because the user genuinely needs to switch sign-in methods — a small
- * inline error banner is easy to miss.
+ * Error codes that mean "the IdP/authenticator verified you but your
+ * org/account policy forbids this method". These get a more prominent,
+ * helpful UI because the user genuinely needs to switch sign-in methods —
+ * a small inline error banner is easy to miss.
+ *
+ * Both prefixes are accepted:
+ *   - `sso_*`     — emitted as URL params by /auth/sso/:provider/callback
+ *                   after a refused SSO callback
+ *   - `passkey_*` — emitted in the JSON body by /auth/passkey/login/{options,verify}
+ *                   and surfaced via PasskeyRestrictionError
+ *
+ * Magic-link is intentionally absent: the request endpoint is unauthenticated
+ * and must not leak whether an email is restricted (see the doc comment on
+ * /auth/magic-link/request in the api-server).
  */
 const RESTRICTION_CODES = new Set([
   "sso_method_not_allowed",
   "sso_required_provider_mismatch",
   "sso_provider_disabled",
+  "passkey_method_not_allowed",
+  "passkey_required_provider_mismatch",
+  "passkey_provider_disabled",
 ]);
 
 /**
  * Build a clear "this method isn't available for your <scope>" message.
- * `source` is provided by the API after a verified SSO callback: "user"
- * means a per-user override is the deciding policy, "org" means it's the
- * org-wide setting. We never show this when there's no error — listing
- * disabled methods up front would leak admin policy.
+ * `source` is provided by the API after a verified SSO callback or a
+ * verified passkey assertion: "user" means a per-user override is the
+ * deciding policy, "org" means it's the org-wide setting. We never show
+ * this when there's no error — listing disabled methods up front would
+ * leak admin policy.
+ *
+ * The wording is shared across SSO and passkey refusals; we strip the
+ * leading `sso_`/`passkey_` so adding new sign-in methods later only
+ * needs a new entry in RESTRICTION_CODES.
  */
 function restrictionMessage(code: string, source: "user" | "org" | null): {
   title: string;
   body: string;
 } {
   const scope = source === "user" ? "your account" : "your organisation";
-  if (code === "sso_required_provider_mismatch") {
+  const kind = code.replace(/^(sso|passkey)_/, "");
+  if (kind === "required_provider_mismatch") {
     return {
       title: "Try a different sign-in method",
       body:
@@ -63,13 +82,13 @@ function restrictionMessage(code: string, source: "user" | "org" | null): {
           : "This organisation requires a specific sign-in provider. Use the other button above, or contact your administrator if you think this is wrong.",
     };
   }
-  if (code === "sso_provider_disabled") {
+  if (kind === "provider_disabled") {
     return {
       title: "That sign-in provider is turned off",
       body: `That provider has been disabled for ${scope}. Try a different button above, or contact your administrator.`,
     };
   }
-  // sso_method_not_allowed
+  // method_not_allowed
   return {
     title: "Sign-in method not available",
     body: `That sign-in method isn't enabled for ${scope}. Try a different button above, or contact your administrator if you think this is wrong.`,
@@ -104,7 +123,12 @@ export default function SignInPage() {
   const errorSource: "user" | "org" | null =
     sourceParam === "user" || sourceParam === "org" ? sourceParam : null;
   const isRestrictionError = !!errorCode && RESTRICTION_CODES.has(errorCode);
-  const restriction = isRestrictionError ? restrictionMessage(errorCode!, errorSource) : null;
+  // The restriction callout is driven by local state (not the URL param
+  // alone) so that the passkey flow — which fails via fetch, not via a
+  // top-level redirect — can populate it without a page reload.
+  const initialRestriction = isRestrictionError
+    ? { code: errorCode!, source: errorSource }
+    : null;
   // Restriction errors get the dedicated callout (rendered above the buttons),
   // so we don't double-render them in the small inline alert below the form.
   const initialError =
@@ -137,6 +161,12 @@ export default function SignInPage() {
   const [sent, setSent] = useState(false);
   const [err, setErr] = useState<string | null>(initialError);
   const [passkeyBusy, setPasskeyBusy] = useState(false);
+  const [restrictionState, setRestrictionState] = useState<
+    { code: string; source: "user" | "org" | null } | null
+  >(initialRestriction);
+  const restriction = restrictionState
+    ? restrictionMessage(restrictionState.code, restrictionState.source)
+    : null;
 
   async function requestMagicLink(e: React.FormEvent) {
     e.preventDefault();
@@ -163,6 +193,10 @@ export default function SignInPage() {
 
   async function passkeySignIn() {
     setErr(null);
+    // Clear any previous restriction callout — if the previous attempt
+    // hit a policy refusal but the user has since changed email, we don't
+    // want a stale amber banner sitting above the buttons.
+    setRestrictionState(null);
     setPasskeyBusy(true);
     try {
       await signInWithPasskey(email.trim().toLowerCase() || undefined);
@@ -171,6 +205,12 @@ export default function SignInPage() {
       await refresh();
       setLocation(redirectTarget);
     } catch (e) {
+      // Policy refusal → render the same friendly amber callout that the
+      // SSO callback flow uses, with wording derived from policy.source.
+      if (e instanceof PasskeyRestrictionError) {
+        setRestrictionState({ code: e.code, source: e.source });
+        return;
+      }
       const msg = (e as Error).message;
       // User-cancelled or no-credentials errors come through as DOM exceptions.
       if (/notallowed|aborted|cancel/i.test(msg)) {
