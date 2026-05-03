@@ -58,6 +58,8 @@ Dedupe lifecycle (handled by `resolveDedupeKey`): first fire of a given base key
 
 **On every API server startup** — the `ensure*` chain runs first (so production DDL gets applied), then `verifyDatabaseSchema()` introspects every table declared in `lib/db/src/schema` against `information_schema`. If anything is missing, the server logs a structured FATAL with the missing tables/columns and exits non-zero — so a deploy with a missing column visibly fails its health check instead of returning 500s on the first request that touches it.
 
+**Verifier contract is locked in by automated tests** — `lib/db/src/verify-schema.test.ts` covers happy path, missing table, missing column, extra-columns-ignored, and aggregate-multiple-misses. Run them with `pnpm --filter @workspace/db run test`. These guard against a future refactor silently weakening the check (e.g. swallowing an error or ignoring non-public tables).
+
 ### Feature Specifications
 - **ESG Intelligence**:
     - **Maturity Scoring**: A 4-dimensional system (Foundation, Coverage, Quality, Governance) resulting in grades: Foundation, Developing, Advanced, Leader.
