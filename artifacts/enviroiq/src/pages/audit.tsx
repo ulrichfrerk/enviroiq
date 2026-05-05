@@ -5,8 +5,9 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import { Shield, Loader2, CheckCircle, XCircle, Filter, X } from "lucide-react";
+import { Shield, Loader2, CheckCircle, XCircle, Filter, X, History } from "lucide-react";
 import { format } from "date-fns";
+import { Link } from "wouter";
 
 const outcomeBadge = (outcome: string) => {
   if (outcome === "success") return "bg-emerald-500/10 text-emerald-400";
@@ -141,6 +142,25 @@ export default function Audit() {
                         {log.resourceId && <span className="font-mono text-xs ml-1 opacity-60">{log.resourceId.substring(0, 8)}…</span>}
                       </span>
                     ) : "—"}
+                    {log.action === "user.sign_in_policy.changed" && log.resourceId && (
+                      <Link
+                        href={(() => {
+                          const params = new URLSearchParams({ signInUserId: log.resourceId });
+                          // Include the audit row's org so the Users page can detect a
+                          // cross-org deep-link (e.g. from the super-admin global view)
+                          // and surface a clear error instead of silently looking the
+                          // user up in the wrong tenant's directory.
+                          if (log.organisationId) params.set("signInOrgId", log.organisationId);
+                          return `/users?${params.toString()}`;
+                        })()}
+                        className="ml-2 inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                        data-testid={`link-sign-in-history-${log.id}`}
+                        title="View this user's sign-in restriction history"
+                      >
+                        <History className="w-3 h-3" />
+                        Why?
+                      </Link>
+                    )}
                   </td>
                   <td className="px-6 py-4">
                     <span className={`px-2.5 py-1 rounded-full text-xs font-medium flex items-center gap-1 w-fit ${outcomeBadge(log.outcome)}`}>

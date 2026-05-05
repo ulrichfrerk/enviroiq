@@ -740,7 +740,7 @@ export default function Users() {
   const isAdmin = session?.role === "org_admin" || session?.role === "super_admin";
 
   const queryClient = useQueryClient();
-  const { data: users, isLoading } = useListUsers(orgId!, { query: { enabled: !!orgId } });
+  const { data: users, isLoading, isSuccess: usersLoaded } = useListUsers(orgId!, { query: { enabled: !!orgId } });
   const createUser = useCreateUser();
   const deleteUser = useDeleteUser();
 
@@ -754,6 +754,51 @@ export default function Users() {
   const [bulkOpen, setBulkOpen] = useState(false);
 
   const userItems = users?.items ?? [];
+
+  // Allow deep-linking from the audit log: `/users?signInUserId=<id>` opens the
+  // Sign-in restrictions dialog (with its History section) for that user. The
+  // optional `signInOrgId` param carries the audit row's organisation so we can
+  // detect a cross-org deep-link (e.g. from the super-admin global audit view)
+  // and surface a clear error instead of silently looking the user up in the
+  // wrong tenant. Once we've handled the param, strip it so a refresh doesn't
+  // reopen the dialog.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    // Wait until the user list query has completed before processing the
+    // deep-link, so that an org with zero users still surfaces a clear
+    // "User not found" toast and clears the URL params (rather than getting
+    // stuck with the params indefinitely).
+    if (!isAdmin || !orgId || !usersLoaded) return;
+    const params = new URLSearchParams(window.location.search);
+    const targetId = params.get("signInUserId");
+    if (!targetId) return;
+    const targetOrgId = params.get("signInOrgId");
+
+    if (targetOrgId && targetOrgId !== orgId) {
+      toast({
+        variant: "destructive",
+        title: "Different organisation",
+        description: "This audit entry belongs to another organisation. Switch to that org to view the user's restriction history.",
+      });
+    } else {
+      const target = userItems.find((u) => u.id === targetId);
+      if (target) {
+        setRestrictionsUser({ id: target.id, name: target.name ?? "", email: target.email });
+      } else {
+        toast({
+          variant: "destructive",
+          title: "User not found",
+          description: "That user is no longer in this organisation.",
+        });
+      }
+    }
+    params.delete("signInUserId");
+    params.delete("signInOrgId");
+    const qs = params.toString();
+    setLocation(qs ? `/users?${qs}` : "/users", { replace: true });
+  }, [isAdmin, orgId, usersLoaded, userItems, setLocation, toast]);
+
+
   // Admins cannot bulk-edit themselves (avoids self-lockout footguns and matches
   // the per-row UI that hides destructive actions on the current user).
   const selectableUsers = useMemo(
