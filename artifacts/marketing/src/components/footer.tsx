@@ -28,10 +28,12 @@ export function Footer() {
           </div>
 
           <div>
-            <h4 className="font-semibold mb-6 text-foreground">Trust</h4>
+            <h4 className="font-semibold mb-6 text-foreground">Trust & Legal</h4>
             <ul className="space-y-4">
               <li><Link href="/trust" className="text-muted-foreground hover:text-primary transition-colors">Trust & Compliance</Link></li>
               <li><Link href="/trust#data-trust-model" className="text-muted-foreground hover:text-primary transition-colors">Data Trust Model</Link></li>
+              <li><Link href="/terms" className="text-muted-foreground hover:text-primary transition-colors">Terms & Conditions</Link></li>
+              <li><Link href="/license" className="text-muted-foreground hover:text-primary transition-colors">Software Licence</Link></li>
               <li><a href="mailto:contact@frerkencompanies.com?subject=Security%20Pack" className="text-muted-foreground hover:text-primary transition-colors">Security Pack</a></li>
               <li><a href="mailto:contact@frerkencompanies.com" className="text-muted-foreground hover:text-primary transition-colors">Contact</a></li>
             </ul>
@@ -40,11 +42,11 @@ export function Footer() {
 
         <div className="pt-8 border-t border-border flex flex-col md:flex-row items-center justify-between gap-4">
           <p className="text-muted-foreground text-sm">
-            © {new Date().getFullYear()} EnviroIQ. All rights reserved.
+            © {new Date().getFullYear()} Frerken Companies Limited, trading as EnviroIQ. All rights reserved.
           </p>
           <div className="flex gap-6">
-            <span className="text-muted-foreground text-sm">Privacy Policy</span>
-            <span className="text-muted-foreground text-sm">Terms of Service</span>
+            <Link href="/terms" className="text-muted-foreground hover:text-primary text-sm transition-colors">Terms & Conditions</Link>
+            <Link href="/license" className="text-muted-foreground hover:text-primary text-sm transition-colors">Software Licence</Link>
           </div>
         </div>
       </div>
