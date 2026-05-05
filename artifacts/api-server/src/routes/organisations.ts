@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { randomBytes } from "crypto";
-import { db, organisationsTable, usersTable, vehiclesTable, widgetConfigsTable } from "@workspace/db";
-import { eq, count, sql } from "drizzle-orm";
+import { db, organisationsTable, usersTable, vehiclesTable, widgetConfigsTable, auditLogsTable } from "@workspace/db";
+import { eq, and, count, desc, sql } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
 import { requireAuth, requireRole, requireOrgAccess, requireOrgAdmin } from "../lib/auth.js";
 import { sqlRow, sqlRows, numCol, intCol, strCol } from "../lib/sql-result.js";
@@ -335,6 +335,12 @@ router.patch("/:orgId/sso-policy", requireAuth, requireOrgAdmin, async (req, res
     await logAudit({
       req,
       action: "sso.policy.changed",
+      // Stamp organisationId explicitly so the audit row is correctly scoped
+      // when the actor is a super_admin (whose session.organisationId is null).
+      // Without this, the row's organisation_id would be NULL and the
+      // /sso-policy/history filter (and the global audit log per-org view)
+      // would not find it.
+      organisationId: orgId,
       resourceType: "organisation",
       resourceId: orgId,
       previousValue: {
@@ -360,6 +366,50 @@ router.patch("/:orgId/sso-policy", requireAuth, requireOrgAdmin, async (req, res
   } catch (err) {
     req.log.error({ err }, "Update SSO policy failed");
     res.status(500).json({ error: "Internal Server Error", message: "Failed to update SSO policy" });
+  }
+});
+
+// GET /organisations/:orgId/sso-policy/history
+// Returns recent `sso.policy.changed` audit entries for this org so the
+// Settings → Sign-in & SSO card can render a timeline of who changed what
+// and when, mirroring the per-user /sign-in-policy/history pattern.
+router.get("/:orgId/sso-policy/history", requireAuth, requireOrgAdmin, async (req, res) => {
+  try {
+    const orgId = req.params.orgId as string;
+    // Accept ?limit but clamp to a sane positive range so a negative or
+    // garbage value can't blow up the SQL driver.
+    const rawLimit = parseInt(req.query.limit as string);
+    const limit = Math.min(Math.max(Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 25, 1), 100);
+
+    const items = await db
+      .select({
+        id: auditLogsTable.id,
+        createdAt: auditLogsTable.createdAt,
+        actorUserId: auditLogsTable.userId,
+        actorEmail: auditLogsTable.userEmail,
+        actorType: auditLogsTable.actorType,
+        previousValue: auditLogsTable.previousValue,
+        newValue: auditLogsTable.newValue,
+      })
+      .from(auditLogsTable)
+      .where(
+        and(
+          eq(auditLogsTable.organisationId, orgId),
+          eq(auditLogsTable.action, "sso.policy.changed"),
+          eq(auditLogsTable.resourceType, "organisation"),
+          eq(auditLogsTable.resourceId, orgId),
+        ),
+      )
+      .orderBy(desc(auditLogsTable.createdAt))
+      .limit(limit);
+
+    res.json({ items });
+  } catch (err) {
+    req.log.error({ err }, "Get SSO policy history failed");
+    res.status(500).json({
+      error: "Internal Server Error",
+      message: "Failed to load SSO policy history",
+    });
   }
 });
 

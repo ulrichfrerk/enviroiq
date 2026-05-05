@@ -6,18 +6,30 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
   Mail, Copy, Check, Webhook, RefreshCw, Code, Loader2,
-  KeyRound, Eye, EyeOff, ExternalLink, Shield, AlertCircle,
+  KeyRound, Eye, EyeOff, ExternalLink, Shield, AlertCircle, History,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
+import { format } from "date-fns";
 
 type SignInMethod = "magic_link" | "passkey" | "google_sso" | "microsoft_sso";
+type RequiredProvider = "google" | "microsoft" | null;
 
 interface SsoPolicy {
   googleSsoEnabled: boolean;
   microsoftSsoEnabled: boolean;
   allowedSignInMethods: SignInMethod[];
-  requiredSsoProvider: "google" | "microsoft" | null;
+  requiredSsoProvider: RequiredProvider;
+}
+
+interface SsoPolicyHistoryEntry {
+  id: string;
+  createdAt: string;
+  actorUserId: string | null;
+  actorEmail: string | null;
+  actorType: string | null;
+  previousValue: Partial<SsoPolicy> | null;
+  newValue: Partial<SsoPolicy> | null;
 }
 
 const METHOD_LABELS: Record<SignInMethod, string> = {
@@ -27,6 +39,68 @@ const METHOD_LABELS: Record<SignInMethod, string> = {
   microsoft_sso: "Microsoft SSO",
 };
 
+function describeRequired(v: RequiredProvider | undefined): string {
+  if (v === undefined || v === null) return "no requirement";
+  if (v === "google") return "Google";
+  if (v === "microsoft") return "Microsoft";
+  return String(v);
+}
+
+function describeAllowed(v: SignInMethod[] | null | undefined): string {
+  if (v === undefined || v === null) return "(unset)";
+  if (v.length === 0) return "(none)";
+  return v.map((m) => METHOD_LABELS[m] ?? m).join(", ");
+}
+
+function describeBool(label: string, v: boolean | undefined): string {
+  return `${label} ${v ? "on" : "off"}`;
+}
+
+function diffSsoPolicy(entry: SsoPolicyHistoryEntry): string[] {
+  const lines: string[] = [];
+  const prev = entry.previousValue ?? {};
+  const next = entry.newValue ?? {};
+
+  if ((prev.googleSsoEnabled ?? null) !== (next.googleSsoEnabled ?? null)) {
+    lines.push(
+      `Google SSO: ${describeBool("Google", prev.googleSsoEnabled)} → ${describeBool("Google", next.googleSsoEnabled)}`,
+    );
+  }
+  if ((prev.microsoftSsoEnabled ?? null) !== (next.microsoftSsoEnabled ?? null)) {
+    lines.push(
+      `Microsoft SSO: ${describeBool("Microsoft", prev.microsoftSsoEnabled)} → ${describeBool("Microsoft", next.microsoftSsoEnabled)}`,
+    );
+  }
+  const prevReq = prev.requiredSsoProvider ?? null;
+  const nextReq = next.requiredSsoProvider ?? null;
+  if (prevReq !== nextReq) {
+    lines.push(`Required provider: ${describeRequired(prevReq)} → ${describeRequired(nextReq)}`);
+  }
+  const prevAllowed = prev.allowedSignInMethods ?? null;
+  const nextAllowed = next.allowedSignInMethods ?? null;
+  const sameAllowed =
+    (prevAllowed === null && nextAllowed === null) ||
+    (Array.isArray(prevAllowed) &&
+      Array.isArray(nextAllowed) &&
+      prevAllowed.length === nextAllowed.length &&
+      prevAllowed.every((m) => nextAllowed.includes(m)));
+  if (!sameAllowed) {
+    lines.push(`Allowed methods: ${describeAllowed(prevAllowed)} → ${describeAllowed(nextAllowed)}`);
+  }
+  if (lines.length === 0) lines.push("No effective change");
+  return lines;
+}
+
+function describeSsoActor(entry: SsoPolicyHistoryEntry): string {
+  if (entry.actorEmail) return entry.actorEmail;
+  if (entry.actorType === "system") return "System";
+  if (entry.actorType === "scheduler") return "Scheduler";
+  if (entry.actorType === "api_key") return "API key";
+  if (entry.actorType === "webhook") return "Webhook";
+  if (entry.actorUserId) return `User ${entry.actorUserId}`;
+  return "Unknown";
+}
+
 function SsoPolicyCard({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -35,6 +109,18 @@ function SsoPolicyCard({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) 
     queryFn: async () => {
       const res = await fetch(`/api/organisations/${orgId}/sso-policy`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to load SSO policy");
+      return res.json();
+    },
+    enabled: isAdmin,
+  });
+
+  const historyQuery = useQuery<{ items: SsoPolicyHistoryEntry[] }>({
+    queryKey: ["ssoPolicyHistory", orgId],
+    queryFn: async () => {
+      const res = await fetch(`/api/organisations/${orgId}/sso-policy/history`, {
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Failed to load SSO policy history");
       return res.json();
     },
     enabled: isAdmin,
@@ -62,6 +148,8 @@ function SsoPolicyCard({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) 
     onSuccess: (next) => {
       queryClient.setQueryData(["ssoPolicy", orgId], next);
       setDraft(next);
+      // Refresh the timeline so the change just made shows up immediately.
+      queryClient.invalidateQueries({ queryKey: ["ssoPolicyHistory", orgId] });
       toast({ title: "Sign-in & SSO policy updated" });
     },
     onError: (e: unknown) => {
@@ -210,6 +298,60 @@ function SsoPolicyCard({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) 
             <p className="text-sm text-destructive-foreground">{validationError}</p>
           </div>
         )}
+
+        {/* Change history — answers "why is everyone suddenly restricted?"
+            without forcing the admin to leave Settings for the audit log. */}
+        <div className="space-y-2 pt-4 border-t border-border" data-testid="sso-policy-history">
+          <div className="flex items-center gap-2">
+            <History className="w-3.5 h-3.5 text-muted-foreground" />
+            <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+              History
+            </h3>
+          </div>
+          {historyQuery.isLoading ? (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+              <Loader2 className="w-3 h-3 animate-spin" /> Loading history…
+            </div>
+          ) : historyQuery.isError ? (
+            <p className="text-xs text-destructive">Could not load history.</p>
+          ) : (historyQuery.data?.items?.length ?? 0) === 0 ? (
+            <p className="text-xs text-muted-foreground">
+              No org-wide sign-in policy changes recorded yet.
+            </p>
+          ) : (
+            <ul className="space-y-2 max-h-56 overflow-y-auto pr-1">
+              {historyQuery.data!.items.map((entry) => {
+                const lines = diffSsoPolicy(entry);
+                const when = (() => {
+                  try {
+                    return format(new Date(entry.createdAt), "PPpp");
+                  } catch {
+                    return entry.createdAt;
+                  }
+                })();
+                return (
+                  <li
+                    key={entry.id}
+                    className="rounded-md border border-border bg-secondary/20 px-3 py-2 text-xs space-y-1"
+                    data-testid={`sso-policy-history-entry-${entry.id}`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium text-foreground truncate">
+                        {describeSsoActor(entry)}
+                      </span>
+                      <time className="text-muted-foreground whitespace-nowrap">{when}</time>
+                    </div>
+                    <ul className="text-muted-foreground space-y-0.5">
+                      {lines.map((line, i) => (
+                        <li key={i}>{line}</li>
+                      ))}
+                    </ul>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
 
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="outline" disabled={!dirty || mutate.isPending} onClick={onReset}>
