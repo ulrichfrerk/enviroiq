@@ -9,7 +9,7 @@ import {
   organisationsTable,
   ssoIdentitiesTable,
 } from "@workspace/db";
-import { eq, and, gt, isNull } from "drizzle-orm";
+import { eq, and, gt, isNull, lt } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
 import { randomBytes, createHash } from "node:crypto";
 import {
@@ -72,19 +72,20 @@ function regenerateSession(req: import("express").Request): Promise<void> {
   });
 }
 
-async function pruneExpiredChallenges(): Promise<void> {
-  try {
-    await db.delete(webAuthnChallengesTable).where(
-      // Drizzle: lt would be cleaner; using gt-not for portability
-      // We delete rows where expiresAt < now()
-      // Using sql template would be safer but eq/gt on timestamp suffices
-      // — we just delete with raw expression below.
-      // Simpler: leave pruning to a background job; here we no-op safely.
-      eq(webAuthnChallengesTable.id, ""),
-    );
-  } catch {
-    /* ignore */
-  }
+/**
+ * Delete WebAuthn challenge rows whose `expiresAt` is in the past. Successful
+ * registration / authentication paths already remove the specific row they
+ * used, but cancelled flows, network drops, and abandoned attempts leave rows
+ * behind. Without this prune the table grows unboundedly.
+ *
+ * Called at server boot and on a periodic schedule (see lib/scheduler.ts).
+ */
+export async function pruneExpiredChallenges(): Promise<number> {
+  const deleted = await db
+    .delete(webAuthnChallengesTable)
+    .where(lt(webAuthnChallengesTable.expiresAt, new Date()))
+    .returning({ id: webAuthnChallengesTable.id });
+  return deleted.length;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -870,8 +871,6 @@ router.delete("/sso/identities/:id", requireAuth, async (req, res) => {
   });
   res.json({ ok: true });
 });
-
-void pruneExpiredChallenges; // silence unused-var lint
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SSO (Native Google + Microsoft OIDC, Authorization Code + PKCE)

@@ -6,6 +6,7 @@ import { sqlRow, numCol } from "./sql-result.js";
 import { fetchAndStoreEm6Intensity, clearIntensityCache, pruneOldGridSnapshots } from "./em6.js";
 import { pruneExpiredDocumentArchives } from "./documentArchive.js";
 import { sendNotificationDigests } from "./notifications.js";
+import { pruneExpiredChallenges } from "../routes/auth.js";
 
 interface OrgMetrics {
   fleetCo2eKg: number;
@@ -96,9 +97,13 @@ let em6Handle: ReturnType<typeof setInterval> | null = null;
 let pruneHandle: ReturnType<typeof setInterval> | null = null;
 let archivePruneHandle: ReturnType<typeof setInterval> | null = null;
 let notificationDigestHandle: ReturnType<typeof setInterval> | null = null;
+let webauthnChallengePruneHandle: ReturnType<typeof setInterval> | null = null;
 const REFRESH_INTERVAL_MS = 15 * 60 * 1000;     // 15 minutes
 const EM6_INTERVAL_MS = 30 * 60 * 1000;          // 30 minutes — matches em6 trading period
 const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;   // 24 hours
+// WebAuthn challenges have a 5-minute TTL — prune every 10 minutes so the
+// table never holds more than ~one prune cycle's worth of dead rows.
+const WEBAUTHN_PRUNE_INTERVAL_MS = 10 * 60 * 1000;
 
 export function startScheduler(): void {
   if (schedulerHandle) return;
@@ -181,6 +186,22 @@ export function startScheduler(): void {
   void digestTick();
   notificationDigestHandle = setInterval(() => { void digestTick(); }, 60 * 60 * 1000);
   logger.info("Notification daily digest scheduler started (per-org local 8am)");
+
+  // WebAuthn challenge prune — clears rows past their `expiresAt` so cancelled
+  // / abandoned passkey flows don't accumulate forever.
+  const runChallengePrune = async () => {
+    try {
+      const deleted = await pruneExpiredChallenges();
+      if (deleted > 0) {
+        logger.info({ deleted }, "Pruned expired WebAuthn challenges");
+      }
+    } catch (err) {
+      logger.warn({ err }, "WebAuthn challenge prune failed");
+    }
+  };
+  void runChallengePrune();
+  webauthnChallengePruneHandle = setInterval(() => { void runChallengePrune(); }, WEBAUTHN_PRUNE_INTERVAL_MS);
+  logger.info({ intervalMs: WEBAUTHN_PRUNE_INTERVAL_MS }, "WebAuthn challenge prune job scheduled");
 }
 
 export function stopScheduler(): void {
@@ -203,6 +224,10 @@ export function stopScheduler(): void {
   if (notificationDigestHandle) {
     clearInterval(notificationDigestHandle);
     notificationDigestHandle = null;
+  }
+  if (webauthnChallengePruneHandle) {
+    clearInterval(webauthnChallengePruneHandle);
+    webauthnChallengePruneHandle = null;
   }
   logger.info("Schedulers stopped");
 }
