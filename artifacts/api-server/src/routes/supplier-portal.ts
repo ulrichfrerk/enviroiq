@@ -6,6 +6,7 @@ import { and, desc, eq, gt } from "drizzle-orm";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { sendSupplierPortalMagicLink } from "../lib/mailer.js";
+import { logAudit } from "../lib/audit.js";
 
 const router = Router();
 
@@ -36,6 +37,15 @@ router.post("/request-link", async (req, res) => {
     // Privacy: don't leak whether email exists in any audit.
     const exists = await db.query.supplierAuditsTable.findFirst({ where: eq(supplierAuditsTable.recipientEmail, email) });
     if (!exists) {
+      // Audit the unknown-email attempt so probing the supplier portal is
+      // visible in the audit log without leaking enumeration to the caller.
+      await logAudit({
+        req,
+        action: "auth.supplier_portal_magic_link.request.unknown",
+        outcome: "failure",
+        userEmail: email,
+        details: { email },
+      });
       res.json({ ok: true, devMode: false });
       return;
     }
@@ -58,20 +68,45 @@ router.post("/request-link", async (req, res) => {
       if (result.devMode) devUrl = url;
     } catch (err) {
       req.log.error({ err }, "Portal magic link send failed");
+      await logAudit({
+        req,
+        action: "auth.supplier_portal_magic_link.request",
+        outcome: "failure",
+        userEmail: email,
+        details: { reason: "mailer_failed" },
+      });
       // Privacy: don't tell the caller anything is wrong. Don't leak the URL.
       res.status(500).json({ error: "Could not send link, please try again later" });
       return;
     }
+    await logAudit({
+      req,
+      action: "auth.supplier_portal_magic_link.request",
+      outcome: "success",
+      userEmail: email,
+      details: { devMode },
+    });
     res.json({ ok: true, devMode, url: devUrl });
   } catch (err) { req.log.error({ err }); res.status(500).json({ error: "Internal Server Error" }); }
 });
 
 // GET /portal/verify?token=...&email=... — validate, set cookie, redirect to portal
 router.get("/verify", async (req, res) => {
+  const base = appBase();
   try {
     const token = String(req.query.token || "");
     const email = String(req.query.email || "").toLowerCase().trim();
-    if (!token || !email) { res.status(400).send("Invalid link"); return; }
+    if (!token || !email) {
+      await logAudit({
+        req,
+        action: "auth.supplier_portal_magic_link.verify",
+        outcome: "failure",
+        userEmail: email || undefined,
+        details: { reason: "invalid_link" },
+      });
+      res.redirect(`${base}/portal/login?error=invalid_link`);
+      return;
+    }
     const session = await db.query.supplierPortalSessionsTable.findFirst({
       where: and(
         eq(supplierPortalSessionsTable.email, email),
@@ -79,7 +114,17 @@ router.get("/verify", async (req, res) => {
         gt(supplierPortalSessionsTable.expiresAt, new Date()),
       ),
     });
-    if (!session) { res.status(401).send("Link expired or invalid"); return; }
+    if (!session) {
+      await logAudit({
+        req,
+        action: "auth.supplier_portal_magic_link.verify",
+        outcome: "failure",
+        userEmail: email,
+        details: { reason: "invalid_or_expired" },
+      });
+      res.redirect(`${base}/portal/login?error=expired`);
+      return;
+    }
 
     // Roll a long-lived cookie token so the magic-link token isn't reusable.
     const cookieSecret = randomBytes(32).toString("base64url");
@@ -100,8 +145,17 @@ router.get("/verify", async (req, res) => {
       maxAge: SESSION_TTL_DAYS * 86400_000,
       path: "/",
     });
-    res.redirect(`${appBase()}/portal`);
-  } catch (err) { req.log.error({ err }); res.status(500).send("Server error"); }
+    await logAudit({
+      req,
+      action: "auth.supplier_portal_magic_link.verify",
+      outcome: "success",
+      userEmail: email,
+    });
+    res.redirect(`${base}/portal`);
+  } catch (err) {
+    req.log.error({ err });
+    res.redirect(`${base}/portal/login?error=server_error`);
+  }
 });
 
 async function requireSupplier(req: any, res: any, next: any) {
