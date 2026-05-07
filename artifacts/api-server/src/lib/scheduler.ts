@@ -7,6 +7,10 @@ import { fetchAndStoreEm6Intensity, clearIntensityCache, pruneOldGridSnapshots }
 import { pruneExpiredDocumentArchives } from "./documentArchive.js";
 import { sendNotificationDigests } from "./notifications.js";
 import { pruneExpiredChallenges } from "../routes/auth.js";
+import {
+  startStaleSignInDigestScheduler,
+  stopStaleSignInDigestScheduler,
+} from "./stale-signin-scanner.js";
 
 interface OrgMetrics {
   fleetCo2eKg: number;
@@ -202,6 +206,9 @@ export function startScheduler(): void {
   void runChallengePrune();
   webauthnChallengePruneHandle = setInterval(() => { void runChallengePrune(); }, WEBAUTHN_PRUNE_INTERVAL_MS);
   logger.info({ intervalMs: WEBAUTHN_PRUNE_INTERVAL_MS }, "WebAuthn challenge prune job scheduled");
+
+  // Stale sign-in methods digest — daily tick, monthly per-user dedupe.
+  startStaleSignInDigestScheduler();
 }
 
 export function stopScheduler(): void {
@@ -229,6 +236,7 @@ export function stopScheduler(): void {
     clearInterval(webauthnChallengePruneHandle);
     webauthnChallengePruneHandle = null;
   }
+  stopStaleSignInDigestScheduler();
   logger.info("Schedulers stopped");
 }
 

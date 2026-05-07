@@ -405,6 +405,107 @@ const supplierPortalHtml = (magicUrl: string) => `<!DOCTYPE html>
   </div>
 </body></html>`;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Stale sign-in methods digest
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface StaleSignInMethodItem {
+  /** Human-readable label, e.g. "Passkey: MacBook Pro" or "Google account user@example.com". */
+  label: string;
+  /** "Last used Mar 14, 2026" / "Never used". */
+  lastUsedLabel: string;
+  /** Whole days since last use (or since enrolment if never used). */
+  ageDays: number;
+}
+
+const staleSignInDigestHtml = (
+  recipientName: string,
+  items: StaleSignInMethodItem[],
+  accountUrl: string,
+) => {
+  const rows = items
+    .map(
+      (it) => `
+      <tr>
+        <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#111827;font-size:14px;">${it.label}</td>
+        <td style="padding:10px 12px;border-bottom:1px solid #e5e7eb;color:#6b7280;font-size:13px;">${it.lastUsedLabel} (${it.ageDays} days ago)</td>
+      </tr>`,
+    )
+    .join("");
+  return `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Stale sign-in methods on your EnviroIQ account</title></head>
+<body style="font-family:system-ui,sans-serif;background:#f9fafb;margin:0;padding:40px 20px;">
+  <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:12px;padding:40px;border:1px solid #e5e7eb;">
+    <div style="margin-bottom:24px;">
+      <span style="color:#16a34a;font-weight:700;font-size:20px;">EnviroIQ</span>
+    </div>
+    <h1 style="font-size:20px;font-weight:700;color:#111827;margin:0 0 12px;">You have ${items.length} sign-in method${items.length === 1 ? "" : "s"} you haven't used recently</h1>
+    <p style="color:#374151;margin:0 0 16px;font-size:14px;">Hi ${recipientName},</p>
+    <p style="color:#374151;margin:0 0 20px;font-size:14px;line-height:1.6;">As part of keeping your account secure, we flag passkeys and linked single-sign-on accounts that haven't been used in 90 days or more. If you don't recognise one — or you simply don't need it any more — remove it from your Account page.</p>
+    <table style="width:100%;border-collapse:collapse;margin:0 0 24px;">
+      <thead>
+        <tr>
+          <th style="padding:10px 12px;border-bottom:2px solid #e5e7eb;color:#6b7280;font-size:12px;text-align:left;text-transform:uppercase;letter-spacing:0.04em;">Sign-in method</th>
+          <th style="padding:10px 12px;border-bottom:2px solid #e5e7eb;color:#6b7280;font-size:12px;text-align:left;text-transform:uppercase;letter-spacing:0.04em;">Last used</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <a href="${accountUrl}" style="display:inline-block;background:#16a34a;color:#fff;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:600;font-size:15px;">Review &amp; remove →</a>
+    <p style="color:#9ca3af;margin-top:32px;font-size:12px;">You're receiving this because at least one passkey or linked account on your EnviroIQ profile hasn't been used in over 90 days. We send this digest at most once per month.</p>
+  </div>
+</body>
+</html>`;
+};
+
+/**
+ * Sends a "stale sign-in methods" digest to a single user. Lists every
+ * passkey / SSO identity that has been unused for 90+ days, and links to
+ * the Account page so they can prune them. Never throws — returns a
+ * structured result for the scheduler to log + audit.
+ */
+export async function sendStaleSignInMethodsEmail(
+  to: string,
+  recipientName: string,
+  items: StaleSignInMethodItem[],
+  accountUrl: string,
+): Promise<{ sent: boolean; devMode: boolean; messageId?: string }> {
+  if (items.length === 0) return { sent: false, devMode: false };
+  const resend = await getResendClient();
+  const summary = items
+    .map((it) => `• ${it.label} — ${it.lastUsedLabel} (${it.ageDays} days ago)`)
+    .join("\n");
+  const subject = `Review ${items.length} unused sign-in method${items.length === 1 ? "" : "s"} on your EnviroIQ account`;
+  if (resend) {
+    try {
+      const { data, error } = await resend.client.emails.send({
+        from: resend.from,
+        to,
+        subject,
+        html: staleSignInDigestHtml(recipientName, items, accountUrl),
+        text: `Hi ${recipientName},\n\nThe following sign-in methods on your EnviroIQ account haven't been used in 90 days or more:\n\n${summary}\n\nIf you don't need them, remove them from your Account page:\n${accountUrl}\n\nWe send this digest at most once per month.`,
+      });
+      if (error) {
+        logger.error({ error, to }, "Resend failed to send stale sign-in digest");
+        return { sent: false, devMode: false };
+      }
+      logger.info({ to, messageId: data?.id, count: items.length }, "Stale sign-in digest sent via Resend");
+      return { sent: true, devMode: false, messageId: data?.id };
+    } catch (err) {
+      logger.error({ err, to }, "Resend threw while sending stale sign-in digest");
+      return { sent: false, devMode: false };
+    }
+  }
+  if (process.env.NODE_ENV !== "production") {
+    // eslint-disable-next-line no-console
+    console.log(`\n[STALE SIGN-IN DIGEST — RESEND NOT CONFIGURED]\n  To: ${to}\n  Subject: ${subject}\n  Body:\n${summary}\n  Account URL: ${accountUrl}\n`);
+    return { sent: false, devMode: true };
+  }
+  logger.error({ to }, "Resend not configured in production — stale sign-in digest dropped");
+  return { sent: false, devMode: false };
+}
+
 export async function sendSupplierPortalMagicLink(
   to: string,
   magicUrl: string,
