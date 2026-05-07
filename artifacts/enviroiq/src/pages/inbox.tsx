@@ -84,7 +84,7 @@ function statusFor(d: InboundDetails, outcome: string): {
   return {
     label: "No attachments processed",
     tone: "warn",
-    detail: "Email arrived but no attachment content could be retrieved (Resend Inbound is metadata-only).",
+    detail: "Email arrived but no usable attachments were found. If you expected a PDF bill, re-send with the file attached directly (not forwarded inline).",
   };
 }
 

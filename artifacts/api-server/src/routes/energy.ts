@@ -678,22 +678,28 @@ energyEmailWebhookRouter.post("/inbound-email", async (req, res) => {
 
     interface ResendAttachmentMeta {
       id: string;
-      filename: string;
+      filename?: string | null;
       content_type: string;
+      content_id?: string | null;
+      content_disposition?: string | null;
       size: number;
       download_url: string;
+      expires_at?: string;
     }
     interface ResendEmailBody {
       text?: string;
       html?: string;
     }
 
-    // Fetch attachment list and email body in parallel
+    // Fetch attachment list and email body in parallel.
+    // Endpoint paths per https://resend.com/docs/api-reference/emails/list-received-email-attachments
+    // (the URL segment is `inbound`, NOT `received` — the docs nav says
+    // "Received" but the live REST path is `/emails/inbound/{id}/...`).
     const [attachResp, emailResp] = await Promise.all([
-      fetch(`https://api.resend.com/emails/received/${emailId}/attachments`, {
+      fetch(`https://api.resend.com/emails/inbound/${emailId}/attachments`, {
         headers: { Authorization: `Bearer ${resendApiKey}` },
       }),
-      fetch(`https://api.resend.com/emails/received/${emailId}`, {
+      fetch(`https://api.resend.com/emails/inbound/${emailId}`, {
         headers: { Authorization: `Bearer ${resendApiKey}` },
       }),
     ]);
@@ -797,7 +803,7 @@ energyEmailWebhookRouter.post("/inbound-email", async (req, res) => {
           sourceType: "energy_bill_email",
           sourceId: readingId,
           buffer: pdfBytes,
-          filename: attachment.filename,
+          filename: attachment.filename ?? `attachment-${attachment.id}.pdf`,
           contentType: attachment.content_type || "application/pdf",
           senderEmail: bareEmail(from),
           notes: subject ? `Email subject: ${subject}` : null,
