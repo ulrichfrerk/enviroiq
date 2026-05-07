@@ -1,6 +1,6 @@
 import { Router } from "express";
-import { db, usersTable, magicLinksTable, organisationsTable, auditLogsTable } from "@workspace/db";
-import { eq, and, count, desc } from "drizzle-orm";
+import { db, usersTable, magicLinksTable, organisationsTable, auditLogsTable, passkeysTable, ssoIdentitiesTable } from "@workspace/db";
+import { eq, and, count, desc, inArray } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
 import { randomBytes, createHash } from "node:crypto";
 import { requireAuth, requireOrgAccess, requireRole } from "../lib/auth.js";
@@ -41,6 +41,14 @@ function resolveAllowedRoles(callerRole: string | undefined): OrgRole[] {
 }
 
 // GET /organisations/:orgId/users
+//
+// In addition to the user records themselves, each row is enriched with:
+//   - signInMethodCount   — total enrolled methods (passkeys + SSO identities)
+//   - staleSignInMethods  — methods unused for 90+ days (or never used and
+//                           enrolled 90+ days ago — same rule as the Account
+//                           page, see STALE_THRESHOLD_DAYS in account.tsx).
+// This lets the admin Users table flag dormant sign-in methods at a glance
+// without an extra round-trip per row.
 router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
   try {
     const orgId = req.params.orgId as string;
@@ -51,7 +59,96 @@ router.get("/", requireAuth, requireOrgAccess, async (req, res) => {
       .select({ total: count() })
       .from(usersTable)
       .where(eq(usersTable.organisationId, orgId));
-    res.json({ items: users, total });
+
+    const userIds = users.map((u) => u.id);
+    const STALE_THRESHOLD_DAYS = 90;
+    // Calendar-day comparison (not raw 24h windows) so the stale set on this
+    // admin view exactly matches what the user sees on the Account page —
+    // see daysSince()/isStale() in artifacts/enviroiq/src/pages/account.tsx.
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const startOfTodayMs = startOfToday.getTime();
+    const isStale = (ref: Date): boolean => {
+      const startOfRef = new Date(ref);
+      startOfRef.setHours(0, 0, 0, 0);
+      const days = Math.round((startOfTodayMs - startOfRef.getTime()) / (24 * 60 * 60 * 1000));
+      return days >= STALE_THRESHOLD_DAYS;
+    };
+
+    type StaleMethod = {
+      kind: "passkey" | "google_sso" | "microsoft_sso";
+      label: string;
+      lastUsedAt: string | null;
+    };
+    const counts = new Map<string, number>();
+    const stale = new Map<string, StaleMethod[]>();
+
+    if (userIds.length > 0) {
+      const passkeys = await db
+        .select({
+          userId: passkeysTable.userId,
+          label: passkeysTable.label,
+          deviceType: passkeysTable.deviceType,
+          createdAt: passkeysTable.createdAt,
+          lastUsedAt: passkeysTable.lastUsedAt,
+        })
+        .from(passkeysTable)
+        .where(inArray(passkeysTable.userId, userIds));
+
+      const ssoIdents = await db
+        .select({
+          userId: ssoIdentitiesTable.userId,
+          provider: ssoIdentitiesTable.provider,
+          providerEmail: ssoIdentitiesTable.providerEmail,
+          linkedAt: ssoIdentitiesTable.linkedAt,
+          lastUsedAt: ssoIdentitiesTable.lastUsedAt,
+        })
+        .from(ssoIdentitiesTable)
+        .where(inArray(ssoIdentitiesTable.userId, userIds));
+
+      for (const pk of passkeys) {
+        counts.set(pk.userId, (counts.get(pk.userId) ?? 0) + 1);
+        // Reference timestamp for "stale": last-used if known, else enrolment.
+        // Mirrors isStale() on the Account page so admins and users see the
+        // same set of stale methods.
+        if (isStale(pk.lastUsedAt ?? pk.createdAt)) {
+          // Friendly label fallback: user-supplied label → device-type heuristic
+          // → generic "Passkey". Matches what users see on the Account page.
+          const fallback =
+            pk.deviceType === "multiDevice" ? "Synced passkey" : pk.deviceType ? "Device passkey" : "Passkey";
+          const list = stale.get(pk.userId) ?? [];
+          list.push({
+            kind: "passkey",
+            label: pk.label?.trim() || fallback,
+            lastUsedAt: pk.lastUsedAt ? pk.lastUsedAt.toISOString() : null,
+          });
+          stale.set(pk.userId, list);
+        }
+      }
+
+      for (const id of ssoIdents) {
+        counts.set(id.userId, (counts.get(id.userId) ?? 0) + 1);
+        // ssoIdentities.lastUsedAt is NOT NULL (defaults to now() at link time)
+        // so a freshly-linked identity isn't flagged immediately.
+        if (isStale(id.lastUsedAt)) {
+          const list = stale.get(id.userId) ?? [];
+          list.push({
+            kind: id.provider === "google" ? "google_sso" : "microsoft_sso",
+            label: id.provider === "google" ? "Google SSO" : "Microsoft SSO",
+            lastUsedAt: id.lastUsedAt.toISOString(),
+          });
+          stale.set(id.userId, list);
+        }
+      }
+    }
+
+    const items = users.map((u) => ({
+      ...u,
+      signInMethodCount: counts.get(u.id) ?? 0,
+      staleSignInMethods: stale.get(u.id) ?? [],
+    }));
+
+    res.json({ items, total });
   } catch (err) {
     req.log.error({ err }, "List users failed");
     res.status(500).json({ error: "Internal Server Error", message: "Failed to list users" });

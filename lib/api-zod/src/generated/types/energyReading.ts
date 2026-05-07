@@ -5,6 +5,7 @@
  * EnviroIQ ESG Platform API
  * OpenAPI spec version: 0.1.0
  */
+import type { EnergyReadingEmissionMethod } from "./energyReadingEmissionMethod";
 import type { EnergyReadingSource } from "./energyReadingSource";
 import type { EnergyReadingUtilityType } from "./energyReadingUtilityType";
 
@@ -20,6 +21,14 @@ export interface EnergyReading {
   costAmount?: number;
   costCurrency?: string;
   co2eKg?: number;
+  /** Electricity emission factor used for this reading (kg CO₂e/kWh) */
+  gridIntensityKgCo2PerKwh?: number;
+  /** GHG Protocol method used to determine the emission factor */
+  emissionMethod?: EnergyReadingEmissionMethod;
+  /** Human-readable description of the emission factor calculation */
+  emissionNote?: string;
+  /** Percentage of supplier electricity from renewable sources (0-100) */
+  supplierRenewablePct?: number;
   source: EnergyReadingSource;
   originalFileName?: string;
   createdAt: Date;

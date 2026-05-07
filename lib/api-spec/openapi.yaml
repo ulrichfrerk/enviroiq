@@ -1606,6 +1606,33 @@ components:
         createdAt:
           type: string
           format: date-time
+        signInMethodCount:
+          type: integer
+          description: >
+            Number of sign-in methods enrolled for this user (passkeys plus
+            linked SSO identities). Surfaced on the admin Users table so admins
+            can spot users with no enrolled methods at a glance.
+        staleSignInMethods:
+          type: array
+          description: >
+            Sign-in methods that have not been used in 90+ days (or that have
+            never been used and were enrolled 90+ days ago). Empty when the
+            user has no stale methods.
+          items:
+            type: object
+            properties:
+              kind:
+                type: string
+                enum: [passkey, google_sso, microsoft_sso]
+              label:
+                type: string
+              lastUsedAt:
+                type: string
+                format: date-time
+                nullable: true
+            required:
+              - kind
+              - label
       required:
         - id
         - email

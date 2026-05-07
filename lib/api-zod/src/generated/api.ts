@@ -288,6 +288,24 @@ export const ListUsersResponse = zod.object({
       isActive: zod.boolean(),
       lastLoginAt: zod.coerce.date().optional(),
       createdAt: zod.coerce.date(),
+      signInMethodCount: zod
+        .number()
+        .optional()
+        .describe(
+          "Number of sign-in methods enrolled for this user (passkeys plus linked SSO identities). Surfaced on the admin Users table so admins can spot users with no enrolled methods at a glance.\n",
+        ),
+      staleSignInMethods: zod
+        .array(
+          zod.object({
+            kind: zod.enum(["passkey", "google_sso", "microsoft_sso"]),
+            label: zod.string(),
+            lastUsedAt: zod.coerce.date().nullish(),
+          }),
+        )
+        .optional()
+        .describe(
+          "Sign-in methods that have not been used in 90+ days (or that have never been used and were enrolled 90+ days ago). Empty when the user has no stale methods.\n",
+        ),
     }),
   ),
   total: zod.number(),
@@ -323,6 +341,24 @@ export const GetUserResponse = zod.object({
   isActive: zod.boolean(),
   lastLoginAt: zod.coerce.date().optional(),
   createdAt: zod.coerce.date(),
+  signInMethodCount: zod
+    .number()
+    .optional()
+    .describe(
+      "Number of sign-in methods enrolled for this user (passkeys plus linked SSO identities). Surfaced on the admin Users table so admins can spot users with no enrolled methods at a glance.\n",
+    ),
+  staleSignInMethods: zod
+    .array(
+      zod.object({
+        kind: zod.enum(["passkey", "google_sso", "microsoft_sso"]),
+        label: zod.string(),
+        lastUsedAt: zod.coerce.date().nullish(),
+      }),
+    )
+    .optional()
+    .describe(
+      "Sign-in methods that have not been used in 90+ days (or that have never been used and were enrolled 90+ days ago). Empty when the user has no stale methods.\n",
+    ),
 });
 
 /**
@@ -348,6 +384,24 @@ export const UpdateUserResponse = zod.object({
   isActive: zod.boolean(),
   lastLoginAt: zod.coerce.date().optional(),
   createdAt: zod.coerce.date(),
+  signInMethodCount: zod
+    .number()
+    .optional()
+    .describe(
+      "Number of sign-in methods enrolled for this user (passkeys plus linked SSO identities). Surfaced on the admin Users table so admins can spot users with no enrolled methods at a glance.\n",
+    ),
+  staleSignInMethods: zod
+    .array(
+      zod.object({
+        kind: zod.enum(["passkey", "google_sso", "microsoft_sso"]),
+        label: zod.string(),
+        lastUsedAt: zod.coerce.date().nullish(),
+      }),
+    )
+    .optional()
+    .describe(
+      "Sign-in methods that have not been used in 90+ days (or that have never been used and were enrolled 90+ days ago). Empty when the user has no stale methods.\n",
+    ),
 });
 
 /**
@@ -657,6 +711,34 @@ export const ListEnergyReadingsResponse = zod.object({
       costAmount: zod.number().optional(),
       costCurrency: zod.string().optional(),
       co2eKg: zod.number().optional(),
+      gridIntensityKgCo2PerKwh: zod
+        .number()
+        .optional()
+        .describe(
+          "Electricity emission factor used for this reading (kg CO₂e\/kWh)",
+        ),
+      emissionMethod: zod
+        .enum([
+          "location_based_annual_avg",
+          "location_based_live_em6",
+          "location_based_default",
+          "market_based_100pct_renewable",
+          "market_based_partial_renewable",
+        ])
+        .optional()
+        .describe("GHG Protocol method used to determine the emission factor"),
+      emissionNote: zod
+        .string()
+        .optional()
+        .describe(
+          "Human-readable description of the emission factor calculation",
+        ),
+      supplierRenewablePct: zod
+        .number()
+        .optional()
+        .describe(
+          "Percentage of supplier electricity from renewable sources (0-100)",
+        ),
       source: zod.enum(["manual", "pdf_upload", "email_inbound"]),
       originalFileName: zod.string().optional(),
       createdAt: zod.coerce.date(),

@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { UserRole } from "./userRole";
+import type { UserStaleSignInMethodsItem } from "./userStaleSignInMethodsItem";
 
 export interface User {
   id: string;
@@ -16,4 +17,10 @@ export interface User {
   isActive: boolean;
   lastLoginAt?: Date;
   createdAt: Date;
+  /** Number of sign-in methods enrolled for this user (passkeys plus linked SSO identities). Surfaced on the admin Users table so admins can spot users with no enrolled methods at a glance.
+   */
+  signInMethodCount?: number;
+  /** Sign-in methods that have not been used in 90+ days (or that have never been used and were enrolled 90+ days ago). Empty when the user has no stale methods.
+   */
+  staleSignInMethods?: UserStaleSignInMethodsItem[];
 }

@@ -5,7 +5,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Users as UsersIcon, UserPlus, Trash2, Shield, Loader2, Lock, AlertCircle, Eye, X, CheckCircle2, History } from "lucide-react";
+import { Users as UsersIcon, UserPlus, Trash2, Shield, Loader2, Lock, AlertCircle, Eye, X, CheckCircle2, History, KeyRound, AlertTriangle } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { format } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
@@ -968,6 +969,7 @@ export default function Users() {
                 <th className="px-6 py-4">User</th>
                 <th className="px-6 py-4">Role</th>
                 <th className="px-6 py-4">Status</th>
+                <th className="px-6 py-4">Sign-in methods</th>
                 <th className="px-6 py-4">Last Login</th>
                 <th className="px-6 py-4 text-right">Actions</th>
               </tr>
@@ -1012,6 +1014,67 @@ export default function Users() {
                     <span className={`px-2.5 py-1 rounded-full text-xs ${user.isActive ? 'bg-emerald-500/10 text-emerald-400' : 'bg-secondary text-muted-foreground'}`}>
                       {user.isActive ? 'Active' : 'Invited'}
                     </span>
+                  </td>
+                  <td className="px-6 py-4">
+                    {(() => {
+                      const count = user.signInMethodCount ?? 0;
+                      const stale = user.staleSignInMethods ?? [];
+                      if (count === 0) {
+                        return (
+                          <span
+                            className="text-xs text-muted-foreground"
+                            data-testid={`sign-in-methods-${user.id}`}
+                          >
+                            No methods
+                          </span>
+                        );
+                      }
+                      return (
+                        <div
+                          className="flex items-center gap-2"
+                          data-testid={`sign-in-methods-${user.id}`}
+                        >
+                          <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                            <KeyRound className="w-3.5 h-3.5" />
+                            {count} method{count === 1 ? "" : "s"}
+                          </span>
+                          {stale.length > 0 && (
+                            <TooltipProvider delayDuration={150}>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-500/10 text-amber-400 border border-amber-500/30 cursor-help"
+                                    data-testid={`sign-in-stale-badge-${user.id}`}
+                                  >
+                                    <AlertTriangle className="w-3 h-3" />
+                                    {stale.length} stale
+                                  </span>
+                                </TooltipTrigger>
+                                <TooltipContent
+                                  side="top"
+                                  className="max-w-xs text-xs"
+                                  data-testid={`sign-in-stale-tooltip-${user.id}`}
+                                >
+                                  <p className="font-medium mb-1">
+                                    Unused for 90+ days
+                                  </p>
+                                  <ul className="space-y-0.5">
+                                    {stale.map((m, i) => (
+                                      <li key={i}>
+                                        {m.label}
+                                        {m.lastUsedAt
+                                          ? ` — last used ${format(new Date(m.lastUsedAt), "MMM d, yyyy")}`
+                                          : " — never used"}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </td>
                   <td className="px-6 py-4 text-muted-foreground">
                     {user.lastLoginAt ? format(new Date(user.lastLoginAt), "MMM d, yyyy") : "Never"}

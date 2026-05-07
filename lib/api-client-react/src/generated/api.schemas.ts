@@ -166,6 +166,21 @@ export const UserRole = {
   org_viewer: "org_viewer",
 } as const;
 
+export type UserStaleSignInMethodsItemKind =
+  (typeof UserStaleSignInMethodsItemKind)[keyof typeof UserStaleSignInMethodsItemKind];
+
+export const UserStaleSignInMethodsItemKind = {
+  passkey: "passkey",
+  google_sso: "google_sso",
+  microsoft_sso: "microsoft_sso",
+} as const;
+
+export type UserStaleSignInMethodsItem = {
+  kind: UserStaleSignInMethodsItemKind;
+  label: string;
+  lastUsedAt?: string | null;
+};
+
 export interface User {
   id: string;
   email: string;
@@ -175,6 +190,12 @@ export interface User {
   isActive: boolean;
   lastLoginAt?: string;
   createdAt: string;
+  /** Number of sign-in methods enrolled for this user (passkeys plus linked SSO identities). Surfaced on the admin Users table so admins can spot users with no enrolled methods at a glance.
+   */
+  signInMethodCount?: number;
+  /** Sign-in methods that have not been used in 90+ days (or that have never been used and were enrolled 90+ days ago). Empty when the user has no stale methods.
+   */
+  staleSignInMethods?: UserStaleSignInMethodsItem[];
 }
 
 export interface UserList {
@@ -417,15 +438,9 @@ export const EnergyReadingUtilityType = {
   other: "other",
 } as const;
 
-export type EnergyReadingSource =
-  (typeof EnergyReadingSource)[keyof typeof EnergyReadingSource];
-
-export const EnergyReadingSource = {
-  manual: "manual",
-  pdf_upload: "pdf_upload",
-  email_inbound: "email_inbound",
-} as const;
-
+/**
+ * GHG Protocol method used to determine the emission factor
+ */
 export type EnergyReadingEmissionMethod =
   (typeof EnergyReadingEmissionMethod)[keyof typeof EnergyReadingEmissionMethod];
 
@@ -435,6 +450,15 @@ export const EnergyReadingEmissionMethod = {
   location_based_default: "location_based_default",
   market_based_100pct_renewable: "market_based_100pct_renewable",
   market_based_partial_renewable: "market_based_partial_renewable",
+} as const;
+
+export type EnergyReadingSource =
+  (typeof EnergyReadingSource)[keyof typeof EnergyReadingSource];
+
+export const EnergyReadingSource = {
+  manual: "manual",
+  pdf_upload: "pdf_upload",
+  email_inbound: "email_inbound",
 } as const;
 
 export interface EnergyReading {
@@ -449,9 +473,13 @@ export interface EnergyReading {
   costAmount?: number;
   costCurrency?: string;
   co2eKg?: number;
+  /** Electricity emission factor used for this reading (kg CO₂e/kWh) */
   gridIntensityKgCo2PerKwh?: number;
+  /** GHG Protocol method used to determine the emission factor */
   emissionMethod?: EnergyReadingEmissionMethod;
+  /** Human-readable description of the emission factor calculation */
   emissionNote?: string;
+  /** Percentage of supplier electricity from renewable sources (0-100) */
   supplierRenewablePct?: number;
   source: EnergyReadingSource;
   originalFileName?: string;
@@ -889,16 +917,11 @@ export type GetOrganisationSummaryPeriod =
   (typeof GetOrganisationSummaryPeriod)[keyof typeof GetOrganisationSummaryPeriod];
 
 export const GetOrganisationSummaryPeriod = {
-  all: "all",
   day: "day",
   week: "week",
   month: "month",
   quarter: "quarter",
   year: "year",
-  "7d": "7d",
-  "30d": "30d",
-  "3m": "3m",
-  "12m": "12m",
 } as const;
 
 export type ListFleetEventsParams = {

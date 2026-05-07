@@ -32,7 +32,7 @@ let logSpy: ReturnType<typeof vi.spyOn>;
 let errorSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
-  originalExitCode = process.exitCode;
+  originalExitCode = process.exitCode ?? undefined;
   process.exitCode = 0;
   logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
