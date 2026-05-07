@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 
 vi.mock("@/hooks/use-auth", () => ({
   useAuth: () => ({
@@ -12,8 +13,10 @@ vi.mock("@/hooks/use-auth", () => ({
   }),
 }));
 
+const passkeySupportedMock = vi.fn(() => false);
+
 vi.mock("@/lib/webauthn", () => ({
-  isPasskeySupported: () => false,
+  isPasskeySupported: () => passkeySupportedMock(),
   signInWithPasskey: vi.fn(),
   PasskeyRestrictionError: class PasskeyRestrictionError extends Error {
     code: string;
@@ -32,6 +35,7 @@ vi.mock("wouter", () => ({
 }));
 
 import SignInPage from "../sign-in";
+import { signInWithPasskey, PasskeyRestrictionError } from "@/lib/webauthn";
 
 function setQuery(search: string) {
   const url = `http://localhost/sign-in${search}`;
@@ -43,6 +47,8 @@ describe("SignInPage restriction callout", () => {
 
   beforeEach(() => {
     setQuery("");
+    passkeySupportedMock.mockReturnValue(false);
+    vi.mocked(signInWithPasskey).mockReset();
   });
 
   afterEach(() => {
@@ -135,5 +141,82 @@ describe("SignInPage restriction callout", () => {
     expect(screen.getByTestId("text-method-hint")).toHaveTextContent(
       /Some sign-in methods may be disabled by your administrator\./,
     );
+  });
+
+  it("renders the restriction callout with 'your account' wording when signInWithPasskey throws PasskeyRestrictionError(source=user)", async () => {
+    passkeySupportedMock.mockReturnValue(true);
+    vi.mocked(signInWithPasskey).mockRejectedValueOnce(
+      new PasskeyRestrictionError(
+        "Sign-in method not available",
+        "passkey_method_not_allowed",
+        "user",
+      ),
+    );
+
+    render(<SignInPage />);
+    expect(
+      screen.queryByTestId("alert-method-restricted"),
+    ).not.toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(
+      screen.getByRole("button", { name: /sign in with a passkey/i }),
+    );
+
+    const callout = await screen.findByTestId("alert-method-restricted");
+    expect(callout).toHaveTextContent("Sign-in method not available");
+    expect(callout).toHaveTextContent(/your account/i);
+    expect(callout).not.toHaveTextContent(/your organisation/i);
+
+    // Restriction should NOT also surface in the small inline error banner.
+    expect(
+      screen.queryByText(/Passkey sign-in failed\./),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Passkey sign-in was cancelled\./),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders the restriction callout with 'your organisation' wording when signInWithPasskey throws PasskeyRestrictionError(source=org)", async () => {
+    passkeySupportedMock.mockReturnValue(true);
+    vi.mocked(signInWithPasskey).mockRejectedValueOnce(
+      new PasskeyRestrictionError(
+        "Sign-in method not available",
+        "passkey_method_not_allowed",
+        "org",
+      ),
+    );
+
+    render(<SignInPage />);
+    const user = userEvent.setup();
+    await user.click(
+      screen.getByRole("button", { name: /sign in with a passkey/i }),
+    );
+
+    const callout = await screen.findByTestId("alert-method-restricted");
+    expect(callout).toHaveTextContent(/your organisation/i);
+    expect(callout).not.toHaveTextContent(/your account/i);
+  });
+
+  it("routes user-cancelled passkey errors (NotAllowedError) to the small inline error banner, not the amber callout", async () => {
+    passkeySupportedMock.mockReturnValue(true);
+    const notAllowed = new Error("NotAllowedError: The request was cancelled by the user");
+    notAllowed.name = "NotAllowedError";
+    vi.mocked(signInWithPasskey).mockRejectedValueOnce(notAllowed);
+
+    render(<SignInPage />);
+    const user = userEvent.setup();
+    await user.click(
+      screen.getByRole("button", { name: /sign in with a passkey/i }),
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Passkey sign-in was cancelled\./),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByTestId("alert-method-restricted"),
+    ).not.toBeInTheDocument();
   });
 });
