@@ -605,21 +605,55 @@ energyEmailWebhookRouter.post("/inbound-email", async (req, res) => {
       { provider: "Samsara",         matches: (a) => /(^|@|\.)samsara\.com$/i.test(a) },
       { provider: "EROAD",           matches: (a) => /(^|@|\.)eroad\.(com|co\.nz|com\.au)$/i.test(a) },
     ];
-    const fleetProvider = fleetSenderRules.find((r) => r.matches(fromBare))?.provider;
+    let fleetProvider = fleetSenderRules.find((r) => r.matches(fromBare))?.provider;
+    let fleetMatchedBy: "sender" | "content" = "sender";
+
+    // ── Content-based fallback ────────────────────────────────────────────────
+    // Customers often *forward* the scheduled fleet report from their own
+    // mailbox (e.g. an exec forwards it from Outlook). The sender then becomes
+    // the human, not the provider, so the sender rules above miss it. Detect
+    // these by subject + attachment filename patterns and route them the same
+    // way — surface the "import manually" notification rather than silently
+    // falling into the energy-bill pipeline that produces zero readings.
+    if (!fleetProvider) {
+      const dataRec = data as Record<string, unknown>;
+      const inlineAtts = Array.isArray(dataRec.attachments) ? (dataRec.attachments as Array<Record<string, unknown>>) : [];
+      const filenames = inlineAtts
+        .map((a) => (typeof a.filename === "string" ? a.filename : (typeof a.name === "string" ? a.name : "")))
+        .filter(Boolean)
+        .join(" | ");
+      const haystack = `${subject}\n${filenames}`.toLowerCase();
+      const contentRules: Array<{ provider: string; pattern: RegExp }> = [
+        // Navman ships these report names verbatim:
+        //   "daily 'Trip Report Daily' report attached" + "Distance Trip ….xlsx"
+        //   "monthly 'State Mil(e)age to EnviroIQ' report attached" + "State Mileage ….pdf"
+        { provider: "Teletrac Navman", pattern: /\b(distance trip|trip report|state mil(e)?age|teletrac|navman)\b/i },
+        { provider: "Geotab",          pattern: /\bgeotab\b/i },
+        { provider: "Verizon Connect", pattern: /\bverizon connect\b/i },
+        { provider: "Samsara",         pattern: /\bsamsara\b/i },
+        { provider: "EROAD",           pattern: /\beroad\b/i },
+      ];
+      const contentMatch = contentRules.find((r) => r.pattern.test(haystack));
+      if (contentMatch) {
+        fleetProvider = contentMatch.provider;
+        fleetMatchedBy = "content";
+      }
+    }
+
     if (fleetProvider) {
       const auditId = await logAudit({
         req,
         action: "webhook.energy.inbound_email",
         outcome: "failure",
         organisationId: org.id,
-        details: { reason: "fleet_report_routed_to_energy", from, subject, emailId, fleetProvider },
+        details: { reason: "fleet_report_routed_to_energy", from, subject, emailId, fleetProvider, matchedBy: fleetMatchedBy },
       });
       void notify({
         organisationId: org.id,
         category: "webhook.energy.fleet_report_received",
         severity: "warn",
         title: `${fleetProvider} report received — please import manually`,
-        body: `An automatic ${fleetProvider} report ("${subject || "(no subject)"}") was emailed to your EnviroIQ inbox. ${fleetProvider} fleet reports can't be ingested through the energy-bill pipeline — please import the report under Fleet → Import to add it to your emissions data.`,
+        body: `${fleetMatchedBy === "content" ? "A forwarded" : "An automatic"} ${fleetProvider} report ("${subject || "(no subject)"}") arrived at your EnviroIQ inbox. ${fleetProvider} fleet reports can't be ingested through the energy-bill pipeline — please import the spreadsheet under Fleet → Import to add it to your emissions data.`,
         linkUrl: "/fleet",
         sourceAuditId: auditId,
         // Dedupe per-email so a Resend retry can't double-fire, but include

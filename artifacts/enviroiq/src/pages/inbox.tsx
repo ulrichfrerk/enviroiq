@@ -52,6 +52,13 @@ function statusFor(d: InboundDetails, outcome: string): {
   detail: string;
 } {
   if (outcome === "failure") {
+    if (d.reason === "fleet_report_routed_to_energy") {
+      return {
+        label: "Fleet report — import manually",
+        tone: "warn",
+        detail: "Recognised as a fleet/telematics report. Import the spreadsheet under Fleet → Import to add it to your emissions data.",
+      };
+    }
     return {
       label: "Rejected",
       tone: "fail",
