@@ -6,6 +6,7 @@ import {
   useListVehicles,
   useCreateVehicle,
   useDeleteVehicle,
+  useGetEnergyEmailAddress,
   CreateVehicleRequestFuelType,
   CreateVehicleRequestGpsProvider,
 } from "@workspace/api-client-react";
@@ -16,7 +17,7 @@ import { Progress } from "@/components/ui/progress";
 import {
   Car, Plus, Trash2, Loader2, Navigation, Server, Upload, Download,
   CheckCircle2, XCircle, Gauge, FileSpreadsheet, AlertTriangle, Search, Star,
-  ChevronLeft, ChevronRight,
+  ChevronLeft, ChevronRight, Mail, Copy,
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
@@ -418,6 +419,7 @@ export default function Fleet() {
   const kmFileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: vehicles, isLoading, refetch } = useListVehicles(orgId!, { query: { enabled: !!orgId } });
+  const { data: emailInfo } = useGetEnergyEmailAddress(orgId!, { query: { enabled: !!orgId } });
   const createVehicle = useCreateVehicle();
   const deleteVehicle = useDeleteVehicle();
   const { stats: vehicleStats, loadingStats } = useVehicleStats(orgId);
@@ -670,6 +672,98 @@ export default function Fleet() {
         </div>
 
         <div className="flex flex-wrap gap-2">
+
+          {/* ── Email Setup help ── */}
+          <Dialog>
+            <DialogTrigger asChild>
+              <Button variant="outline" className="gap-2"><Mail className="w-4 h-4" /> Email Setup</Button>
+            </DialogTrigger>
+            <DialogContent className="bg-card border-border sm:max-w-[640px] max-h-[90vh] flex flex-col overflow-hidden">
+              <DialogHeader><DialogTitle>Send Navman reports straight to EnviroIQ</DialogTitle></DialogHeader>
+              <div className="space-y-5 pt-2 overflow-y-auto pr-1 text-sm">
+
+                <div>
+                  <p className="text-muted-foreground">
+                    Schedule one Navman report and EnviroIQ will import your fleet kilometres automatically every month — no manual upload needed.
+                  </p>
+                </div>
+
+                {/* Inbound address */}
+                <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 space-y-2">
+                  <p className="text-xs font-semibold text-primary uppercase">Your inbound address</p>
+                  {emailInfo?.emailAddress ? (
+                    <div className="flex items-center gap-2">
+                      <code className="flex-1 px-3 py-2 rounded bg-background border border-border text-sm font-mono break-all">
+                        {emailInfo.emailAddress}
+                      </code>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="gap-1.5"
+                        onClick={() => {
+                          if (emailInfo?.emailAddress) {
+                            navigator.clipboard.writeText(emailInfo.emailAddress);
+                            toast({ title: "Copied", description: "Inbound email address copied to clipboard." });
+                          }
+                        }}
+                      >
+                        <Copy className="w-3.5 h-3.5" /> Copy
+                      </Button>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">Loading…</p>
+                  )}
+                  <p className="text-xs text-muted-foreground">
+                    Add this as a recipient on the scheduled report below. Power bill emails can also be sent here.
+                  </p>
+                </div>
+
+                {/* Which report */}
+                <div className="space-y-2">
+                  <p className="font-semibold text-foreground">Which report to schedule</p>
+                  <div className="rounded-lg border border-border bg-secondary/20 p-3 space-y-1">
+                    <p className="text-sm font-semibold">Distance Trip Report (.xlsx)</p>
+                    <p className="text-xs text-muted-foreground">
+                      Found under <span className="font-mono text-foreground">Reports → Distance Trip Report</span> in TN360.
+                      It contains every trip with vehicle, date, distance, and (if your unit reports it) fuel litres — exactly what EnviroIQ needs to calculate emissions.
+                    </p>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Other reports like <span className="italic">State Mileage</span> or <span className="italic">Vehicle Summary</span> won't work — they don't include daily distance per vehicle.
+                  </p>
+                </div>
+
+                {/* Steps */}
+                <div className="space-y-2">
+                  <p className="font-semibold text-foreground">Set it up in TN360 (one-time)</p>
+                  <ol className="space-y-2 text-sm text-muted-foreground list-decimal list-inside">
+                    <li>Open TN360 and go to <span className="font-mono text-foreground">Reports → Distance Trip Report</span>.</li>
+                    <li>Set <span className="text-foreground">Vehicles</span> to all vehicles you want tracked, and <span className="text-foreground">Period</span> to <span className="font-mono">Last Month</span>.</li>
+                    <li>Click the <span className="text-foreground">Schedule</span> (clock) icon at the top of the report.</li>
+                    <li>Choose <span className="font-mono text-foreground">Monthly</span> frequency, and a day early in the month (e.g. the 2nd).</li>
+                    <li>Set output format to <span className="font-mono text-foreground">XLSX (Excel)</span>.</li>
+                    <li>Add the inbound address above as the recipient and save.</li>
+                  </ol>
+                </div>
+
+                {/* What happens */}
+                <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3 space-y-1">
+                  <p className="text-xs font-semibold text-emerald-600 uppercase">What happens next</p>
+                  <p className="text-xs text-muted-foreground">
+                    When the email arrives, EnviroIQ aggregates the trips into daily per-vehicle totals and adds them to your fleet emissions. Any new vehicles in the report are auto-created. You'll see an entry in <span className="font-mono">Audit</span> for every email that's processed.
+                  </p>
+                </div>
+
+                <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 space-y-1">
+                  <p className="text-xs font-semibold text-amber-600 uppercase">Heads up</p>
+                  <p className="text-xs text-muted-foreground">
+                    Forwarding a report from your own inbox also works for one-offs, but a scheduled send direct from TN360 is more reliable — forwarded mails sometimes strip attachments.
+                  </p>
+                </div>
+
+              </div>
+            </DialogContent>
+          </Dialog>
 
           {/* ── Import KMs ── */}
           <Dialog open={isKmImportOpen} onOpenChange={(open) => { setIsKmImportOpen(open); if (!open) resetKmImport(); }}>
