@@ -47,6 +47,29 @@ function defaultPasskeyName(pk: Pick<PasskeySummary, "deviceType">): string {
   return pk.deviceType === "multiDevice" ? "Synced passkey" : "Device passkey";
 }
 
+interface PasskeyPolicy {
+  ok: boolean;
+  source: "user" | "org" | null;
+}
+
+interface PasskeysResponse {
+  passkeys: PasskeySummary[];
+  policy: PasskeyPolicy;
+}
+
+/**
+ * Inline copy shown on each passkey row when the user's effective sign-in
+ * policy now forbids `passkey` (task #42). Wording matches the sign-in page
+ * restriction callout (task #19): a per-user override says "your account",
+ * an org-wide policy says "your organisation".
+ */
+function passkeyBlockedMessage(source: PasskeyPolicy["source"]): string {
+  if (source === "user") {
+    return "Disabled by your administrator — your account's sign-in policy doesn't allow passkeys.";
+  }
+  return "Disabled by your administrator — your organisation's sign-in policy doesn't allow passkeys.";
+}
+
 interface SsoIdentitySummary {
   id: string;
   provider: "google" | "microsoft" | string;
@@ -149,16 +172,17 @@ export default function Account() {
     return orgUsers?.items.find((u) => u.id === targetUserId) ?? null;
   }, [isViewingOther, orgUsers, session, targetUserId]);
 
-  const passkeysQuery = useQuery<PasskeySummary[]>({
+  const passkeysQuery = useQuery<PasskeysResponse>({
     queryKey: ["passkeys", targetUserId],
     queryFn: () =>
-      jsonFetch<PasskeySummary[]>(
+      jsonFetch<PasskeysResponse>(
         isViewingOther
           ? `/api/auth/passkeys?userId=${encodeURIComponent(targetUserId!)}`
           : `/api/auth/passkeys`,
       ),
     enabled: !!targetUserId,
   });
+  const passkeyPolicy: PasskeyPolicy = passkeysQuery.data?.policy ?? { ok: true, source: null };
 
   const identitiesQuery = useQuery<SsoIdentitySummary[]>({
     queryKey: ["sso-identities", targetUserId],
@@ -273,7 +297,7 @@ export default function Account() {
   // hunting. Within a group we keep the oldest-used at the top so the worst
   // offenders are the most prominent.
   const passkeys = useMemo(() => {
-    const list = [...(passkeysQuery.data ?? [])];
+    const list = [...(passkeysQuery.data?.passkeys ?? [])];
     list.sort((a, b) => {
       const aStale = isStale(a.lastUsedAt, a.createdAt) ? 0 : 1;
       const bStale = isStale(b.lastUsedAt, b.createdAt) ? 0 : 1;
@@ -492,6 +516,15 @@ export default function Account() {
                                   Stale
                                 </Badge>
                               )}
+                              {!passkeyPolicy.ok && (
+                                <Badge
+                                  variant="outline"
+                                  className="ml-2 text-[10px] py-0 border-amber-500/60 text-amber-700 dark:text-amber-300"
+                                  data-testid={`passkey-blocked-${pk.id}`}
+                                >
+                                  Blocked by policy
+                                </Badge>
+                              )}
                             </div>
                             <div className="text-xs text-muted-foreground">
                               Added {format(new Date(pk.createdAt), "MMM d, yyyy")} ·{" "}
@@ -499,6 +532,14 @@ export default function Account() {
                                 {lastUsedLabel(pk.lastUsedAt)}
                               </span>
                             </div>
+                            {!passkeyPolicy.ok && (
+                              <div
+                                className="text-xs text-amber-700 dark:text-amber-300 mt-1"
+                                data-testid={`passkey-blocked-message-${pk.id}`}
+                              >
+                                {passkeyBlockedMessage(passkeyPolicy.source)}
+                              </div>
+                            )}
                           </>
                         )}
                       </div>

@@ -740,6 +740,15 @@ async function resolveTargetUserId(
  * GET /auth/passkeys — list passkeys (id + metadata only).
  * Defaults to the current user. An `org_admin`/`super_admin` may pass `?userId=`
  * to view another in-org user's passkeys (read-only — deletion is owner-only).
+ *
+ * Response shape: `{ passkeys: [...], policy: { ok, source? } }`. The `policy`
+ * field reflects whether the target user's effective sign-in policy currently
+ * allows `passkey` — the Account page uses it to render an inline "Disabled
+ * by your administrator" badge on each row when a previously-enrolled passkey
+ * would now be refused at sign-in (task #42). `source` mirrors the same
+ * "user" vs "org" wording the sign-in page callout uses (task #19), so an
+ * org_admin who has overridden a single user gets "your account" and an
+ * org-wide policy gets "your organisation".
  */
 router.get("/passkeys", requireAuth, async (req, res) => {
   const target = await resolveTargetUserId(req, typeof req.query.userId === "string" ? req.query.userId : undefined);
@@ -747,9 +756,16 @@ router.get("/passkeys", requireAuth, async (req, res) => {
     res.status(target.status).json({ error: target.message });
     return;
   }
+  const targetUser = await db.query.usersTable.findFirst({ where: eq(usersTable.id, target.userId) });
   const passkeys = await db.query.passkeysTable.findMany({ where: eq(passkeysTable.userId, target.userId) });
-  res.json(
-    passkeys.map((p) => ({
+  const policy = targetUser
+    ? await checkSignInMethodAllowed(targetUser.organisationId, targetUser.role, "passkey", {
+        requiredSignInProvider: targetUser.requiredSignInProvider,
+        allowedSignInMethods: targetUser.allowedSignInMethods,
+      })
+    : { ok: true as const };
+  res.json({
+    passkeys: passkeys.map((p) => ({
       id: p.id,
       deviceType: p.deviceType,
       backedUp: p.backedUp,
@@ -757,7 +773,8 @@ router.get("/passkeys", requireAuth, async (req, res) => {
       lastUsedAt: p.lastUsedAt,
       label: p.label,
     })),
-  );
+    policy: { ok: policy.ok, source: policy.source ?? null },
+  });
 });
 
 /**
