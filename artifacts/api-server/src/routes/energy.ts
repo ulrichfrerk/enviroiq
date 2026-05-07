@@ -530,6 +530,43 @@ energyEmailWebhookRouter.post("/inbound-email", async (req, res) => {
     // `to` is an array of recipient addresses
     const toAddresses: string[] = Array.isArray(data.to) ? data.to : [String(data.to ?? "")];
 
+    // ── DEBUG: one-time capture of the raw Resend webhook shape so we can ────
+    // diagnose why every inbound email is reporting `attachmentsProcessed: 0`.
+    // Earlier probing showed `GET /emails/received/{id}/attachments` returns
+    // 405 Method Not Allowed — Resend's Inbound API has likely moved to
+    // delivering attachments inline in the webhook body. This snapshot lets
+    // us see what's actually arriving so we can rewire the parser.
+    // Remove this block once the Resend payload shape is confirmed.
+    try {
+      const dataRec = data as Record<string, unknown>;
+      const inlineAtts = Array.isArray(dataRec.attachments) ? (dataRec.attachments as Array<Record<string, unknown>>) : null;
+      const snapshot = {
+        bodyKeys: Object.keys(body),
+        dataKeys: Object.keys(dataRec),
+        hasInlineAttachments: inlineAtts !== null,
+        inlineAttachmentCount: inlineAtts?.length ?? 0,
+        inlineAttachmentMeta: inlineAtts?.slice(0, 5).map((a) => ({
+          filename: a.filename ?? a.name,
+          content_type: a.content_type ?? a.contentType,
+          size: a.size,
+          contentType: typeof a.content,
+          contentLength: typeof a.content === "string" ? a.content.length : undefined,
+          hasUrl: typeof a.url === "string" || typeof a.download_url === "string",
+          urlPreview: typeof a.url === "string" ? (a.url as string).slice(0, 100) : (typeof a.download_url === "string" ? (a.download_url as string).slice(0, 100) : undefined),
+          allKeys: Object.keys(a),
+        })) ?? null,
+        rawBodySample: JSON.stringify(body, (_k, v) => (typeof v === "string" && v.length > 800 ? `${v.slice(0, 200)}…[+${v.length - 200} chars]` : v)).slice(0, 4500),
+      };
+      await logAudit({
+        req,
+        action: "webhook.energy.inbound_email_debug_snapshot",
+        outcome: "success",
+        details: { emailId, from, subject, toAddresses, snapshot },
+      });
+    } catch (snapErr) {
+      req.log?.warn({ snapErr }, "Failed to record inbound webhook debug snapshot");
+    }
+
     // ── Match to an organisation by inbound email address ─────────────────────
     function bareEmail(s: string): string {
       const m = s.match(/<([^>]+)>/);
