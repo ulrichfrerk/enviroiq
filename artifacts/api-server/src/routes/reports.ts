@@ -1160,7 +1160,11 @@ router.get("/tender-pack", requireAuth, requireOrgAccess, async (req, res) => {
       `),
       db.execute(sql`SELECT incident_type, incident_date, description, days_lost, closed_out FROM hs_incidents WHERE organisation_id = ${orgId} ORDER BY incident_date DESC LIMIT 20`),
       db.execute(sql`SELECT topic, category, hours, employee_name, training_date FROM training_records WHERE organisation_id = ${orgId} ORDER BY training_date DESC LIMIT 10`),
-      db.execute(sql`SELECT headcount, female_pct, female_leadership_pct, maori_pct, pasifika_pct, period_year, living_wage_accredited, supplier_code_of_conduct FROM social_workforce_snapshots WHERE organisation_id = ${orgId} ORDER BY period_year DESC LIMIT 1`),
+      // NOTE: maori_pct / pasifika_pct columns were never added to
+      // social_workforce_snapshots — referencing them here previously caused
+      // a 500 ("column \"maori_pct\" does not exist"). Until/unless those
+      // columns are introduced, the "Māori / Pasifika" KPI renders as "—".
+      db.execute(sql`SELECT headcount, female_pct, female_leadership_pct, period_year, living_wage_accredited, supplier_code_of_conduct FROM social_workforce_snapshots WHERE organisation_id = ${orgId} ORDER BY period_year DESC LIMIT 1`),
       db.execute(sql`SELECT board_size, board_female_count, board_independent_count, has_code_of_conduct, has_whistleblower, has_anti_bribery, has_privacy_policy, has_esg_risk_register, has_external_assurance, has_modern_slavery_policy, framework_alignment FROM governance_snapshots WHERE organisation_id = ${orgId} ORDER BY period_year DESC LIMIT 1`),
       db.execute(sql`SELECT COALESCE(SUM(quantity_kg),0)::float AS total_kg, COALESCE(SUM(CASE WHEN diverted THEN quantity_kg ELSE 0 END),0)::float AS diverted_kg FROM waste_records WHERE organisation_id = ${orgId}`),
       db.execute(sql`SELECT company_name, trade_type, hs_prequalified, supplier_code_signed, status FROM subcontractors WHERE organisation_id = ${orgId} AND status='active' ORDER BY company_name LIMIT 30`),
