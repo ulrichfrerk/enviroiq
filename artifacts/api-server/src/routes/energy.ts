@@ -552,6 +552,48 @@ energyEmailWebhookRouter.post("/inbound-email", async (req, res) => {
       return;
     }
 
+    // ── Sender-based routing: fleet-provider scheduled emails are NOT energy ──
+    // bills. Telematics providers (Navman, Geotab, Verizon Connect, Samsara,
+    // EROAD, etc.) send recurring fleet/mileage reports as scheduled emails
+    // that the customer has often configured to forward to their EnviroIQ
+    // inbox. The energy parser would silently produce zero readings and the
+    // customer would have no idea their report didn't land. Detect these by
+    // sender domain, notify the org admins with clear "import this manually"
+    // guidance, and audit the routing decision so we can spot patterns.
+    const fromBare = bareEmail(from);
+    const fleetSenderRules: Array<{ provider: string; matches: (addr: string) => boolean }> = [
+      { provider: "Teletrac Navman", matches: (a) => /(^|@|\.)teletracnavman\.com$/i.test(a) || /(^|@|\.)navman(fleet)?\.com$/i.test(a) },
+      { provider: "Geotab",          matches: (a) => /(^|@|\.)geotab\.com$/i.test(a) || /(^|@|\.)mygeotab\.com$/i.test(a) },
+      { provider: "Verizon Connect", matches: (a) => /(^|@|\.)verizonconnect\.com$/i.test(a) },
+      { provider: "Samsara",         matches: (a) => /(^|@|\.)samsara\.com$/i.test(a) },
+      { provider: "EROAD",           matches: (a) => /(^|@|\.)eroad\.(com|co\.nz|com\.au)$/i.test(a) },
+    ];
+    const fleetProvider = fleetSenderRules.find((r) => r.matches(fromBare))?.provider;
+    if (fleetProvider) {
+      const auditId = await logAudit({
+        req,
+        action: "webhook.energy.inbound_email",
+        outcome: "failure",
+        organisationId: org.id,
+        details: { reason: "fleet_report_routed_to_energy", from, subject, emailId, fleetProvider },
+      });
+      void notify({
+        organisationId: org.id,
+        category: "webhook.energy.fleet_report_received",
+        severity: "warn",
+        title: `${fleetProvider} report received — please import manually`,
+        body: `An automatic ${fleetProvider} report ("${subject || "(no subject)"}") was emailed to your EnviroIQ inbox. ${fleetProvider} fleet reports can't be ingested through the energy-bill pipeline — please import the report under Fleet → Import to add it to your emissions data.`,
+        linkUrl: "/fleet",
+        sourceAuditId: auditId,
+        // Dedupe per-email so a Resend retry can't double-fire, but include
+        // emailId so a fresh report from the same sender does fire again.
+        dedupeKey: `webhook.energy.fleet_report_received:${org.id}:${emailId}`,
+        context: { provider: fleetProvider, from, subject, emailId },
+      });
+      res.json({ message: "Fleet report received — admin notified" });
+      return;
+    }
+
     // Acknowledge immediately so Resend doesn't retry while we do API calls
     res.json({ message: "Accepted" });
 
@@ -584,6 +626,16 @@ energyEmailWebhookRouter.post("/inbound-email", async (req, res) => {
         headers: { Authorization: `Bearer ${resendApiKey}` },
       }),
     ]);
+
+    if (!attachResp.ok) {
+      // Loud log so the silent "0 attachments processed" mystery is surfaced.
+      const attachErrText = await attachResp.text().catch(() => "");
+      req.log?.warn({ emailId, status: attachResp.status, body: attachErrText.slice(0, 500) }, "Resend attachments API call failed — treating as zero attachments");
+    }
+    if (!emailResp.ok) {
+      const emailErrText = await emailResp.text().catch(() => "");
+      req.log?.warn({ emailId, status: emailResp.status, body: emailErrText.slice(0, 500) }, "Resend email body API call failed — proceeding with empty body");
+    }
 
     const attachData = attachResp.ok ? (await attachResp.json() as { data?: ResendAttachmentMeta[] }) : { data: [] };
     const emailData  = emailResp.ok  ? (await emailResp.json()  as ResendEmailBody) : {};
@@ -694,6 +746,38 @@ energyEmailWebhookRouter.post("/inbound-email", async (req, res) => {
       organisationId: org.id,
       details: { from, subject, emailId, attachmentsProcessed: pdfAttachments.length, readingIds: insertedIds },
     });
+
+    // ── Visibility for the silent-zero case ───────────────────────────────────
+    // Up until now, an inbound email that matched an org but produced no
+    // readings (no PDF attachment, or a PDF with no parseable kWh, or a
+    // forwarded mail whose original PDF lives in a nested message part)
+    // logged "success" with `attachmentsProcessed: 0` and the customer never
+    // knew. Notify the org admins so they can re-send the bill, attach the
+    // PDF directly, or import it manually under Energy → Upload bill.
+    if (insertedIds.length === 0) {
+      const reason =
+        allAttachments.length === 0
+          ? "no_attachment"
+          : pdfAttachments.length === 0
+          ? "no_pdf_attachment"
+          : "no_kwh_extracted";
+      const reasonBody: Record<typeof reason, string> = {
+        no_attachment: `An email from ${from} ("${subject || "(no subject)"}") arrived at your EnviroIQ inbox but had no attachment. If this was a forwarded bill, the original PDF may have been kept as a nested attachment that we can't see — please send the bill PDF directly (not as a forward) or upload it under Energy → Upload bill.`,
+        no_pdf_attachment: `An email from ${from} ("${subject || "(no subject)"}") arrived at your EnviroIQ inbox but contained no PDF attachment (we found ${allAttachments.length} non-PDF file${allAttachments.length === 1 ? "" : "s"}). Please re-send with the bill PDF attached, or upload it under Energy → Upload bill.`,
+        no_kwh_extracted: `An email from ${from} ("${subject || "(no subject)"}") arrived with ${pdfAttachments.length} PDF attachment${pdfAttachments.length === 1 ? "" : "s"} but we couldn't find a kWh figure to extract. Please review the bill and add the reading manually under Energy → Upload bill.`,
+      };
+      void notify({
+        organisationId: org.id,
+        category: "webhook.energy.inbound_email_no_readings",
+        severity: "warn",
+        title: "Inbound bill email — no readings extracted",
+        body: reasonBody[reason],
+        linkUrl: "/energy",
+        // Dedupe per-email so a Resend retry never double-fires.
+        dedupeKey: `webhook.energy.inbound_email_no_readings:${org.id}:${emailId}`,
+        context: { from, subject, emailId, reason, totalAttachments: allAttachments.length, pdfCount: pdfAttachments.length },
+      });
+    }
   } catch (err) {
     req.log?.error({ err }, "Inbound email webhook error");
     // Response already sent (200 Accepted above), so don't send again
