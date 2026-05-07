@@ -3,7 +3,7 @@ import {
   BarChart3, Car, Zap, Target, FileText, Settings, Users,
   ShieldAlert, Shield, LogOut, Leaf, UserCircle, Beaker, TrendingDown, Sparkles,
   HeartHandshake, Building2, FolderOpen, Recycle, HardHat, BrainCircuit, ShieldCheck,
-  Truck, ClipboardCheck, KeyRound, Lightbulb,
+  Truck, ClipboardCheck, KeyRound, Lightbulb, Inbox,
 } from "lucide-react";
 import {
   Sidebar,
@@ -75,6 +75,7 @@ const groups: { label: string; items: NavItem[] }[] = [
     label: "Trust & Compliance",
     items: [
       { title: "Compliance & Evidence", url: "/compliance", icon: ShieldCheck },
+      { title: "Inbound Email", url: "/inbox", icon: Inbox },
       { title: "Audit Log", url: "/audit", icon: ShieldAlert },
     ],
   },

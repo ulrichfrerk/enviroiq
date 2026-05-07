@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { Link } from "wouter";
 import { fmtCo2e } from "@/lib/utils";
 import { read as xlsxRead, utils as xlsxUtils } from "xlsx";
 import { useAuth } from "@/hooks/use-auth";
@@ -750,7 +751,8 @@ export default function Fleet() {
                 <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3 space-y-1">
                   <p className="text-xs font-semibold text-emerald-600 uppercase">What happens next</p>
                   <p className="text-xs text-muted-foreground">
-                    When the email arrives, EnviroIQ aggregates the trips into daily per-vehicle totals and adds them to your fleet emissions. Any new vehicles in the report are auto-created. You'll see an entry in <span className="font-mono">Audit</span> for every email that's processed.
+                    When the email arrives, EnviroIQ aggregates the trips into daily per-vehicle totals and adds them to your fleet emissions. Any new vehicles in the report are auto-created. You can see every email that's arrived — and whether it was processed — under{" "}
+                    <Link to="/inbox" className="text-primary font-medium hover:underline">Inbound Email</Link>.
                   </p>
                 </div>
 

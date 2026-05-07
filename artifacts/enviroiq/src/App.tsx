@@ -41,6 +41,7 @@ import SupplierPortalLogin from "@/pages/portal/login";
 import SupplierPortalHome from "@/pages/portal/index";
 import ApiKeys from "@/pages/api-keys";
 import NotificationsPage from "@/pages/notifications";
+import Inbox from "@/pages/inbox";
 
 import { AppLayout } from "@/components/layout/app-layout";
 import { AuthProvider } from "@/providers/auth-provider";
@@ -145,6 +146,7 @@ function Router() {
       <Route path="/admin"><ProtectedRoute component={Admin} /></Route>
       <Route path="/api-keys"><ProtectedRoute component={ApiKeys} /></Route>
       <Route path="/notifications"><ProtectedRoute component={NotificationsPage} /></Route>
+      <Route path="/inbox"><ProtectedRoute component={Inbox} /></Route>
       <Route path="/account"><ProtectedRoute component={Account} /></Route>
       <Route path="/social"><ProtectedRoute component={Social} /></Route>
       <Route path="/governance"><ProtectedRoute component={Governance} /></Route>
