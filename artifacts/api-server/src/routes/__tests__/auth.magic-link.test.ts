@@ -550,8 +550,14 @@ describe("POST /api/auth/magic-link/request", () => {
   });
 });
 
-// ─── GET /api/auth/magic-link/verify ────────────────────────────────────────
-describe("GET /api/auth/magic-link/verify", () => {
+// ─── GET /api/auth/magic-link/verify (interstitial — does NOT consume) ─────
+//
+// The GET endpoint MUST NOT consume the token, because email-security gateways
+// (Microsoft Defender Safe Links, Proofpoint, Mimecast, Gmail link-preview)
+// fetch every URL in incoming mail to scan it. A GET-consumes design lets the
+// scanner burn the token before the human ever clicks. The interstitial GET
+// renders an HTML page that auto-POSTs; only POST consumes.
+describe("GET /api/auth/magic-link/verify (interstitial)", () => {
   it("redirects to ?error=invalid_link when the token query param is missing", async () => {
     const app = makeApp();
     const agent = request.agent(app);
@@ -564,15 +570,121 @@ describe("GET /api/auth/magic-link/verify", () => {
     expect(me.body.userId).toBeNull();
   });
 
+  it("does NOT consume a valid token on GET — email-scanner pre-fetch defence", async () => {
+    // Regression guard for the customer-reported "magic link said expired on
+    // first click" bug: a corporate mail security gateway GETs the link while
+    // scanning the inbound email. If GET consumes, the human's real click then
+    // sees no matching unused row and gets redirected to ?error=expired.
+    const rawToken = "scanner-prefetch-token";
+    dbState.magicLink = {
+      id: "ml-prefetch",
+      userId: baseUser.id,
+      token: sha256b64url(rawToken),
+      expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+      usedAt: null,
+    };
+
+    const app = makeApp();
+    // Fresh agent simulates the scanner — different IP/cookie than the user.
+    const scanner = request.agent(app);
+    const res = await scanner
+      .get(`/api/auth/magic-link/verify?token=${encodeURIComponent(rawToken)}`)
+      .redirects(0);
+
+    expect(res.status).toBe(200);
+    expect(res.headers["content-type"]).toMatch(/^text\/html/);
+    // The interstitial must not be cached anywhere along the path.
+    expect(res.headers["cache-control"]).toMatch(/no-store/);
+    // The token MUST still be unused after the scanner GET.
+    expect(dbState.magicLink!.usedAt).toBeNull();
+    // No verify audit (success OR failure) on the GET side — those belong to POST.
+    const verifyAudits = getAuditCalls().filter(
+      (a) => a.action === "auth.magic_link.verify",
+    );
+    expect(verifyAudits).toHaveLength(0);
+
+    // The interstitial form must POST back to the verify endpoint with the
+    // token in a hidden field, not GET it.
+    expect(res.text).toMatch(/method="POST"/i);
+    expect(res.text).toMatch(/action="[^"]*\/api\/auth\/magic-link\/verify"/);
+    expect(res.text).toContain(`value="${rawToken}"`);
+  });
+
+  it("HEAD on the verify URL also does not consume — some scanners use HEAD before GET", async () => {
+    // Production logs showed Defender / similar gateways issue HEAD as well as
+    // GET while scanning. Express routes HEAD to the GET handler, but pin it
+    // down so a future refactor (e.g. moving consumption back into GET) can't
+    // silently re-introduce the scanner-burn bug via the HEAD path.
+    const rawToken = "head-prefetch-token";
+    dbState.magicLink = {
+      id: "ml-head",
+      userId: baseUser.id,
+      token: sha256b64url(rawToken),
+      expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+      usedAt: null,
+    };
+
+    const app = makeApp();
+    const scanner = request.agent(app);
+    const res = await scanner
+      .head(`/api/auth/magic-link/verify?token=${encodeURIComponent(rawToken)}`)
+      .redirects(0);
+
+    // 200 (interstitial body) — what matters is the side effect, not the code.
+    expect([200, 304]).toContain(res.status);
+    expect(dbState.magicLink!.usedAt).toBeNull();
+    const verifyAudits = getAuditCalls().filter(
+      (a) => a.action === "auth.magic_link.verify",
+    );
+    expect(verifyAudits).toHaveLength(0);
+  });
+
+  it("HTML-escapes the token and base URL so a hostile token can't break out of the form", async () => {
+    // Tokens are base64url in production but the route should be defence-in-
+    // depth: an attacker-supplied query string must not be able to inject
+    // markup into the interstitial.
+    const app = makeApp();
+    const agent = request.agent(app);
+    const evil = `"><script>alert(1)</script>`;
+    const res = await agent
+      .get(`/api/auth/magic-link/verify?token=${encodeURIComponent(evil)}`)
+      .redirects(0);
+
+    expect(res.status).toBe(200);
+    expect(res.text).not.toContain("<script>alert(1)</script>");
+    expect(res.text).toContain("&lt;script&gt;");
+  });
+});
+
+// ─── POST /api/auth/magic-link/verify (the actual consumer) ────────────────
+describe("POST /api/auth/magic-link/verify", () => {
+  it("redirects to ?error=invalid_link when the token is missing", async () => {
+    const app = makeApp();
+    const agent = request.agent(app);
+    const res = await agent
+      .post("/api/auth/magic-link/verify")
+      .type("form")
+      .send("")
+      .redirects(0);
+
+    expect(res.status).toBe(303);
+    expect(res.headers.location).toMatch(/\/app\/sign-in\?error=invalid_link$/);
+
+    const me = await agent.get("/__test/whoami");
+    expect(me.body.userId).toBeNull();
+  });
+
   it("redirects to ?error=expired for an unknown token and never establishes a session", async () => {
     dbState.magicLink = null; // nothing on file
     const app = makeApp();
     const agent = request.agent(app);
     const res = await agent
-      .get("/api/auth/magic-link/verify?token=nope-not-a-real-token")
+      .post("/api/auth/magic-link/verify")
+      .type("form")
+      .send({ token: "nope-not-a-real-token" })
       .redirects(0);
 
-    expect(res.status).toBe(302);
+    expect(res.status).toBe(303);
     expect(res.headers.location).toMatch(/\/app\/sign-in\?error=expired$/);
 
     const fail = getAuditCalls().filter(
@@ -587,8 +699,8 @@ describe("GET /api/auth/magic-link/verify", () => {
     expect(me.body.userId).toBeNull();
   });
 
-  it("redirects to ?error=expired when a valid link is on file but the URL token doesn't match its hash", async () => {
-    // A different (still-valid) link exists; the URL presents a token whose
+  it("redirects to ?error=expired when a valid link is on file but the body token doesn't match its hash", async () => {
+    // A different (still-valid) link exists; the body presents a token whose
     // SHA-256 is NOT the stored hash. The route MUST still treat this as
     // not-found rather than letting the wrong link through. The mock's
     // hash-aware findFirst makes this regression-detectable.
@@ -604,10 +716,12 @@ describe("GET /api/auth/magic-link/verify", () => {
     const app = makeApp();
     const agent = request.agent(app);
     const res = await agent
-      .get("/api/auth/magic-link/verify?token=totally-different-token")
+      .post("/api/auth/magic-link/verify")
+      .type("form")
+      .send({ token: "totally-different-token" })
       .redirects(0);
 
-    expect(res.status).toBe(302);
+    expect(res.status).toBe(303);
     expect(res.headers.location).toMatch(/\/app\/sign-in\?error=expired$/);
     // The legitimate link MUST NOT be marked used by the wrong-token attempt.
     expect(dbState.magicLink!.usedAt).toBeNull();
@@ -629,12 +743,12 @@ describe("GET /api/auth/magic-link/verify", () => {
     const app = makeApp();
     const agent = request.agent(app);
     const res = await agent
-      .get(
-        `/api/auth/magic-link/verify?token=${encodeURIComponent(rawToken)}`,
-      )
+      .post("/api/auth/magic-link/verify")
+      .type("form")
+      .send({ token: rawToken })
       .redirects(0);
 
-    expect(res.status).toBe(302);
+    expect(res.status).toBe(303);
     expect(res.headers.location).toMatch(/\/app\/sign-in\?error=expired$/);
     // Expired link must NOT be marked used.
     expect(dbState.magicLink!.usedAt).toBeNull();
@@ -643,7 +757,7 @@ describe("GET /api/auth/magic-link/verify", () => {
     expect(me.body.userId).toBeNull();
   });
 
-  it("happy path: establishes a session, marks the link usedAt, and 302s into the app", async () => {
+  it("happy path: establishes a session, marks the link usedAt, and 303s into the app", async () => {
     // Drive the request endpoint first so we exercise the full hash-then-verify
     // round-trip with a token the route generated itself.
     dbState.user = { ...baseUser };
@@ -660,10 +774,12 @@ describe("GET /api/auth/magic-link/verify", () => {
     expect(dbState.magicLink!.usedAt).toBeNull();
 
     const res = await agent
-      .get(`/api/auth/magic-link/verify?token=${encodeURIComponent(rawToken)}`)
+      .post("/api/auth/magic-link/verify")
+      .type("form")
+      .send({ token: rawToken })
       .redirects(0);
 
-    expect(res.status).toBe(302);
+    expect(res.status).toBe(303);
     // Either dashboard or the passkey-enrolment landing — both are valid
     // post-sign-in destinations depending on whether the user has a passkey.
     expect(res.headers.location).toMatch(
@@ -687,6 +803,28 @@ describe("GET /api/auth/magic-link/verify", () => {
     });
   });
 
+  it("accepts the token via query string as a fallback (noscript form GET would never reach this — POST body is the contract)", async () => {
+    // Defence-in-depth: the route falls back to req.query.token if the body
+    // is empty, so misconfigured proxies or future client changes still work.
+    dbState.user = { ...baseUser };
+    const app = makeApp();
+    const agent = request.agent(app);
+    await agent
+      .post("/api/auth/magic-link/request")
+      .send({ email: baseUser.email })
+      .expect(200);
+    const rawToken = extractTokenFromMail();
+
+    const res = await agent
+      .post(
+        `/api/auth/magic-link/verify?token=${encodeURIComponent(rawToken)}`,
+      )
+      .redirects(0);
+
+    expect(res.status).toBe(303);
+    expect(dbState.magicLink!.usedAt).toBeInstanceOf(Date);
+  });
+
   it("replay of an already-used token redirects to ?error=already_used and does not re-establish a session", async () => {
     // First request + verify.
     dbState.user = { ...baseUser };
@@ -699,9 +837,11 @@ describe("GET /api/auth/magic-link/verify", () => {
 
     const rawToken = extractTokenFromMail();
     await agent
-      .get(`/api/auth/magic-link/verify?token=${encodeURIComponent(rawToken)}`)
+      .post("/api/auth/magic-link/verify")
+      .type("form")
+      .send({ token: rawToken })
       .redirects(0)
-      .expect(302);
+      .expect(303);
     expect(dbState.magicLink!.usedAt).toBeInstanceOf(Date);
     const firstUsedAt = dbState.magicLink!.usedAt!.getTime();
 
@@ -709,10 +849,12 @@ describe("GET /api/auth/magic-link/verify", () => {
     // like success.
     const replayAgent = request.agent(app);
     const replay = await replayAgent
-      .get(`/api/auth/magic-link/verify?token=${encodeURIComponent(rawToken)}`)
+      .post("/api/auth/magic-link/verify")
+      .type("form")
+      .send({ token: rawToken })
       .redirects(0);
 
-    expect(replay.status).toBe(302);
+    expect(replay.status).toBe(303);
     expect(replay.headers.location).toMatch(
       /\/app\/sign-in\?error=already_used$/,
     );

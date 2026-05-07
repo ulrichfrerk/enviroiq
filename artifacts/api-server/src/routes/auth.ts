@@ -65,6 +65,16 @@ function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("base64url");
 }
 
+/** Minimal HTML escape for safe interpolation into the magic-link interstitial template. */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 /** Atomically rotate the session ID before binding a user — defends against session fixation. */
 function regenerateSession(req: import("express").Request): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -224,16 +234,99 @@ router.post("/magic-link/request", async (req, res) => {
 /**
  * GET /auth/magic-link/verify?token=xxx
  *
- * Consumes the token, creates a session, and redirects the browser into the app.
- * Top-level navigation from an email link, so this MUST be a GET that 302s
- * rather than a POST that returns JSON.
+ * Renders a tiny interstitial confirmation page that auto-POSTs the token
+ * back to this same endpoint. We deliberately do NOT consume the token on
+ * GET, because email-security gateways (Microsoft Defender Safe Links,
+ * Proofpoint URL Defense, Mimecast, Gmail link-preview, etc.) GET every
+ * URL in incoming mail to scan it — and a GET-consumes design lets the
+ * scanner burn the token before the human ever clicks. The interstitial
+ * is JS-driven, so scanners (which don't execute JS or follow form POSTs)
+ * land on the page harmlessly while real browsers complete sign-in in
+ * a fraction of a second.
+ *
+ * The <noscript> fallback gives users with JS disabled a manual button.
  */
-router.get("/magic-link/verify", async (req, res) => {
+router.get("/magic-link/verify", (req, res) => {
   const token = String(req.query.token || "");
   const base = appBaseUrl(req);
 
   if (!token) {
     res.redirect(`${base}/app/sign-in?error=invalid_link`);
+    return;
+  }
+
+  // HTML-escape both the action URL and the token before interpolating them
+  // into the document. The token is base64url (no special chars) and the
+  // base is server-derived, but escape defensively in case either ever
+  // changes shape.
+  const safeToken = escapeHtml(token);
+  const safeAction = escapeHtml(`${base}/api/auth/magic-link/verify`);
+  const safeCancel = escapeHtml(`${base}/app/sign-in`);
+
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, private");
+  res.set("Pragma", "no-cache");
+  res.set("X-Robots-Tag", "noindex, nofollow");
+  res.type("html").send(`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Signing you in — EnviroIQ</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: #f6f7f9; color: #1a202c; }
+  @media (prefers-color-scheme: dark) { body { background: #0f172a; color: #e2e8f0; } .card { background: #1e293b !important; box-shadow: none !important; } }
+  .card { background: #fff; padding: 32px 36px; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.06); max-width: 420px; text-align: center; }
+  h1 { font-size: 20px; margin: 0 0 8px; font-weight: 600; }
+  p { font-size: 14px; line-height: 1.5; margin: 8px 0 20px; color: #4a5568; }
+  @media (prefers-color-scheme: dark) { p { color: #94a3b8; } }
+  button { font-size: 15px; font-weight: 500; padding: 10px 20px; border-radius: 8px; border: 0; background: #2563eb; color: #fff; cursor: pointer; }
+  button:hover { background: #1d4ed8; }
+  .links { margin-top: 16px; font-size: 13px; }
+  .links a { color: #2563eb; text-decoration: none; }
+</style>
+</head>
+<body>
+<main class="card">
+  <h1>Signing you in to EnviroIQ&hellip;</h1>
+  <p>One moment while we complete your sign-in.</p>
+  <form id="eiq-magic-form" method="POST" action="${safeAction}">
+    <input type="hidden" name="token" value="${safeToken}">
+    <button type="submit">Continue to EnviroIQ</button>
+  </form>
+  <noscript>
+    <p style="margin-top:16px;">JavaScript is disabled — click the button above to finish signing in.</p>
+  </noscript>
+  <div class="links"><a href="${safeCancel}">Cancel</a></div>
+</main>
+<script>
+  // Auto-submit. Email-security scanners that fetched this URL won't execute
+  // JS or follow the resulting POST, so the token is never consumed by them.
+  (function () {
+    var f = document.getElementById('eiq-magic-form');
+    if (f) { try { f.submit(); } catch (e) { /* user can click the button */ } }
+  })();
+</script>
+</body>
+</html>`);
+});
+
+/**
+ * POST /auth/magic-link/verify
+ * Body / query: { token: string }
+ *
+ * The actual token consumer. Reached by the JS auto-submit (or manual click)
+ * on the GET interstitial above. Marks the link used atomically, establishes
+ * the session, and 303s the browser into the app.
+ */
+router.post("/magic-link/verify", async (req, res) => {
+  const token = String(req.body?.token || req.query.token || "");
+  const base = appBaseUrl(req);
+
+  if (!token) {
+    res.redirect(303, `${base}/app/sign-in?error=invalid_link`);
     return;
   }
 
@@ -248,7 +341,7 @@ router.get("/magic-link/verify", async (req, res) => {
 
     if (!link) {
       await logAudit({ req, action: "auth.magic_link.verify", outcome: "failure", details: { reason: "invalid_or_expired" } });
-      res.redirect(`${base}/app/sign-in?error=expired`);
+      res.redirect(303, `${base}/app/sign-in?error=expired`);
       return;
     }
 
@@ -259,13 +352,13 @@ router.get("/magic-link/verify", async (req, res) => {
       .where(and(eq(magicLinksTable.id, link.id), isNull(magicLinksTable.usedAt)))
       .returning();
     if (!marked) {
-      res.redirect(`${base}/app/sign-in?error=already_used`);
+      res.redirect(303, `${base}/app/sign-in?error=already_used`);
       return;
     }
 
     const user = await db.query.usersTable.findFirst({ where: eq(usersTable.id, link.userId) });
     if (!user || !user.isActive) {
-      res.redirect(`${base}/app/sign-in?error=account_inactive`);
+      res.redirect(303, `${base}/app/sign-in?error=account_inactive`);
       return;
     }
 
@@ -285,10 +378,10 @@ router.get("/magic-link/verify", async (req, res) => {
     const existingPasskey = await db.query.passkeysTable.findFirst({ where: eq(passkeysTable.userId, user.id) });
     const dest = existingPasskey ? "/app/dashboard" : "/app/account?enroll_passkey=1";
 
-    req.session.save(() => res.redirect(`${base}${dest}`));
+    req.session.save(() => res.redirect(303, `${base}${dest}`));
   } catch (err) {
     req.log?.error({ err }, "magic-link verify failed");
-    res.redirect(`${base}/app/sign-in?error=server_error`);
+    res.redirect(303, `${base}/app/sign-in?error=server_error`);
   }
 });
 
