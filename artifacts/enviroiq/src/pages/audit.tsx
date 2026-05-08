@@ -161,6 +161,17 @@ export default function Audit() {
                         Why?
                       </Link>
                     )}
+                    {log.action === "sso.policy.changed" && (
+                      <Link
+                        href="/settings#sso-policy-history"
+                        className="ml-2 inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                        data-testid={`link-sso-policy-history-${log.id}`}
+                        title="View the org-wide Sign-in & SSO change history"
+                      >
+                        <History className="w-3 h-3" />
+                        Why?
+                      </Link>
+                    )}
                   </td>
                   <td className="px-6 py-4">
                     <span className={`px-2.5 py-1 rounded-full text-xs font-medium flex items-center gap-1 w-fit ${outcomeBadge(log.outcome)}`}>

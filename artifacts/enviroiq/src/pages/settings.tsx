@@ -438,6 +438,30 @@ export default function Settings() {
     },
   });
 
+  // When deep-linked from the audit log's "Why?" shortcut for
+  // sso.policy.changed (href="/settings#sso-policy-history"), scroll the
+  // history block into view once it has rendered. We retry a few times
+  // because the SsoPolicyCard only mounts when orgId/role are known.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (window.location.hash !== "#sso-policy-history") return;
+    let cancelled = false;
+    let attempts = 0;
+    const tryScroll = () => {
+      if (cancelled) return;
+      const el = document.querySelector('[data-testid="sso-policy-history"]');
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "start" });
+        return;
+      }
+      if (attempts++ < 20) setTimeout(tryScroll, 100);
+    };
+    tryScroll();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const baseUrl = window.location.origin;
   const embedSnippet = widgetConfig?.widgetKey
     ? `<script src="${baseUrl}/api/widget/${widgetConfig.widgetKey}/widget.js" async></script>\n<div id="enviroiq-widget"></div>`
