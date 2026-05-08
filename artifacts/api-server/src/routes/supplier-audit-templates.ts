@@ -70,7 +70,7 @@ router.patch("/:templateId", requireAuth, requireOrgAdmin, async (req, res) => {
       description: description ?? row.description,
       updatedAt: new Date(),
     }).where(eq(supplierAuditTemplatesTable.id, req.params.templateId)).returning();
-    await logAudit({ req, action: "supplier_template.update", resourceType: "supplier_audit_template", resourceId: req.params.templateId });
+    await logAudit({ req, action: "supplier_template.update", resourceType: "supplier_audit_template", resourceId: req.params.templateId, organisationId: orgId });
     res.json(updated);
   } catch (err) { req.log.error({ err }); res.status(500).json({ error: "Internal Server Error" }); }
 });

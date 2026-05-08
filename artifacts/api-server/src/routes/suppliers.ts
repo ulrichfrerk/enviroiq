@@ -41,7 +41,7 @@ router.post("/", requireAuth, requireOrgAdmin, async (req, res) => {
     });
     if (!parsed.success) { res.status(400).json({ error: "Validation error", issues: parsed.error.issues }); return; }
     const [row] = await db.insert(suppliersTable).values(parsed.data).returning();
-    await logAudit({ req, action: "supplier.create", resourceType: "supplier", resourceId: row.id });
+    await logAudit({ req, action: "supplier.create", resourceType: "supplier", resourceId: row.id, organisationId: orgId });
     res.status(201).json(row);
   } catch (err) { req.log.error({ err }); res.status(500).json({ error: "Internal Server Error" }); }
 });
@@ -56,7 +56,7 @@ router.patch("/:id", requireAuth, requireOrgAdmin, async (req, res) => {
       .where(and(eq(suppliersTable.id, req.params.id), eq(suppliersTable.organisationId, orgId)))
       .returning();
     if (!row) { res.status(404).json({ error: "Not found" }); return; }
-    await logAudit({ req, action: "supplier.update", resourceType: "supplier", resourceId: row.id });
+    await logAudit({ req, action: "supplier.update", resourceType: "supplier", resourceId: row.id, organisationId: orgId });
     res.json(row);
   } catch (err) { req.log.error({ err }); res.status(500).json({ error: "Internal Server Error" }); }
 });
@@ -69,7 +69,7 @@ router.delete("/:id", requireAuth, requireOrgAdmin, async (req, res) => {
       .where(and(eq(suppliersTable.id, req.params.id), eq(suppliersTable.organisationId, orgId)))
       .returning();
     if (result.length === 0) { res.status(404).json({ error: "Not found" }); return; }
-    await logAudit({ req, action: "supplier.delete", resourceType: "supplier", resourceId: req.params.id });
+    await logAudit({ req, action: "supplier.delete", resourceType: "supplier", resourceId: req.params.id, organisationId: orgId });
     res.status(204).end();
   } catch (err) { req.log.error({ err }); res.status(500).json({ error: "Internal Server Error" }); }
 });

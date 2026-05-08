@@ -54,6 +54,7 @@ router.get("/:id/download", requireAuth, requireOrgAdmin, async (req, res) => {
         outcome: "failure",
         resourceType: "document_archive",
         resourceId: id,
+        organisationId: orgId,
         details: { reason: "purged", purgedAt: row.purgedAt, originalFilename: row.originalFilename },
       });
       res.status(410).json({
@@ -72,6 +73,7 @@ router.get("/:id/download", requireAuth, requireOrgAdmin, async (req, res) => {
       action: "document_archive.download",
       resourceType: "document_archive",
       resourceId: id,
+      organisationId: orgId,
       details: {
         originalFilename: row.originalFilename,
         sizeBytes: row.sizeBytes,

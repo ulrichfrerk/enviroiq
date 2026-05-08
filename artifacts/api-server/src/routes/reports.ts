@@ -367,7 +367,7 @@ router.post("/", requireAuth, requireOrgAdmin, async (req, res) => {
       }
     });
 
-    await logAudit({ req, action: "report.generate", resourceType: "report", resourceId: reportId });
+    await logAudit({ req, action: "report.generate", resourceType: "report", resourceId: reportId, organisationId: orgId });
     res.status(201).json(report);
   } catch (err) {
     req.log.error({ err }, "Generate report failed");
@@ -395,7 +395,7 @@ router.get("/:reportId", requireAuth, requireOrgAccess, async (req, res, next) =
       return;
     }
 
-    await logAudit({ req, action: "report.view", resourceType: "report", resourceId: reportId });
+    await logAudit({ req, action: "report.view", resourceType: "report", resourceId: reportId, organisationId: orgId });
 
     const snapshot = report.dataSnapshot ? JSON.parse(report.dataSnapshot) : {};
     res.json({ ...report, ...snapshot });
@@ -419,7 +419,7 @@ router.get("/:reportId/pdf", requireAuth, requireOrgAccess, async (req, res) => 
     if (!report) { res.status(404).send("Report not found"); return; }
     if (report.status !== "ready") { res.status(409).send("Report is not yet ready"); return; }
 
-    await logAudit({ req, action: "report.download", resourceType: "report", resourceId: reportId });
+    await logAudit({ req, action: "report.download", resourceType: "report", resourceId: reportId, organisationId: orgId });
 
     const orgName = esc(String((sqlRows(orgRows)[0] as Record<string, unknown>)?.name ?? "Organisation"));
 
@@ -1144,7 +1144,7 @@ router.get("/tender-pack", requireAuth, requireOrgAccess, async (req, res) => {
   try {
     const orgId = req.params.orgId as string;
 
-    await logAudit({ req, action: "report.tender_pack_download", resourceType: "report", resourceId: orgId });
+    await logAudit({ req, action: "report.tender_pack_download", resourceType: "report", resourceId: orgId, organisationId: orgId });
 
     const [orgRows, emissionsRow, hsRows, trainingRows, workforceRow, govRow, wasteRow, subRows, goalsRows] = await Promise.all([
       db.execute(sql`SELECT name FROM organisations WHERE id = ${orgId} LIMIT 1`),
@@ -1454,7 +1454,7 @@ router.delete("/:reportId", requireAuth, requireOrgAdmin, async (req, res) => {
       res.status(404).json({ error: "Not Found", message: "Report not found" });
       return;
     }
-    await logAudit({ req, action: "report.delete", resourceType: "report", resourceId: reportId });
+    await logAudit({ req, action: "report.delete", resourceType: "report", resourceId: reportId, organisationId: orgId });
     res.json({ message: "Report deleted" });
   } catch (err) {
     req.log.error({ err }, "Delete report failed");

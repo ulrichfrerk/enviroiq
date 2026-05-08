@@ -30,7 +30,7 @@ router.post("/records", requireAuth, requireOrgAccess, async (req, res) => {
     const parsed = insertWasteRecordSchema.safeParse({ ...req.body, id: randomUUID(), organisationId: orgId });
     if (!parsed.success) { res.status(400).json({ error: "Validation error", issues: parsed.error.issues }); return; }
     const [row] = await db.insert(wasteRecordsTable).values(parsed.data).returning();
-    await logAudit({ req, action: "waste.create", resourceType: "waste_record", resourceId: row.id });
+    await logAudit({ req, action: "waste.create", resourceType: "waste_record", resourceId: row.id, organisationId: orgId });
     res.status(201).json(row);
   } catch (err) { req.log.error({ err }); res.status(500).json({ error: "Internal Server Error" }); }
 });
@@ -98,7 +98,7 @@ router.post("/incidents", requireAuth, requireOrgAccess, async (req, res) => {
     const parsed = insertEnvironmentalIncidentSchema.safeParse({ ...req.body, id: randomUUID(), organisationId: orgId });
     if (!parsed.success) { res.status(400).json({ error: "Validation error", issues: parsed.error.issues }); return; }
     const [row] = await db.insert(environmentalIncidentsTable).values(parsed.data).returning();
-    await logAudit({ req, action: "env_incident.create", resourceType: "environmental_incident", resourceId: row.id });
+    await logAudit({ req, action: "env_incident.create", resourceType: "environmental_incident", resourceId: row.id, organisationId: orgId });
     res.status(201).json(row);
   } catch (err) { req.log.error({ err }); res.status(500).json({ error: "Internal Server Error" }); }
 });

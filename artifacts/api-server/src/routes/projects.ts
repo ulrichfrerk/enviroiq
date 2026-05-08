@@ -32,7 +32,7 @@ router.post("/", requireAuth, requireOrgAccess, async (req, res) => {
       return;
     }
     const [row] = await db.insert(projectsTable).values(parsed.data).returning();
-    await logAudit({ req, action: "project.create", resourceType: "project", resourceId: row.id });
+    await logAudit({ req, action: "project.create", resourceType: "project", resourceId: row.id, organisationId: orgId });
     res.status(201).json(row);
   } catch (err) {
     req.log.error({ err }, "Create project failed");
@@ -51,7 +51,7 @@ router.patch("/:projectId", requireAuth, requireOrgAccess, async (req, res) => {
       .where(and(eq(projectsTable.id, projectId), eq(projectsTable.organisationId, orgId)))
       .returning();
     if (!row) { res.status(404).json({ error: "Not found" }); return; }
-    await logAudit({ req, action: "project.update", resourceType: "project", resourceId: projectId });
+    await logAudit({ req, action: "project.update", resourceType: "project", resourceId: projectId, organisationId: orgId });
     res.json(row);
   } catch (err) {
     req.log.error({ err }, "Update project failed");
@@ -64,7 +64,7 @@ router.delete("/:projectId", requireAuth, requireOrgAccess, async (req, res) => 
     const orgId = req.params.orgId as string;
     const projectId = req.params.projectId as string;
     await db.delete(projectsTable).where(and(eq(projectsTable.id, projectId), eq(projectsTable.organisationId, orgId)));
-    await logAudit({ req, action: "project.delete", resourceType: "project", resourceId: projectId });
+    await logAudit({ req, action: "project.delete", resourceType: "project", resourceId: projectId, organisationId: orgId });
     res.status(204).end();
   } catch (err) {
     req.log.error({ err }, "Delete project failed");

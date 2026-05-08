@@ -167,6 +167,7 @@ Disclosure, or external audit review.
       action: "compliance.evidence_pack_exported",
       resourceType: "organisation",
       resourceId: orgId,
+      organisationId: orgId,
       details: {
         period_from: fromDate.toISOString(),
         period_to: toDate.toISOString(),

@@ -128,7 +128,7 @@ router.post("/", requireAuth, requireRole("super_admin"), async (req, res) => {
       req.log.error({ emailErr, to: adminEmail }, "Failed to send invite email — org created but no email sent");
     }
 
-    await logAudit({ req, action: "organisation.create", resourceType: "organisation", resourceId: orgId, details: { name, hasOnboardingBrief: !!onboardingBrief } });
+    await logAudit({ req, action: "organisation.create", resourceType: "organisation", resourceId: orgId, organisationId: orgId, details: { name, hasOnboardingBrief: !!onboardingBrief } });
 
     res.status(201).json({ ...org, userCount: 1, vehicleCount: 0 });
   } catch (err) {
@@ -186,7 +186,7 @@ router.patch("/:orgId", requireAuth, requireOrgAdmin, async (req, res) => {
       res.status(404).json({ error: "Not Found", message: "Organisation not found" });
       return;
     }
-    await logAudit({ req, action: "organisation.update", resourceType: "organisation", resourceId: req.params.orgId as string });
+    await logAudit({ req, action: "organisation.update", resourceType: "organisation", resourceId: req.params.orgId as string, organisationId: req.params.orgId as string });
     res.json(org);
   } catch (err) {
     req.log.error({ err }, "Update organisation failed");
@@ -417,7 +417,7 @@ router.get("/:orgId/sso-policy/history", requireAuth, requireOrgAdmin, async (re
 router.delete("/:orgId", requireAuth, requireRole("super_admin"), async (req, res) => {
   try {
     await db.delete(organisationsTable).where(eq(organisationsTable.id, req.params.orgId as string));
-    await logAudit({ req, action: "organisation.delete", resourceType: "organisation", resourceId: req.params.orgId as string });
+    await logAudit({ req, action: "organisation.delete", resourceType: "organisation", resourceId: req.params.orgId as string, organisationId: req.params.orgId as string });
     res.json({ message: "Organisation deleted" });
   } catch (err) {
     req.log.error({ err }, "Delete organisation failed");
@@ -460,7 +460,7 @@ router.post("/:orgId/webhook-credentials/rotate", requireAuth, requireOrgAdmin, 
       res.status(404).json({ error: "Not Found", message: "Organisation not found" });
       return;
     }
-    await logAudit({ req, action: "organisation.rotate_webhook_secret", resourceType: "organisation", resourceId: req.params.orgId as string });
+    await logAudit({ req, action: "organisation.rotate_webhook_secret", resourceType: "organisation", resourceId: req.params.orgId as string, organisationId: req.params.orgId as string });
     res.json({ webhookSecret: org.webhookSecret });
   } catch (err) {
     req.log.error({ err }, "Rotate webhook secret failed");

@@ -26,7 +26,7 @@ router.post("/", requireAuth, requireOrgAccess, async (req, res) => {
     const parsed = insertSubcontractorSchema.safeParse({ ...req.body, id: randomUUID(), organisationId: orgId });
     if (!parsed.success) { res.status(400).json({ error: "Validation error", issues: parsed.error.issues }); return; }
     const [row] = await db.insert(subcontractorsTable).values(parsed.data).returning();
-    await logAudit({ req, action: "subcontractor.create", resourceType: "subcontractor", resourceId: row.id });
+    await logAudit({ req, action: "subcontractor.create", resourceType: "subcontractor", resourceId: row.id, organisationId: orgId });
     res.status(201).json(row);
   } catch (err) { req.log.error({ err }); res.status(500).json({ error: "Internal Server Error" }); }
 });
@@ -40,7 +40,7 @@ router.patch("/:subId", requireAuth, requireOrgAccess, async (req, res) => {
       .where(and(eq(subcontractorsTable.id, req.params.subId), eq(subcontractorsTable.organisationId, orgId)))
       .returning();
     if (!row) { res.status(404).json({ error: "Not found" }); return; }
-    await logAudit({ req, action: "subcontractor.update", resourceType: "subcontractor", resourceId: req.params.subId });
+    await logAudit({ req, action: "subcontractor.update", resourceType: "subcontractor", resourceId: req.params.subId, organisationId: orgId });
     res.json(row);
   } catch (err) { req.log.error({ err }); res.status(500).json({ error: "Internal Server Error" }); }
 });

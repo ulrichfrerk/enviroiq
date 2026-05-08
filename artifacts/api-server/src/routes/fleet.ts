@@ -50,7 +50,7 @@ router.post("/vehicles", requireAuth, requireOrgAdmin, async (req, res) => {
       gpsProvider: gpsProvider || "none",
       gpsDeviceId,
     }).returning();
-    await logAudit({ req, action: "vehicle.create", resourceType: "vehicle", resourceId: vehicle.id });
+    await logAudit({ req, action: "vehicle.create", resourceType: "vehicle", resourceId: vehicle.id, organisationId: req.params.orgId as string });
     res.status(201).json(vehicle);
   } catch (err) {
     req.log.error({ err }, "Create vehicle failed");
@@ -164,7 +164,7 @@ router.patch("/vehicles/:vehicleId", requireAuth, requireOrgAdmin, async (req, r
       res.status(404).json({ error: "Not Found", message: "Vehicle not found" });
       return;
     }
-    await logAudit({ req, action: "vehicle.update", resourceType: "vehicle", resourceId: req.params.vehicleId as string });
+    await logAudit({ req, action: "vehicle.update", resourceType: "vehicle", resourceId: req.params.vehicleId as string, organisationId: req.params.orgId as string });
     res.json(vehicle);
   } catch (err) {
     req.log.error({ err }, "Update vehicle failed");
@@ -240,7 +240,7 @@ router.delete("/vehicles/:vehicleId", requireAuth, requireOrgAdmin, async (req, 
     await db.delete(vehiclesTable).where(
       and(eq(vehiclesTable.id, req.params.vehicleId as string), eq(vehiclesTable.organisationId, req.params.orgId as string)),
     );
-    await logAudit({ req, action: "vehicle.delete", resourceType: "vehicle", resourceId: req.params.vehicleId as string });
+    await logAudit({ req, action: "vehicle.delete", resourceType: "vehicle", resourceId: req.params.vehicleId as string, organisationId: req.params.orgId as string });
     res.json({ message: "Vehicle removed" });
   } catch (err) {
     req.log.error({ err }, "Delete vehicle failed");

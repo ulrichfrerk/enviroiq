@@ -186,7 +186,7 @@ router.post("/", requireAuth, requireRole("super_admin", "org_admin"), requireOr
       .values({ id: uuidv4(), email, name, role, organisationId: orgId })
       .returning();
 
-    await logAudit({ req, action: "user.create", resourceType: "user", resourceId: user.id, details: { email, role } });
+    await logAudit({ req, action: "user.create", resourceType: "user", resourceId: user.id, organisationId: orgId, details: { email, role } });
 
     // Issue an invite magic-link and email it. Failure here must NOT roll back
     // the user record (the admin can re-trigger by inviting again or the user
@@ -217,6 +217,7 @@ router.post("/", requireAuth, requireRole("super_admin", "org_admin"), requireOr
         action: "user.invite_email",
         outcome: result.sent ? "success" : "failure",
         userId: user.id,
+        organisationId: orgId,
         details: { devMode: result.devMode },
       });
     } catch (err) {
@@ -227,6 +228,7 @@ router.post("/", requireAuth, requireRole("super_admin", "org_admin"), requireOr
         action: "user.invite_email",
         outcome: "failure",
         userId: user.id,
+        organisationId: orgId,
         details: { error: inviteEmailError },
       });
     }
@@ -291,7 +293,7 @@ router.patch("/:userId", requireAuth, requireRole("super_admin", "org_admin"), r
       res.status(404).json({ error: "Not Found", message: "User not found" });
       return;
     }
-    await logAudit({ req, action: "user.update", resourceType: "user", resourceId: userId, details: { role } });
+    await logAudit({ req, action: "user.update", resourceType: "user", resourceId: userId, organisationId: orgId, details: { role } });
     res.json(user);
   } catch (err) {
     req.log.error({ err }, "Update user failed");
@@ -474,6 +476,11 @@ router.post(
           action: "user.sign_in_policy.changed",
           resourceType: "user",
           resourceId: userId,
+          // Pass organisationId explicitly so super-admin sessions (which have
+          // no session.organisationId) still produce rows scoped to the target
+          // tenant — otherwise the per-user history endpoint and the per-org
+          // audit log filter both miss the entry.
+          organisationId: orgId,
           previousValue: {
             requiredSignInProvider: previous.requiredSignInProvider,
             allowedSignInMethods: previous.allowedSignInMethods,
@@ -729,6 +736,11 @@ router.patch("/:userId/sign-in-policy", requireAuth, requireRole("super_admin", 
       action: "user.sign_in_policy.changed",
       resourceType: "user",
       resourceId: userId,
+      // Pass organisationId explicitly so super-admin sessions (which have no
+      // session.organisationId) still produce rows scoped to the target
+      // tenant — otherwise the per-user history endpoint and the per-org
+      // audit log filter both miss the entry.
+      organisationId: orgId,
       previousValue: {
         requiredSignInProvider: previous.requiredSignInProvider,
         allowedSignInMethods: previous.allowedSignInMethods,
@@ -776,7 +788,7 @@ router.delete("/:userId", requireAuth, requireRole("super_admin", "org_admin"), 
     }
 
     await db.delete(usersTable).where(and(eq(usersTable.id, userId), eq(usersTable.organisationId, orgId)));
-    await logAudit({ req, action: "user.delete", resourceType: "user", resourceId: userId });
+    await logAudit({ req, action: "user.delete", resourceType: "user", resourceId: userId, organisationId: orgId });
     res.json({ message: "User removed" });
   } catch (err) {
     req.log.error({ err }, "Delete user failed");

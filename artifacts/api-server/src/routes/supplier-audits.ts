@@ -168,7 +168,7 @@ router.post("/", requireAuth, requireOrgAdmin, async (req, res) => {
       actorType: "user", actorId: req.session?.userId ?? null, req,
       payload: { to, sent: emailResult.sent, devMode: emailResult.devMode },
     });
-    await logAudit({ req, action: "supplier_audit.send", resourceType: "supplier_audit", resourceId: id });
+    await logAudit({ req, action: "supplier_audit.send", resourceType: "supplier_audit", resourceId: id, organisationId: orgId });
 
     res.status(201).json({
       id, status: "sent", recipientEmail: to, dueAt,
@@ -194,7 +194,7 @@ router.post("/:auditId/approve", requireAuth, requireOrgAdmin, async (req, res) 
       organisationId: orgId, auditId: audit.id, eventType: "approved",
       actorType: "user", actorId: req.session?.userId ?? null, req,
     });
-    await logAudit({ req, action: "supplier_audit.approve", resourceType: "supplier_audit", resourceId: audit.id });
+    await logAudit({ req, action: "supplier_audit.approve", resourceType: "supplier_audit", resourceId: audit.id, organisationId: orgId });
     res.json({ ok: true });
   } catch (err) { req.log.error({ err }); res.status(500).json({ error: "Internal Server Error" }); }
 });

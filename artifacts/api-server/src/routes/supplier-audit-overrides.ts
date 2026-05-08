@@ -123,6 +123,7 @@ router.put("/", requireAuth, requireOrgAdmin, async (req, res) => {
       action: "supplier_audit_question_override.changed",
       resourceType: "supplier_audit_question_override",
       resourceId: result.after.id,
+      organisationId: orgId,
       previousValue: result.before
         ? {
             enabled: result.before.enabled,
@@ -170,6 +171,7 @@ router.delete("/:questionId", requireAuth, requireOrgAdmin, async (req, res) => 
       action: "supplier_audit_question_override.changed",
       resourceType: "supplier_audit_question_override",
       resourceId: before.id,
+      organisationId: orgId,
       previousValue: {
         enabled: before.enabled,
         reason: before.reason,

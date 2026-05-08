@@ -82,7 +82,7 @@ router.post("/", requireAuth, requireOrgAdmin, async (req, res) => {
       status: "not_started",
     }).returning();
 
-    await logAudit({ req, action: "goal.create", resourceType: "goal", resourceId: goal.id });
+    await logAudit({ req, action: "goal.create", resourceType: "goal", resourceId: goal.id, organisationId: orgId });
     res.status(201).json(goal);
   } catch (err) {
     req.log.error({ err }, "Create goal failed");
@@ -151,7 +151,7 @@ router.patch("/:goalId", requireAuth, requireOrgAdmin, async (req, res) => {
       res.status(404).json({ error: "Not Found", message: "Goal not found" });
       return;
     }
-    await logAudit({ req, action: "goal.update", resourceType: "goal", resourceId: goalId });
+    await logAudit({ req, action: "goal.update", resourceType: "goal", resourceId: goalId, organisationId: orgId });
     res.json(goal);
   } catch (err) {
     req.log.error({ err }, "Update goal failed");
@@ -164,7 +164,7 @@ router.delete("/:goalId", requireAuth, requireOrgAdmin, async (req, res) => {
   try {
     const orgId = req.params.orgId as string; const goalId = req.params.goalId as string;
     await db.delete(goalsTable).where(and(eq(goalsTable.id, goalId), eq(goalsTable.organisationId, orgId)));
-    await logAudit({ req, action: "goal.delete", resourceType: "goal", resourceId: goalId });
+    await logAudit({ req, action: "goal.delete", resourceType: "goal", resourceId: goalId, organisationId: orgId });
     res.json({ message: "Goal deleted" });
   } catch (err) {
     req.log.error({ err }, "Delete goal failed");

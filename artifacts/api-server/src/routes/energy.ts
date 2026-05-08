@@ -112,7 +112,7 @@ router.post("/readings", requireAuth, requireOrgAdmin, async (req, res) => {
       source: "manual",
     }).returning();
 
-    await logAudit({ req, action: "energy_reading.create", resourceType: "energy_reading", resourceId: reading.id });
+    await logAudit({ req, action: "energy_reading.create", resourceType: "energy_reading", resourceId: reading.id, organisationId: orgId });
     res.status(201).json(reading);
   } catch (err) {
     req.log.error({ err }, "Create energy reading failed");
@@ -136,7 +136,7 @@ router.delete("/readings/:id", requireAuth, requireOrgAdmin, async (req, res) =>
       return;
     }
 
-    await logAudit({ req, action: "energy_reading.delete", resourceType: "energy_reading", resourceId: id });
+    await logAudit({ req, action: "energy_reading.delete", resourceType: "energy_reading", resourceId: id, organisationId: orgId });
     res.status(204).end();
   } catch (err) {
     req.log.error({ err }, "Delete energy reading failed");
@@ -241,6 +241,7 @@ router.post("/upload", requireAuth, requireOrgAdmin, upload.single("file"), asyn
       action: "energy_bill.upload",
       resourceType: "energy_reading",
       resourceId: reading.id,
+      organisationId: orgId,
       details: { filename: req.file.originalname, period: `${periodStart.toISOString().slice(0, 7)}`, emissionMethod: method, autoDetected: !utilityTypeOverride, reviewFlags: parsed.reviewFlags },
     });
 
