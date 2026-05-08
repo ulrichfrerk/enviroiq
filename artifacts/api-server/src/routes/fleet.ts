@@ -207,7 +207,7 @@ router.get("/vehicles/stats", requireAuth, requireOrgAccess, async (req, res) =>
         ? Math.max(1, Math.round((new Date(row.lastEvent).getTime() - new Date(row.firstEvent).getTime()) / 86400000))
         : 1;
       const storedFactor = v?.emissionFactorKgPerKm ?? null;
-      const classFactor  = vehicleClassEmissionFactor(v?.make ?? "", v?.model ?? "");
+      const classFactor  = vehicleClassEmissionFactor(v?.make ?? "", v?.model ?? "", v?.name ?? "");
       const effectiveFactor = storedFactor ?? classFactor;
       return {
         vehicleId:                  row.vehicleId,
@@ -332,11 +332,24 @@ async function insertFleetEvent(data: {
   emissionFactor?: number;
   make?: string;
   model?: string;
+  name?: string;
 }) {
-  // Resolve emission factor: explicit override → vehicle class detection → fuel-type default
-  const resolvedFactor = data.emissionFactor
-    ?? vehicleClassEmissionFactor(data.make ?? "", data.model ?? "")
-    ?? undefined;
+  // Resolve emission factor: explicit override → vehicle class detection (make/model/name) → fuel-type default
+  const classFactor = vehicleClassEmissionFactor(data.make ?? "", data.model ?? "", data.name ?? "");
+  const resolvedFactor = data.emissionFactor ?? classFactor ?? undefined;
+
+  // Persist the resolved factor onto the vehicle row so each vehicle reports against
+  // its own custom carbon factor on subsequent imports & in the leaderboard. Only
+  // write when the vehicle currently has none stored — never override an admin-set value.
+  if (data.emissionFactor == null && classFactor != null) {
+    await db.update(vehiclesTable)
+      .set({ emissionFactorKgPerKm: classFactor, updatedAt: new Date() })
+      .where(and(
+        eq(vehiclesTable.id, data.vehicleId),
+        sql`${vehiclesTable.emissionFactorKgPerKm} IS NULL`,
+      ));
+  }
+
   const co2eKg = calcFleetCo2e({
     fuelType: data.fuelType || "petrol",
     distanceKm: data.distanceKm,
@@ -344,6 +357,7 @@ async function insertFleetEvent(data: {
     emissionFactorKgPerKm: resolvedFactor,
     make: data.make,
     model: data.model,
+    name: data.name,
   });
 
   await db.insert(fleetEventsTable).values({
@@ -415,6 +429,9 @@ webhookRouter.post("/navman", async (req, res) => {
       rawPayload: JSON.stringify(req.body),
       fuelType: vehicle.fuelType,
       emissionFactor: vehicle.emissionFactorKgPerKm || undefined,
+      make: vehicle.make ?? undefined,
+      model: vehicle.model ?? undefined,
+      name: vehicle.name ?? undefined,
     });
 
     await logAudit({ req, action: "webhook.fleet.navman", outcome: "success", resourceType: "fleet_event", details: { deviceId, vehicleId: vehicle.id, provider: "navman" }, organisationId: org.id });
@@ -477,6 +494,9 @@ webhookRouter.post("/blackhawk", async (req, res) => {
       rawPayload: JSON.stringify(req.body),
       fuelType: vehicle.fuelType,
       emissionFactor: vehicle.emissionFactorKgPerKm || undefined,
+      make: vehicle.make ?? undefined,
+      model: vehicle.model ?? undefined,
+      name: vehicle.name ?? undefined,
     });
 
     await logAudit({ req, action: "webhook.fleet.blackhawk", outcome: "success", resourceType: "fleet_event", details: { deviceId: unit_id, vehicleId: vehicle.id, provider: "blackhawk" }, organisationId: org.id });
@@ -540,6 +560,9 @@ webhookRouter.post("/generic", async (req, res) => {
       rawPayload: JSON.stringify(req.body),
       fuelType: vehicle.fuelType,
       emissionFactor: vehicle.emissionFactorKgPerKm || undefined,
+      make: vehicle.make ?? undefined,
+      model: vehicle.model ?? undefined,
+      name: vehicle.name ?? undefined,
     });
 
     await logAudit({ req, action: "webhook.fleet.generic", outcome: "success", resourceType: "fleet_event", details: { deviceId, vehicleId: vehicle.id, provider: "generic" }, organisationId: org.id });
@@ -578,8 +601,26 @@ router.post("/import-km", requireAuth, requireOrgAdmin, async (req, res) => {
     );
 
     let imported = 0;
+    let skippedDuplicates = 0;
     const created: string[] = [];
     const errors: string[] = [];
+
+    // Pre-load existing tn360-import event keys so a re-uploaded report (or a
+    // double-clicked import button) doesn't insert the same trip twice.
+    const existingEvents = await db
+      .select({
+        vehicleId: fleetEventsTable.vehicleId,
+        recordedAt: fleetEventsTable.recordedAt,
+        distanceKm: fleetEventsTable.distanceKm,
+      })
+      .from(fleetEventsTable)
+      .where(and(
+        eq(fleetEventsTable.organisationId, orgId),
+        eq(fleetEventsTable.source, "tn360-import"),
+      ));
+    const existingKeys = new Set(
+      existingEvents.map(e => `${e.vehicleId}|${e.recordedAt?.toISOString().slice(0, 10)}|${e.distanceKm ?? ""}`),
+    );
 
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
@@ -628,6 +669,13 @@ router.post("/import-km", requireAuth, requireOrgAdmin, async (req, res) => {
 
       const fuelLitres = row.fuelLitres ? Number(row.fuelLitres) : undefined;
 
+      const dedupeKey = `${vehicle.id}|${recordedAt.toISOString().slice(0, 10)}|${distanceKm}`;
+      if (existingKeys.has(dedupeKey)) {
+        skippedDuplicates++;
+        continue;
+      }
+      existingKeys.add(dedupeKey);
+
       await insertFleetEvent({
         vehicleId: vehicle.id,
         organisationId: orgId,
@@ -641,6 +689,7 @@ router.post("/import-km", requireAuth, requireOrgAdmin, async (req, res) => {
         emissionFactor: vehicle.emissionFactorKgPerKm ?? undefined,
         make: vehicle.make ?? undefined,
         model: vehicle.model ?? undefined,
+        name: vehicle.name ?? undefined,
       });
 
       imported++;
@@ -650,7 +699,7 @@ router.post("/import-km", requireAuth, requireOrgAdmin, async (req, res) => {
       req,
       action: "fleet.import_km",
       outcome: "success",
-      details: { imported, created: created.length, errors: errors.length },
+      details: { imported, skippedDuplicates, created: created.length, errors: errors.length },
       organisationId: orgId,
     });
 
@@ -670,7 +719,7 @@ router.post("/import-km", requireAuth, requireOrgAdmin, async (req, res) => {
       });
     }
 
-    res.json({ imported, created, errors });
+    res.json({ imported, skippedDuplicates, created, errors });
   } catch (err) {
     req.log.error({ err }, "Fleet KM import failed");
     const orgId = req.params.orgId as string;

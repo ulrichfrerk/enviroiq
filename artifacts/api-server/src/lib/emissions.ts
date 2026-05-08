@@ -126,6 +126,7 @@ export function calcFleetCo2e({
   emissionFactorKgPerKm,
   make,
   model,
+  name,
 }: {
   fuelType: string;
   distanceKm?: number;
@@ -133,6 +134,7 @@ export function calcFleetCo2e({
   emissionFactorKgPerKm?: number;
   make?: string;
   model?: string;
+  name?: string;
 }): number {
   // Auto-correct fuel type from model string (handles mislabelled vehicles)
   const resolvedFuelType = inferFuelTypeFromModel(make ?? "", model ?? "") ?? fuelType;
@@ -147,7 +149,7 @@ export function calcFleetCo2e({
   // Distance-based estimation
   if (distanceKm) {
     const classFactor = emissionFactorKgPerKm == null
-      ? vehicleClassEmissionFactor(make ?? "", model ?? "")
+      ? vehicleClassEmissionFactor(make ?? "", model ?? "", name ?? "")
       : null;
     const factor = emissionFactorKgPerKm ?? classFactor ?? defaultEmissionFactor(resolvedFuelType);
     return distanceKm * factor;
@@ -183,8 +185,8 @@ function defaultEmissionFactor(fuelType: string): number {
  *
  * Returns null when no vehicle-class match is found (caller falls back to defaultEmissionFactor).
  */
-export function vehicleClassEmissionFactor(make = "", model = ""): number | null {
-  const t = `${make} ${model}`.toLowerCase();
+export function vehicleClassEmissionFactor(make = "", model = "", name = ""): number | null {
+  const t = `${make} ${model} ${name}`.toLowerCase();
 
   // Electric
   if (/\bev\b|electric|bev|ioniq|leaf|model\s[s3xy]|e-tron/.test(t)) return 0;
@@ -198,8 +200,10 @@ export function vehicleClassEmissionFactor(make = "", model = ""): number | null
   // Petrol — Fuelsaver "P" suffix (e.g. "2.0p", "3.5p")
   if (/\d+\.\d+p(\s|$)/.test(t)) return 0.196;
 
-  // Construction / off-road equipment — CO₂e from fuel consumption, not km
-  if (/hitachi|kobelco|komatsu|caterpillar|\bcatb\b|excavator|loader|forklift|jcb|polaris\s*ranger/.test(t)) return 0;
+  // Construction / off-road equipment — CO₂e from fuel consumption, not km.
+  // Distance-based factor is 0 because diggers/loaders/ATVs accumulate "km" via
+  // GPS while idling on site; their real footprint must come from fuel-card litres.
+  if (/hitachi|kobelco|komatsu|caterpillar|\bcatb\b|excavator|loader|forklift|jcb|bobcat|skid.?steer|telehandler|dumper|digger|zaxis|\bzx\d|\bz?x?\d{2,}u\b|polaris|\bquad\b|\batv\b|wheel.?loader|backhoe|\bton\s*digger|tractor/.test(t)) return 0;
 
   // Heavy on-road trucks (>16t GVM)
   if (/scania|kenworth|mack\b|freightliner|volvo\s*(fh|fm|fl|fmx)|western\s*star/.test(t)) return 0.9;

@@ -3,7 +3,7 @@ import { db, organisationsTable, usersTable, vehiclesTable, auditLogsTable, flee
 import { count, eq, sql } from "drizzle-orm";
 import { requireAuth, requireRole } from "../lib/auth.js";
 import { sqlRow, sqlRows, numCol, intCol, strCol } from "../lib/sql-result.js";
-import { calcFleetCo2e, calcEnergyCo2e, resolveElectricityFactor } from "../lib/emissions.js";
+import { calcFleetCo2e, calcEnergyCo2e, resolveElectricityFactor, vehicleClassEmissionFactor } from "../lib/emissions.js";
 import { logAudit } from "../lib/audit.js";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { runGapDetectorOnce } from "../lib/notification-gap-scanners.js";
@@ -65,12 +65,56 @@ router.get("/stats", requireRole("super_admin"), async (req, res) => {
 // Use after updating vehicle make/model/fuelType or after improving the emission factor logic.
 router.post("/organisations/:orgId/recalculate-emissions", requireRole("super_admin"), async (req, res) => {
   const { orgId } = req.params as { orgId: string };
+  // Optional cleanup steps — safe to run repeatedly. Default ON because both
+  // address known importer bugs (double-insert from double-clicks; vehicles
+  // never having a per-km factor stored after a class match).
+  const dedupe         = (req.query.dedupe         ?? "true") !== "false";
+  const backfillFactor = (req.query.backfillFactor ?? "true") !== "false";
   try {
     // Load all vehicles for this org → lookup map by id
     const vehicles = await db.query.vehiclesTable.findMany({
       where: eq(vehiclesTable.organisationId, orgId),
     });
     const vehicleMap = new Map(vehicles.map(v => [v.id, v]));
+
+    // 1) Dedupe tn360-import duplicates: keep the oldest row per
+    //    (vehicle_id, recorded_at::date, distance_km), drop the rest.
+    let duplicatesRemoved = 0;
+    if (dedupe) {
+      const dupResult = await db.execute(sql`
+        WITH ranked AS (
+          SELECT id,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY vehicle_id, (recorded_at::date), distance_km, source
+                   ORDER BY created_at ASC, id ASC
+                 ) AS rn
+          FROM fleet_events
+          WHERE organisation_id = ${orgId}
+            AND source = 'tn360-import'
+        )
+        DELETE FROM fleet_events
+        WHERE id IN (SELECT id FROM ranked WHERE rn > 1)
+      `);
+      duplicatesRemoved = (dupResult as unknown as { rowCount?: number }).rowCount ?? 0;
+    }
+
+    // 2) Backfill per-vehicle emission factor: when a vehicle has none stored
+    //    but the classifier (now also considering the vehicle name) yields
+    //    a class factor, persist it on the vehicle so each vehicle reports
+    //    against its own custom carbon factor going forward.
+    let vehicleFactorsBackfilled = 0;
+    if (backfillFactor) {
+      for (const v of vehicles) {
+        if (v.emissionFactorKgPerKm != null) continue;
+        const classFactor = vehicleClassEmissionFactor(v.make ?? "", v.model ?? "", v.name ?? "");
+        if (classFactor == null) continue;
+        await db.update(vehiclesTable)
+          .set({ emissionFactorKgPerKm: classFactor, updatedAt: new Date() })
+          .where(eq(vehiclesTable.id, v.id));
+        vehicleMap.set(v.id, { ...v, emissionFactorKgPerKm: classFactor });
+        vehicleFactorsBackfilled++;
+      }
+    }
 
     // Load all fleet events for this org
     const events = await db.query.fleetEventsTable.findMany({
@@ -102,6 +146,7 @@ router.post("/organisations/:orgId/recalculate-emissions", requireRole("super_ad
             emissionFactorKgPerKm: vehicle.emissionFactorKgPerKm ?? undefined,
             make: vehicle.make ?? undefined,
             model: vehicle.model ?? undefined,
+            name: vehicle.name ?? undefined,
           });
 
           // Only update if value has changed (avoids unnecessary writes)
@@ -160,11 +205,11 @@ router.post("/organisations/:orgId/recalculate-emissions", requireRole("super_ad
       resourceType: "organisation",
       resourceId: orgId,
       outcome: "success",
-      details: { updated, skipped, errors, totalEvents: events.length, energyUpdated, energySkipped, totalEnergyReadings: energyReadings.length },
+      details: { updated, skipped, errors, totalEvents: events.length, energyUpdated, energySkipped, totalEnergyReadings: energyReadings.length, duplicatesRemoved, vehicleFactorsBackfilled },
       organisationId: orgId,
     });
 
-    res.json({ updated, skipped, errors, totalEvents: events.length, energyUpdated, energySkipped, totalEnergyReadings: energyReadings.length });
+    res.json({ updated, skipped, errors, totalEvents: events.length, energyUpdated, energySkipped, totalEnergyReadings: energyReadings.length, duplicatesRemoved, vehicleFactorsBackfilled });
   } catch (err) {
     req.log.error({ err }, "Recalculate emissions failed");
     res.status(500).json({ error: "Internal Server Error", message: "Failed to recalculate emissions" });
