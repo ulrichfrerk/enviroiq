@@ -1012,6 +1012,101 @@ describe("POST /api/auth/passkey/register/verify", () => {
   });
 });
 
+// ─── GET /passkeys (list + policy envelope) ────────────────────────────────
+describe("GET /api/auth/passkeys", () => {
+  // Task #42 added an inline "Blocked by policy" badge + amber message on
+  // each passkey row of the Account page. The page reads the new
+  // `policy.ok` / `policy.source` fields the route returns alongside the
+  // existing list. These tests pin down both the envelope shape and the
+  // policy field for each branch (allowed, org-level refusal, user-level
+  // refusal) so a regression in the route can't silently strand users in
+  // the same way the original task was meant to fix.
+  it("returns the list with policy.ok=true (no source) when passkey is allowed by both org and user", async () => {
+    // Org allows passkey, user has no override — policy must report ok.
+    dbState.organisation = { ...baseOrg };
+    dbState.user = { ...baseUser };
+    dbState.passkey = { ...basePasskey };
+
+    const app = makeApp();
+    const agent = request.agent(app);
+    await agent.post("/__test/login");
+
+    const res = await agent.get("/api/auth/passkeys");
+    expect(res.status).toBe(200);
+
+    // Envelope shape: { passkeys: [...], policy: { ok, source } }. The
+    // page treats a bare-array fallback as "policy ok" and would silently
+    // hide the badge if the route ever flattened back to a plain array,
+    // so the shape assertion is the regression guard for that path.
+    expect(Array.isArray(res.body)).toBe(false);
+    expect(res.body).toHaveProperty("passkeys");
+    expect(Array.isArray(res.body.passkeys)).toBe(true);
+    expect(res.body).toHaveProperty("policy");
+
+    expect(res.body.policy).toMatchObject({ ok: true });
+    // `source` is informational on the allowed branch — the page only
+    // consults it when `ok` is false, so we don't pin its exact value
+    // here, only that the field is present (the envelope contract).
+    expect(res.body.policy).toHaveProperty("source");
+
+    expect(res.body.passkeys).toHaveLength(1);
+    expect(res.body.passkeys[0]).toMatchObject({ id: basePasskey.id });
+  });
+
+  it("returns policy.ok=false with source='org' when the org allow-list excludes passkey", async () => {
+    // Org-wide policy refuses passkey; no per-user override.
+    dbState.organisation = {
+      ...baseOrg,
+      allowedSignInMethods: ["magic_link", "google_sso"],
+    };
+    dbState.user = { ...baseUser };
+    dbState.passkey = { ...basePasskey };
+
+    const app = makeApp();
+    const agent = request.agent(app);
+    await agent.post("/__test/login");
+
+    const res = await agent.get("/api/auth/passkeys");
+    // The list itself is still returned — the badge is rendered next to
+    // each row, so the page needs the rows AND the policy verdict in the
+    // same response.
+    expect(res.status).toBe(200);
+    expect(res.body.passkeys).toHaveLength(1);
+    expect(res.body.policy).toEqual({ ok: false, source: "org" });
+  });
+
+  it("returns policy.ok=false with source='user' when a per-user override (not the org) refuses passkey", async () => {
+    // Org would allow passkey on its own, but this single user is
+    // restricted to magic_link only. The Account page uses `source` to
+    // pick "your account" vs "your organisation" wording, so the route
+    // MUST surface "user" here even though the org allow-list contains
+    // passkey.
+    dbState.organisation = {
+      ...baseOrg,
+      allowedSignInMethods: ["magic_link", "passkey", "google_sso"],
+    };
+    dbState.user = {
+      ...baseUser,
+      allowedSignInMethods: ["magic_link"],
+    };
+    dbState.passkey = { ...basePasskey };
+
+    const app = makeApp();
+    const agent = request.agent(app);
+    await agent.post("/__test/login");
+
+    const res = await agent.get("/api/auth/passkeys");
+    expect(res.status).toBe(200);
+    expect(res.body.policy).toEqual({ ok: false, source: "user" });
+  });
+
+  it("requires authentication", async () => {
+    const app = makeApp();
+    const res = await request(app).get("/api/auth/passkeys");
+    expect(res.status).toBe(401);
+  });
+});
+
 // ─── PATCH /passkeys/:id (rename) ───────────────────────────────────────────
 describe("PATCH /api/auth/passkeys/:id", () => {
   it("renames a passkey, audits auth.passkey.renamed, and returns the updated row", async () => {
