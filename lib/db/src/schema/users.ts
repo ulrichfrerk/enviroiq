@@ -37,6 +37,12 @@ export const usersTable = pgTable("users", {
   allowedSignInMethods: jsonb("allowed_sign_in_methods").$type<
     ("magic_link" | "passkey" | "google_sso" | "microsoft_sso")[]
   >(),
+  // Per-user opt-in for system-generated email notifications (daily ESG data
+  // quality digest, scheduled reminders, stale sign-in digest, etc.). Default
+  // is OFF — admins explicitly turn this on from their Account page when they
+  // want EnviroIQ to start emailing them. The bell icon / in-app notification
+  // history is unaffected by this flag, only the email channel.
+  emailNotificationsEnabled: boolean("email_notifications_enabled").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

@@ -8,6 +8,7 @@ export interface AuthUser {
   role: "super_admin" | "org_admin" | "org_user" | "org_viewer" | "org_auditor";
   organisationId: string | null;
   organisationName: string | null;
+  emailNotificationsEnabled: boolean;
   isAuthenticated: true;
 }
 

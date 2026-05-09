@@ -42,6 +42,8 @@ interface ResolvedRecipient {
   name: string | null;
   /** NULL = user has never signed in; email channel is suppressed. */
   lastLoginAt: Date | null;
+  /** Per-user opt-in for the email channel (default false). Bell-icon rows fire regardless. */
+  emailNotificationsEnabled: boolean;
   /** Recipient's home org — used to file orphan-fallback bell rows so they surface in-app. */
   organisationId: string | null;
 }
@@ -57,6 +59,7 @@ async function resolveRecipients(orgId: string): Promise<{
       email: usersTable.email,
       name: usersTable.name,
       lastLoginAt: usersTable.lastLoginAt,
+      emailNotificationsEnabled: usersTable.emailNotificationsEnabled,
       organisationId: usersTable.organisationId,
     })
     .from(usersTable)
@@ -76,6 +79,7 @@ async function resolveRecipients(orgId: string): Promise<{
       email: usersTable.email,
       name: usersTable.name,
       lastLoginAt: usersTable.lastLoginAt,
+      emailNotificationsEnabled: usersTable.emailNotificationsEnabled,
       organisationId: usersTable.organisationId,
     })
     .from(usersTable)
@@ -156,12 +160,15 @@ export async function notify(input: NotifyInput): Promise<NotifyResult> {
       const orgName = org?.name ?? "your organisation";
       const emailable = recipients
         .map((recipient, i) => ({ recipient, row: rows[i] }))
-        .filter((p) => p.recipient.lastLoginAt !== null);
+        // Two gates: (1) must have completed first sign-in (to avoid mailing
+        // dormant invites), (2) must have explicitly opted in to email
+        // notifications (default OFF — toggle on Account page).
+        .filter((p) => p.recipient.lastLoginAt !== null && p.recipient.emailNotificationsEnabled === true);
       const skipped = recipients.length - emailable.length;
       if (skipped > 0) {
         logger.info(
           { orgId: input.organisationId, skipped, dedupeKey: input.dedupeKey },
-          "Skipped email channel for recipients who haven't completed first sign-in",
+          "Skipped email channel — recipients haven't completed first sign-in or haven't opted in",
         );
       }
 
@@ -270,6 +277,10 @@ export async function sendNotificationDigests(
     if (!user || !user.isActive) continue;
     if (!user.lastLoginAt) {
       logger.info({ userId }, "Digest skipped — recipient has not completed first sign-in");
+      continue;
+    }
+    if (!user.emailNotificationsEnabled) {
+      logger.info({ userId }, "Digest skipped — recipient has not opted in to email notifications");
       continue;
     }
     const org = await db.query.organisationsTable.findFirst({

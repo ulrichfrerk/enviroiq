@@ -105,6 +105,12 @@ async function ensureSsoSchema(): Promise<void> {
   await db.execute(
     sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS allowed_sign_in_methods jsonb`,
   );
+  // Per-user opt-in for system-generated email notifications. Default OFF —
+  // admins enable from their Account page when they want EnviroIQ to start
+  // emailing them. Bell-icon notifications are unaffected.
+  await db.execute(
+    sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS email_notifications_enabled boolean NOT NULL DEFAULT false`,
+  );
   // last_used_at on passkeys (lib/db/src/schema/users.ts) — bumped on each
   // successful passkey login. Nullable so existing rows stay "Never used"
   // until the next sign-in rather than back-dating to the migration moment.

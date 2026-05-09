@@ -15,12 +15,14 @@ import {
   Pencil,
   Check,
   X,
+  BellRing,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
@@ -265,6 +267,32 @@ export default function Account() {
     renameMutation.mutate({ id: pk.id, label: trimmed.length === 0 ? null : trimmed });
   };
 
+  // Per-user opt-in for system-generated email notifications. Default OFF on
+  // the server; this toggle is the only way to turn them on. Only relevant
+  // for the user themselves — admins viewing another user's account see the
+  // current state but the toggle is disabled (only the user can change it).
+  const emailOptIn = session?.emailNotificationsEnabled ?? false;
+  const notifPrefMutation = useMutation({
+    mutationFn: (enabled: boolean) =>
+      jsonFetch<{ emailNotificationsEnabled: boolean }>(
+        `/api/auth/me/notification-preferences`,
+        { method: "PATCH", body: JSON.stringify({ emailNotificationsEnabled: enabled }) },
+      ),
+    onSuccess: (data) => {
+      toast({
+        title: data.emailNotificationsEnabled ? "Email notifications turned on" : "Email notifications turned off",
+        description: data.emailNotificationsEnabled
+          ? "You'll receive the daily ESG data quality digest and other alerts at your account email."
+          : "You'll still see notifications in the bell icon — emails are paused.",
+      });
+      void qc.invalidateQueries({ queryKey: ["auth", "session"] });
+    },
+    onError: (err: unknown) => {
+      const message = err instanceof Error ? err.message : "Could not update preference";
+      toast({ variant: "destructive", title: "Update failed", description: message });
+    },
+  });
+
   const handleEnrollPasskey = async () => {
     setEnrolling(true);
     try {
@@ -412,6 +440,38 @@ export default function Account() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Email notifications opt-in (only meaningful for the user themselves) */}
+      {!isViewingOther && (
+        <Card className="bg-card border-border">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <BellRing className="w-5 h-5 text-primary" /> Email notifications
+            </CardTitle>
+            <CardDescription>
+              Get the daily ESG data quality digest and important alerts at your account email. You'll always see notifications in the bell icon — this only controls whether we email you too.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-start justify-between gap-4 py-2">
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-foreground">
+                  Send notifications to {targetUser?.email}
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Off by default. Turn on when you want EnviroIQ to email you about data-quality issues, fleet imports, audit reminders and security alerts.
+                </p>
+              </div>
+              <Switch
+                checked={emailOptIn}
+                disabled={notifPrefMutation.isPending}
+                onCheckedChange={(checked) => notifPrefMutation.mutate(checked)}
+                aria-label="Toggle email notifications"
+              />
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Sign-in methods — Passkeys */}
       <Card className="bg-card border-border">

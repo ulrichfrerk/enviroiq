@@ -121,8 +121,34 @@ router.get("/session", requireAuth, async (req, res) => {
     role: user.role,
     organisationId: user.organisationId,
     organisationName,
+    emailNotificationsEnabled: user.emailNotificationsEnabled === true,
     isAuthenticated: true,
   });
+});
+
+// PATCH /auth/me/notification-preferences
+// Self-service toggle for the per-user email opt-in. Body: { emailNotificationsEnabled: boolean }.
+// No role gate — any authenticated user can change their own preference.
+router.patch("/me/notification-preferences", requireAuth, async (req, res) => {
+  const user = req.user!;
+  const raw = (req.body ?? {}) as { emailNotificationsEnabled?: unknown };
+  if (typeof raw.emailNotificationsEnabled !== "boolean") {
+    res.status(400).json({ error: "Bad Request", message: "emailNotificationsEnabled must be a boolean" });
+    return;
+  }
+  await db
+    .update(usersTable)
+    .set({ emailNotificationsEnabled: raw.emailNotificationsEnabled, updatedAt: new Date() })
+    .where(eq(usersTable.id, user.id));
+  await logAudit({
+    req,
+    action: "user.notification_preferences.changed",
+    resourceType: "user",
+    resourceId: user.id,
+    organisationId: user.organisationId ?? undefined,
+    details: { emailNotificationsEnabled: raw.emailNotificationsEnabled },
+  });
+  res.json({ emailNotificationsEnabled: raw.emailNotificationsEnabled });
 });
 
 router.post("/logout", async (req, res) => {
