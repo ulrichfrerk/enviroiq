@@ -158,12 +158,24 @@ router.get("/verify", async (req, res) => {
   }
 });
 
+function parseSupplierCookie(raw: unknown): { email: string; token: string } | null {
+  if (!raw || typeof raw !== "string") return null;
+  // Email can contain dots in the domain, so split on the LAST dot — everything
+  // before it is the email, everything after is the cookie secret.
+  const idx = raw.lastIndexOf(".");
+  if (idx <= 0 || idx === raw.length - 1) return null;
+  const email = raw.slice(0, idx);
+  const token = raw.slice(idx + 1);
+  if (!email || !token) return null;
+  return { email, token };
+}
+
 async function requireSupplier(req: any, res: any, next: any) {
-  const raw = req.cookies?.[COOKIE_NAME];
-  if (!raw || typeof raw !== "string" || !raw.includes(".")) {
+  const parsed = parseSupplierCookie(req.cookies?.[COOKIE_NAME]);
+  if (!parsed) {
     res.status(401).json({ error: "Not signed in" }); return;
   }
-  const [email, token] = raw.split(".", 2);
+  const { email, token } = parsed;
   const session = await db.query.supplierPortalSessionsTable.findFirst({
     where: and(
       eq(supplierPortalSessionsTable.email, email),
@@ -183,12 +195,11 @@ router.get("/me", requireSupplier, async (req, res) => {
 
 // POST /portal/logout
 router.post("/logout", async (req, res) => {
-  const raw = req.cookies?.[COOKIE_NAME];
-  if (raw && typeof raw === "string" && raw.includes(".")) {
-    const [email, token] = raw.split(".", 2);
+  const parsed = parseSupplierCookie(req.cookies?.[COOKIE_NAME]);
+  if (parsed) {
     await db.delete(supplierPortalSessionsTable).where(and(
-      eq(supplierPortalSessionsTable.email, email),
-      eq(supplierPortalSessionsTable.tokenHash, sha256(token)),
+      eq(supplierPortalSessionsTable.email, parsed.email),
+      eq(supplierPortalSessionsTable.tokenHash, sha256(parsed.token)),
     ));
   }
   res.clearCookie(COOKIE_NAME, { path: "/" });

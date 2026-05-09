@@ -642,15 +642,9 @@ describe("GET /portal/verify", () => {
     expect(cookieStr).toMatch(/Path=\//i);
 
     // The cookie value is `${email}.${rawCookieSecret}` — NOT the
-    // magic-link raw token, NOT the stored hash. We deliberately do NOT
-    // assert the email half of the cookie here: the route's cookie
-    // *consumer* (`requireSupplier`) parses with `raw.split(".", 2)`,
-    // which is broken for any email containing a `.` in its domain
-    // (it splits on the first dot, not the last). That is a separate
-    // bug — out of scope for "add test coverage for the sign-in link" —
-    // and pinning today's incorrect parse would block the eventual fix.
-    // We only assert the cookie's transport-level attributes and that the
-    // secret half is freshly rolled (not the magic-link token).
+    // magic-link raw token, NOT the stored hash. The cookie *consumer*
+    // (`requireSupplier`) splits on the LAST dot so emails with dots in
+    // the domain (i.e. essentially every real email) round-trip correctly.
     const cookieMatch = cookieStr.match(/eiq_supplier_session=([^;]+)/);
     expect(cookieMatch).toBeTruthy();
     const cookieValue = decodeURIComponent(cookieMatch![1]);
@@ -659,6 +653,24 @@ describe("GET /portal/verify", () => {
     const cookieSecret = cookieValue.slice("supplier@example.com.".length);
     expect(cookieSecret.length).toBeGreaterThanOrEqual(32);
     expect(cookieSecret).not.toBe(rawToken); // must be a freshly rolled secret
+    // Critically: the secret half must NOT itself contain a dot — otherwise
+    // a "split on last dot" parse would still misattribute bytes between
+    // email and secret. base64url contains no dots, so this is a free check.
+    expect(cookieSecret.includes(".")).toBe(false);
+
+    // Positive cookie round-trip: present the cookie to /portal/me and get
+    // back our own email. This is the assertion the original
+    // `raw.split(".", 2)` bug would have failed, because the ".com" of
+    // the email was being lopped off and treated as the secret.
+    // We set the Cookie header explicitly rather than relying on the
+    // supertest agent because the route marks the cookie `Secure` whenever
+    // REPLIT_DOMAINS is set in the env, and the agent (over HTTP) won't
+    // resend a Secure cookie.
+    const me = await request(app)
+      .get("/portal/me")
+      .set("Cookie", `eiq_supplier_session=${cookieMatch![1]}`);
+    expect(me.status).toBe(200);
+    expect(me.body).toEqual({ email: "supplier@example.com" });
 
     // The original magic-link row was burned, and a NEW long-lived session
     // (~30 days) is on file with sha256(cookieSecret) as its tokenHash.
