@@ -25,14 +25,19 @@ function appBase(): string {
   return "http://localhost:5173";
 }
 
-const requestSchema = z.object({ email: z.string().email() });
+const requestSchema = z.object({
+  email: z.preprocess(
+    (v) => (typeof v === "string" ? v.trim().toLowerCase() : v),
+    z.string().email(),
+  ),
+});
 
 // POST /portal/request-link — email the supplier a magic link
 router.post("/request-link", async (req, res) => {
   try {
     const parsed = requestSchema.safeParse(req.body);
     if (!parsed.success) { res.status(400).json({ error: "Email required" }); return; }
-    const email = parsed.data.email.toLowerCase().trim();
+    const email = parsed.data.email;
 
     // Privacy: don't leak whether email exists in any audit.
     const exists = await db.query.supplierAuditsTable.findFirst({ where: eq(supplierAuditsTable.recipientEmail, email) });

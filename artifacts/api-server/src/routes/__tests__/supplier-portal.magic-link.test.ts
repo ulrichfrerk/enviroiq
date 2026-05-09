@@ -328,17 +328,16 @@ describe("POST /portal/request-link", () => {
     ).toBe(false);
   });
 
-  it("lowercases the email before the supplier-audits lookup so case differences don't cause a spurious miss", async () => {
-    // NOTE: the route runs `parsed.data.email.toLowerCase().trim()` AFTER
-    // zod's `.email()` validation, so leading/trailing whitespace is
-    // rejected by zod before the trim ever runs. We only assert lowercase
-    // normalisation here — what the route actually delivers — rather than
-    // pinning a `.trim()` that has no effect in this code path.
+  it("trims and lowercases the email before validation so case + stray whitespace (e.g. from rich-text email clients) doesn't cause a spurious miss or 400", async () => {
+    // The route preprocesses the email with `.trim().toLowerCase()` BEFORE
+    // zod's `.email()` validation, so a stray leading/trailing space (which
+    // is easy to pick up when copying an address out of an audit-invite
+    // email) is normalised away rather than rejected as invalid.
     dbState.supplierAuditExists = true;
     const app = makeApp();
     const res = await request(app)
       .post("/portal/request-link")
-      .send({ email: "SUPPLIER@Example.COM" });
+      .send({ email: "  SUPPLIER@Example.COM  " });
 
     expect(res.status).toBe(200);
     expect(dbState.supplierAuditLookups).toEqual(["supplier@example.com"]);
