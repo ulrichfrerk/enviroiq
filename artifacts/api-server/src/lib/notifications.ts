@@ -275,13 +275,20 @@ export async function sendNotificationDigests(
     const org = await db.query.organisationsTable.findFirst({
       where: eq(organisationsTable.id, rows[0].organisationId),
     });
-    const summary = rows.map((r) => `• ${r.title} — ${r.body}`).join("\n");
+    const intro = rows.length === 1
+      ? `You have 1 item that needs your attention in EnviroIQ today:`
+      : `You have ${rows.length} items that need your attention in EnviroIQ today:`;
     items.push({
       to: user.email,
       recipientName: user.name ?? user.email,
       orgName: org?.name ?? "your organisation",
       title: `Daily ESG data quality digest (${rows.length} item${rows.length === 1 ? "" : "s"})`,
-      body: summary,
+      body: intro,
+      items: rows.map((r) => ({
+        title: r.title,
+        body: r.body,
+        linkUrl: r.linkUrl ?? undefined,
+      })),
     });
     stampGroups.push(rows.map((r) => r.id));
     userCount++;

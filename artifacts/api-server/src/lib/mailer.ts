@@ -2,6 +2,35 @@
 import { Resend } from "resend";
 import { logger } from "./logger.js";
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Beta recipient allowlist
+// ─────────────────────────────────────────────────────────────────────────────
+// While EnviroIQ notifications are in beta we want to be able to limit
+// "system-generated" emails (daily digests, scheduled reminders, security
+// digests) to a small list of internal addresses without touching the
+// generation/scheduling pipeline. Set NOTIFICATION_BETA_ALLOWLIST to a
+// comma-separated list of email addresses (case-insensitive) to enable.
+//
+// Auth-flow emails (magic links, invites, supplier-audit *invites*) are
+// NEVER filtered — they would silently break sign-in for real users.
+function getBetaAllowlist(): Set<string> | null {
+  const raw = process.env.NOTIFICATION_BETA_ALLOWLIST;
+  if (!raw || !raw.trim()) return null;
+  const set = new Set(
+    raw
+      .split(/[,;\s]+/)
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean),
+  );
+  return set.size > 0 ? set : null;
+}
+
+/** Returns true when the recipient is allowed to receive beta-gated mail. */
+function recipientAllowed(to: string, allowlist: Set<string> | null): boolean {
+  if (!allowlist) return true;
+  return allowlist.has(to.trim().toLowerCase());
+}
+
 // Resend client — prefers RESEND_API_KEY secret (works in dev + production),
 // falls back to the Replit Connectors proxy for legacy compatibility.
 async function getResendClient(): Promise<{ client: Resend; from: string } | null> {
@@ -153,35 +182,70 @@ export async function sendMagicLinkEmail(
 // Notification emails (data quality / ingest failure alerts)
 // ─────────────────────────────────────────────────────────────────────────────
 
+const escapeHtml = (s: string): string =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+interface DigestItem {
+  title: string;
+  body: string;
+  linkUrl?: string;
+}
+
+const renderDigestItems = (items: DigestItem[], appBase: string): string => {
+  return items
+    .map((it) => {
+      const href = it.linkUrl
+        ? (it.linkUrl.startsWith("http") ? it.linkUrl : `${appBase}${it.linkUrl}`)
+        : "";
+      const cta = href
+        ? `<div style="margin-top:10px;"><a href="${escapeHtml(href)}" style="color:#16a34a;font-weight:600;font-size:13px;text-decoration:none;">Open in EnviroIQ →</a></div>`
+        : "";
+      return `
+      <div style="border:1px solid #e5e7eb;border-radius:10px;padding:16px 18px;margin:0 0 12px;background:#fafafa;">
+        <div style="font-weight:600;color:#111827;font-size:15px;margin:0 0 6px;line-height:1.35;">${escapeHtml(it.title)}</div>
+        <div style="color:#4b5563;font-size:14px;line-height:1.55;">${escapeHtml(it.body).replace(/\n/g, "<br>")}</div>
+        ${cta}
+      </div>`;
+    })
+    .join("");
+};
+
 const notificationEmailHtml = (
   recipientName: string,
   orgName: string,
   title: string,
   body: string,
   linkUrl?: string,
+  items?: DigestItem[],
 ) => {
-  const safeBody = body.replace(/\n/g, "<br>");
-  const cta = linkUrl
-    ? `<a href="${linkUrl}" style="display:inline-block;background:#16a34a;color:#fff;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:600;font-size:15px;margin-top:8px;">Open in EnviroIQ →</a>`
+  const appBase = process.env.APP_BASE_URL?.replace(/\/$/, "") ?? "https://enviroiq.net";
+  const intro = items && items.length > 0
+    ? `<p style="color:#374151;margin:0 0 18px;font-size:14px;line-height:1.55;">${escapeHtml(body)}</p>${renderDigestItems(items, appBase)}`
+    : `<div style="color:#374151;margin:0 0 20px;font-size:14px;line-height:1.6;">${escapeHtml(body).replace(/\n/g, "<br>")}</div>`;
+  const cta = linkUrl && (!items || items.length === 0)
+    ? `<a href="${escapeHtml(linkUrl)}" style="display:inline-block;background:#16a34a;color:#fff;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:600;font-size:15px;margin-top:8px;">Open in EnviroIQ →</a>`
     : "";
   return `<!DOCTYPE html>
 <html lang="en">
-<head><meta charset="UTF-8"><title>${title}</title></head>
-<body style="font-family:system-ui,sans-serif;background:#f9fafb;margin:0;padding:40px 20px;">
-  <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:12px;padding:40px;border:1px solid #e5e7eb;">
-    <div style="margin-bottom:24px;">
+<head><meta charset="UTF-8"><title>${escapeHtml(title)}</title></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;background:#f9fafb;margin:0;padding:40px 20px;color:#111827;">
+  <div style="max-width:600px;margin:0 auto;background:#fff;border-radius:12px;padding:36px 36px 32px;border:1px solid #e5e7eb;">
+    <div style="margin-bottom:24px;display:flex;align-items:baseline;gap:10px;">
       <span style="color:#16a34a;font-weight:700;font-size:20px;">EnviroIQ</span>
-      <span style="color:#6b7280;font-size:13px;margin-left:8px;">${orgName}</span>
+      <span style="color:#6b7280;font-size:13px;">${escapeHtml(orgName)}</span>
     </div>
-    <h1 style="font-size:20px;font-weight:700;color:#111827;margin:0 0 12px;">${title}</h1>
-    <p style="color:#374151;margin:0 0 16px;font-size:14px;">Hi ${recipientName},</p>
-    <div style="color:#374151;margin:0 0 20px;font-size:14px;line-height:1.6;">${safeBody}</div>
+    <h1 style="font-size:20px;font-weight:700;color:#111827;margin:0 0 4px;line-height:1.3;">${escapeHtml(title)}</h1>
+    <p style="color:#6b7280;margin:0 0 20px;font-size:13px;">Hi ${escapeHtml(recipientName)},</p>
+    ${intro}
     ${cta}
-    <p style="color:#9ca3af;margin-top:32px;font-size:12px;">You're receiving this because you're an organisation administrator on EnviroIQ. Open the bell icon in the app to see the full notification history.</p>
+    <p style="color:#9ca3af;margin-top:28px;padding-top:20px;border-top:1px solid #f3f4f6;font-size:12px;line-height:1.5;">You're receiving this because you're an organisation administrator on EnviroIQ. Open the bell icon in the app to see the full notification history.</p>
   </div>
 </body>
 </html>`;
 };
+
+const renderDigestText = (items: DigestItem[]): string =>
+  items.map((it) => `• ${it.title}\n  ${it.body.replace(/\n/g, "\n  ")}${it.linkUrl ? `\n  Link: ${it.linkUrl}` : ""}`).join("\n\n");
 
 export interface NotificationEmailItem {
   to: string;
@@ -190,6 +254,9 @@ export interface NotificationEmailItem {
   title: string;
   body: string;
   linkUrl?: string;
+  /** When provided, the email body is rendered as a structured list of items
+   *  rather than a single text block. `body` becomes the intro paragraph. */
+  items?: DigestItem[];
 }
 
 /**
@@ -202,53 +269,83 @@ export async function sendNotificationEmailBatch(
 ): Promise<{ sent: number; devMode: boolean; results: Array<{ ok: boolean; error?: string }> }> {
   if (items.length === 0) return { sent: 0, devMode: false, results: [] };
   const results: Array<{ ok: boolean; error?: string }> = items.map(() => ({ ok: false }));
+
+  // Beta gate: silently drop recipients not on the allowlist (still mark them
+  // as "ok" so the scheduler stamps the source notification rows as delivered
+  // and doesn't keep retrying them every hour).
+  const allowlist = getBetaAllowlist();
+  const sendIndices: number[] = [];
+  const sendItems: NotificationEmailItem[] = [];
+  for (let i = 0; i < items.length; i++) {
+    if (recipientAllowed(items[i].to, allowlist)) {
+      sendIndices.push(i);
+      sendItems.push(items[i]);
+    } else {
+      results[i] = { ok: true, error: "beta_allowlist_filtered" };
+    }
+  }
+  if (allowlist && sendItems.length < items.length) {
+    logger.info(
+      { dropped: items.length - sendItems.length, kept: sendItems.length, allowlistSize: allowlist.size },
+      "Notification batch filtered by NOTIFICATION_BETA_ALLOWLIST",
+    );
+  }
+  if (sendItems.length === 0) return { sent: 0, devMode: false, results };
+
+  const renderText = (item: NotificationEmailItem): string => {
+    const intro = `${item.title}\n\nHi ${item.recipientName},\n\n${item.body}`;
+    const list = item.items && item.items.length > 0 ? `\n\n${renderDigestText(item.items)}` : "";
+    const link = item.linkUrl && (!item.items || item.items.length === 0)
+      ? `\n\nOpen in EnviroIQ: ${item.linkUrl}\n` : "";
+    return `${intro}${list}${link}`;
+  };
+
   const resend = await getResendClient();
   if (resend) {
-    // Chunk to Resend's 100-email batch limit.
+    // Chunk to Resend's 100-email batch limit (operate on filtered sendItems).
     let totalSent = 0;
-    for (let i = 0; i < items.length; i += 100) {
-      const chunk = items.slice(i, i + 100);
+    for (let i = 0; i < sendItems.length; i += 100) {
+      const chunk = sendItems.slice(i, i + 100);
+      const idxChunk = sendIndices.slice(i, i + 100);
       const payload = chunk.map((item) => ({
         from: resend.from,
         to: item.to,
         subject: `[${item.orgName}] ${item.title}`,
-        html: notificationEmailHtml(item.recipientName, item.orgName, item.title, item.body, item.linkUrl),
-        text: `${item.title}\n\nHi ${item.recipientName},\n\n${item.body}\n${item.linkUrl ? `\nOpen in EnviroIQ: ${item.linkUrl}\n` : ""}`,
+        html: notificationEmailHtml(item.recipientName, item.orgName, item.title, item.body, item.linkUrl, item.items),
+        text: renderText(item),
       }));
       try {
         const { data, error } = await resend.client.batch.send(payload);
         if (error) {
           logger.error({ error, count: chunk.length }, "Resend batch failed");
-          for (let j = 0; j < chunk.length; j++) results[i + j] = { ok: false, error: error.message };
+          for (let j = 0; j < chunk.length; j++) results[idxChunk[j]] = { ok: false, error: error.message };
           continue;
         }
         const ids = Array.isArray(data?.data) ? (data.data as Array<{ id?: string }>) : [];
-        // Resend returns ids in input order; anything past returned count = unstamped.
         for (let j = 0; j < chunk.length; j++) {
           if (ids[j]?.id) {
-            results[i + j] = { ok: true };
+            results[idxChunk[j]] = { ok: true };
             totalSent += 1;
           } else {
-            results[i + j] = { ok: false, error: "no_id_returned" };
+            results[idxChunk[j]] = { ok: false, error: "no_id_returned" };
           }
         }
         logger.info({ count: ids.length, batchIds: ids.map((d) => d.id) }, "Notification emails sent via Resend batch");
       } catch (err) {
         logger.error({ err, count: chunk.length }, "Resend batch send threw");
-        for (let j = 0; j < chunk.length; j++) results[i + j] = { ok: false, error: err instanceof Error ? err.message : String(err) };
+        for (let j = 0; j < chunk.length; j++) results[idxChunk[j]] = { ok: false, error: err instanceof Error ? err.message : String(err) };
       }
     }
     return { sent: totalSent, devMode: false, results };
   }
   if (process.env.NODE_ENV !== "production") {
-    for (const item of items) {
+    for (const item of sendItems) {
       // eslint-disable-next-line no-console
       console.log(`\n[NOTIFICATION EMAIL — RESEND NOT CONFIGURED]\n  To: ${item.to}\n  Subject: [${item.orgName}] ${item.title}\n  Body: ${item.body}\n`);
     }
-    // Dev-console fallback is not a real send — results stay { ok: false }.
     return { sent: 0, devMode: true, results };
   }
-  logger.error({ count: items.length }, "Resend not configured in production — notification batch dropped");
+  logger.error({ count: sendItems.length }, "Resend not configured in production — notification batch dropped");
   return { sent: 0, devMode: false, results };
 }
 
@@ -261,6 +358,12 @@ export async function sendNotificationEmail(
   body: string,
   linkUrl?: string,
 ): Promise<{ sent: boolean; devMode: boolean }> {
+  // Beta gate.
+  const allowlist = getBetaAllowlist();
+  if (!recipientAllowed(to, allowlist)) {
+    logger.info({ to, title }, "Notification email skipped by NOTIFICATION_BETA_ALLOWLIST");
+    return { sent: false, devMode: false };
+  }
   const resend = await getResendClient();
   if (resend) {
     const { data, error } = await resend.client.emails.send({
@@ -371,6 +474,12 @@ export async function sendSupplierAuditReminderEmail(
   dueDate: string,
   reminderType: "30d" | "7d" | "overdue",
 ): Promise<{ sent: boolean; devMode: boolean }> {
+  // Beta gate: scheduled reminders are suppressed for non-allowlisted recipients.
+  const allowlist = getBetaAllowlist();
+  if (!recipientAllowed(to, allowlist)) {
+    logger.info({ to, reminderType }, "Supplier audit reminder skipped by NOTIFICATION_BETA_ALLOWLIST");
+    return { sent: false, devMode: false };
+  }
   const resend = await getResendClient();
   if (resend) {
     const subject = reminderType === "overdue"
@@ -472,6 +581,12 @@ export async function sendStaleSignInMethodsEmail(
   accountUrl: string,
 ): Promise<{ sent: boolean; devMode: boolean; messageId?: string }> {
   if (items.length === 0) return { sent: false, devMode: false };
+  // Beta gate.
+  const allowlist = getBetaAllowlist();
+  if (!recipientAllowed(to, allowlist)) {
+    logger.info({ to, count: items.length }, "Stale sign-in digest skipped by NOTIFICATION_BETA_ALLOWLIST");
+    return { sent: false, devMode: false };
+  }
   const resend = await getResendClient();
   const summary = items
     .map((it) => `• ${it.label} — ${it.lastUsedLabel} (${it.ageDays} days ago)`)
