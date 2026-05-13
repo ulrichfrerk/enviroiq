@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { v4 as uuidv4 } from "uuid";
 import { and, eq, isNotNull, lte, sql } from "drizzle-orm";
-import { db, documentArchivesTable, type DocumentArchive } from "@workspace/db";
+import { db, documentArchivesTable, organisationsTable, type DocumentArchive } from "@workspace/db";
 import { logger } from "./logger.js";
 
 export type ArchiveSourceType =
@@ -24,13 +24,37 @@ export interface ArchiveDocumentInput {
   notes?: string | null;
 }
 
-const DEFAULT_RETENTION_MONTHS = 6;
+export const DEFAULT_RETENTION_MONTHS = 6;
+export const MIN_RETENTION_MONTHS = 1;
+export const MAX_RETENTION_MONTHS = 120; // 10 years — comfortably covers NZ 7y audit floors
 const MAX_BYTES = 25 * 1024 * 1024;
 
 function addMonths(d: Date, months: number): Date {
   const out = new Date(d.getTime());
   out.setUTCMonth(out.getUTCMonth() + months);
   return out;
+}
+
+/**
+ * Look up the org's configured archive retention. Falls back to the platform
+ * default if the column is somehow missing/NULL (defensive — the column has a
+ * NOT NULL DEFAULT 6, but we'd rather over-retain than crash a webhook).
+ */
+export async function getOrgArchiveRetentionMonths(organisationId: string): Promise<number> {
+  try {
+    const [row] = await db
+      .select({ months: organisationsTable.documentArchiveRetentionMonths })
+      .from(organisationsTable)
+      .where(eq(organisationsTable.id, organisationId))
+      .limit(1);
+    const m = row?.months;
+    if (typeof m === "number" && m >= MIN_RETENTION_MONTHS && m <= MAX_RETENTION_MONTHS) {
+      return m;
+    }
+  } catch (err) {
+    logger.warn({ err, organisationId }, "getOrgArchiveRetentionMonths failed; using platform default");
+  }
+  return DEFAULT_RETENTION_MONTHS;
 }
 
 export async function archiveDocument(input: ArchiveDocumentInput): Promise<DocumentArchive | null> {
@@ -48,7 +72,10 @@ export async function archiveDocument(input: ArchiveDocumentInput): Promise<Docu
     }
 
     const sha256 = createHash("sha256").update(input.buffer).digest("hex");
-    const months = input.retentionMonths ?? DEFAULT_RETENTION_MONTHS;
+    // Per-call override wins (e.g. a future "legal hold" longer-than-policy
+    // archive). Otherwise honour the org's configured retention. Falls back
+    // to the platform default if the org lookup fails.
+    const months = input.retentionMonths ?? (await getOrgArchiveRetentionMonths(input.organisationId));
     const now = new Date();
 
     const [row] = await db
@@ -131,8 +158,8 @@ export async function pruneExpiredDocumentArchives(): Promise<PruneResult> {
   const bytesFreed = purgedRows.reduce((sum, r) => sum + (r.sizeBytes ?? 0), 0);
 
   logger.info(
-    { purged: purgedRows.length, bytesFreed, retentionMonths: 6 },
-    "Document archive prune complete — expired blobs nullified",
+    { purged: purgedRows.length, bytesFreed },
+    "Document archive prune complete — expired blobs nullified (per-row expires_at honoured)",
   );
 
   return { scanned: purgedRows.length, purged: purgedRows.length, bytesFreed };

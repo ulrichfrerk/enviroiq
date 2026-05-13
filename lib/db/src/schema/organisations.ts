@@ -52,6 +52,13 @@ export const organisationsTable = pgTable("organisations", {
   isActive: boolean("is_active").notNull().default(true),
   requireMfa: boolean("require_mfa").notNull().default(false),
   dataResidency: text("data_residency").notNull().default("NZ"),
+  // Compliance archive retention (months). Applied at capture time to set
+  // expires_at on the document_archives row. Range 1–120 enforced at the API
+  // layer. Default 6mo matches the original platform-wide policy; auditors
+  // requiring 7y can set 84.
+  documentArchiveRetentionMonths: integer("document_archive_retention_months")
+    .notNull()
+    .default(6),
   // SSO policy ────────────────────────────────────────────────────────────────
   // Per-provider master switch. Both default ON so SSO works as soon as the
   // tenant has an EnviroIQ-issued OAuth client wired up at the platform level.

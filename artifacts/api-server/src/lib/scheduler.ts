@@ -140,7 +140,10 @@ export function startScheduler(): void {
   archivePruneHandle = setInterval(() => {
     void pruneExpiredDocumentArchives();
   }, PRUNE_INTERVAL_MS);
-  logger.info({ intervalMs: PRUNE_INTERVAL_MS, retentionMonths: 6 }, "Document archive prune job scheduled");
+  logger.info(
+    { intervalMs: PRUNE_INTERVAL_MS },
+    "Document archive prune job scheduled (per-org retention; default 6mo, configurable per organisation)",
+  );
 
   // Notification digest — hourly tick fires per-org digest at that org's local 8am.
   const lastDigestDayByOrg = new Map<string, string>();

@@ -95,6 +95,13 @@ async function ensureSsoSchema(): Promise<void> {
   await db.execute(
     sql`ALTER TABLE organisations ADD COLUMN IF NOT EXISTS required_sso_provider text`,
   );
+  // Per-org compliance archive retention (months). Applied at capture time
+  // to derive expires_at on document_archives. Default matches the original
+  // platform-wide 6mo policy; admins can raise it (e.g. 84 for 7-year audit
+  // requirements) via PATCH /organisations/:orgId/document-archive-policy.
+  await db.execute(
+    sql`ALTER TABLE organisations ADD COLUMN IF NOT EXISTS document_archive_retention_months integer NOT NULL DEFAULT 6`,
+  );
   // Per-user sign-in policy override columns (lib/db/src/schema/users.ts).
   // Added as part of the per-user "Sign-in restrictions" feature; required by
   // both the per-user PATCH /:userId/sign-in-policy endpoint and the bulk
