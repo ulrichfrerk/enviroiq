@@ -7,7 +7,8 @@ import { logger } from "./logger.js";
 export type ArchiveSourceType =
   | "energy_bill_upload"
   | "energy_bill_batch_upload"
-  | "energy_bill_email";
+  | "energy_bill_email"
+  | "fleet_report_email";
 
 export interface ArchiveDocumentInput {
   organisationId: string;

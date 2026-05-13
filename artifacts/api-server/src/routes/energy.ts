@@ -728,6 +728,7 @@ energyEmailWebhookRouter.post("/inbound-email", async (req, res) => {
 
           let parsedRows: Awaited<ReturnType<typeof parseTN360TripReportBuffer>> | null = null;
           let pickedAttachment: typeof xlsxAttachments[number] | null = null;
+          let pickedArchiveId: string | null = null;
 
           for (const att of xlsxAttachments) {
             const dlResp = await fetch(att.download_url, { signal: AbortSignal.timeout(20000) });
@@ -736,11 +737,31 @@ energyEmailWebhookRouter.post("/inbound-email", async (req, res) => {
               continue;
             }
             const buf = Buffer.from(await dlResp.arrayBuffer());
+
+            // Archive the raw XLSX to the compliance document store BEFORE
+            // attempting to parse — keeps the original supplier evidence even
+            // if our parser later rejects the file. SHA-256 is captured by the
+            // archive layer for integrity, and the row is retained as a
+            // tombstone after the bytes are purged at the end of the
+            // retention window. Failures are non-fatal (logged only) so a
+            // hiccup in the archive store can't block ingestion.
+            const archived = await archiveDocument({
+              organisationId: orgForFleet.id,
+              sourceType: "fleet_report_email",
+              sourceId: emailId,
+              buffer: buf,
+              filename: att.filename ?? `navman-trip-report-${emailId}.xlsx`,
+              contentType: att.content_type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+              senderEmail: from,
+              notes: `Inbound fleet report: provider=${fleetProvider}; subject=${subject || "(no subject)"}; matchedBy=${fleetMatchedBy}`,
+            });
+
             if (!looksLikeTN360TripReport(buf)) continue;
             const parsed = parseTN360TripReportBuffer(buf);
             if (parsed.ok) {
               parsedRows = parsed;
               pickedAttachment = att;
+              pickedArchiveId = archived?.id ?? null;
               break;
             }
           }
@@ -780,6 +801,7 @@ energyEmailWebhookRouter.post("/inbound-email", async (req, res) => {
               ...sharedAuditDetails,
               autoImported: true,
               attachmentName: pickedAttachment.filename,
+              archiveId: pickedArchiveId,
               imported: importResult.imported,
               skippedDuplicates: importResult.skippedDuplicates,
               created: importResult.created.length,
@@ -811,6 +833,7 @@ energyEmailWebhookRouter.post("/inbound-email", async (req, res) => {
               subject,
               emailId,
               attachmentName: pickedAttachment.filename,
+              archiveId: pickedArchiveId,
               imported: importResult.imported,
               skippedDuplicates: importResult.skippedDuplicates,
               created: importResult.created,
