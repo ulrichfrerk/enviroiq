@@ -572,15 +572,155 @@ webhookRouter.post("/generic", async (req, res) => {
   }
 });
 
+// Core import logic — exported so the inbound-email auto-ingest path
+// (energy.ts) can reuse it without going through the HTTP route. Returns the
+// same shape as the HTTP route's JSON body, plus an `importAuditId` so callers
+// can chain follow-up audit/notification rows. Auto-creates missing vehicles
+// and dedupes against previously-imported (vehicle, date, distance) trips.
+export type ImportKmRow = {
+  vehicle: string;
+  date: string;
+  distanceKm: number | string;
+  fuelLitres?: number | string;
+};
+export type ImportKmResult = {
+  imported: number;
+  skippedDuplicates: number;
+  created: string[];
+  errors: string[];
+  importAuditId: string;
+};
+
+export async function importKmRows(opts: {
+  orgId: string;
+  rows: ImportKmRow[];
+  // Used purely for the audit row context — http requests pass `req`; the
+  // inbound-email caller passes a synthetic context with no req.
+  req?: Parameters<typeof logAudit>[0]["req"];
+  source?: string; // value stored in fleet_events.source — defaults to "tn360-import"
+  auditAction?: string; // defaults to "fleet.import_km"
+}): Promise<ImportKmResult> {
+  const { orgId, rows, req } = opts;
+  const source = opts.source ?? "tn360-import";
+  const auditAction = opts.auditAction ?? "fleet.import_km";
+
+  const orgVehicles = await db.query.vehiclesTable.findMany({
+    where: eq(vehiclesTable.organisationId, orgId),
+  });
+  const byName = new Map(orgVehicles.map(v => [v.name.toLowerCase().trim(), v]));
+  const byRego = new Map(
+    orgVehicles.filter(v => v.registration).map(v => [v.registration!.toLowerCase().trim(), v])
+  );
+
+  let imported = 0;
+  let skippedDuplicates = 0;
+  const created: string[] = [];
+  const errors: string[] = [];
+
+  const existingEvents = await db
+    .select({
+      vehicleId: fleetEventsTable.vehicleId,
+      recordedAt: fleetEventsTable.recordedAt,
+      distanceKm: fleetEventsTable.distanceKm,
+    })
+    .from(fleetEventsTable)
+    .where(and(
+      eq(fleetEventsTable.organisationId, orgId),
+      eq(fleetEventsTable.source, source),
+    ));
+  const existingKeys = new Set(
+    existingEvents.map(e => `${e.vehicleId}|${e.recordedAt?.toISOString().slice(0, 10)}|${e.distanceKm ?? ""}`),
+  );
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const label = row.vehicle?.trim() || `Row ${i + 1}`;
+    const vehicleKey = label.toLowerCase();
+
+    let vehicle = byName.get(vehicleKey) ?? byRego.get(vehicleKey);
+    if (!vehicle) {
+      const [newVehicle] = await db.insert(vehiclesTable).values({
+        id: uuidv4(),
+        organisationId: orgId,
+        name: label,
+        registration: label,
+        fuelType: "diesel",
+        isActive: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }).returning();
+      vehicle = newVehicle;
+      byName.set(vehicleKey, newVehicle);
+      byRego.set(vehicleKey, newVehicle);
+      created.push(label);
+      await logAudit({ req, action: "vehicle.auto_create", resourceType: "vehicle", resourceId: newVehicle.id, organisationId: orgId, details: { name: label, source } });
+    }
+
+    const distanceKm = Number(row.distanceKm);
+    if (!distanceKm || distanceKm <= 0) {
+      errors.push(`${label}: invalid distance "${row.distanceKm}"`);
+      continue;
+    }
+
+    let recordedAt: Date;
+    try {
+      const dateStr = (row.date || "").trim();
+      const ddmm = dateStr.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+      recordedAt = ddmm
+        ? new Date(`${ddmm[3]}-${ddmm[2].padStart(2, "0")}-${ddmm[1].padStart(2, "0")}`)
+        : new Date(dateStr);
+      if (isNaN(recordedAt.getTime())) throw new Error("invalid");
+    } catch {
+      errors.push(`${label}: invalid date "${row.date}"`);
+      continue;
+    }
+
+    const fuelLitres = row.fuelLitres ? Number(row.fuelLitres) : undefined;
+
+    const dedupeKey = `${vehicle.id}|${recordedAt.toISOString().slice(0, 10)}|${distanceKm}`;
+    if (existingKeys.has(dedupeKey)) {
+      skippedDuplicates++;
+      continue;
+    }
+    existingKeys.add(dedupeKey);
+
+    await insertFleetEvent({
+      vehicleId: vehicle.id,
+      organisationId: orgId,
+      eventType: "manual-import",
+      distanceKm,
+      fuelLitres: fuelLitres && fuelLitres > 0 ? fuelLitres : undefined,
+      source,
+      recordedAt,
+      rawPayload: JSON.stringify(row),
+      fuelType: vehicle.fuelType,
+      emissionFactor: vehicle.emissionFactorKgPerKm ?? undefined,
+      make: vehicle.make ?? undefined,
+      model: vehicle.model ?? undefined,
+      name: vehicle.name ?? undefined,
+    });
+
+    imported++;
+  }
+
+  const importAuditId = await logAudit({
+    req,
+    action: auditAction,
+    outcome: "success",
+    details: { imported, skippedDuplicates, created: created.length, errors: errors.length, source },
+    organisationId: orgId,
+  });
+
+  return { imported, skippedDuplicates, created, errors, importAuditId };
+}
+
 // POST /organisations/:orgId/fleet/import-km
 // Accepts an array of {vehicle, date, distanceKm, fuelLitres?} rows,
 // matches vehicles by name or registration, and inserts fleet events.
 router.post("/import-km", requireAuth, requireOrgAdmin, async (req, res) => {
   try {
     const orgId = req.params.orgId as string;
-    const { rows } = req.body as {
-      rows: Array<{ vehicle: string; date: string; distanceKm: number | string; fuelLitres?: number | string }>;
-    };
+    const { rows } = req.body as { rows: ImportKmRow[] };
 
     if (!Array.isArray(rows) || rows.length === 0) {
       res.status(400).json({ error: "Bad Request", message: "rows array is required and must not be empty" });
@@ -591,116 +731,10 @@ router.post("/import-km", requireAuth, requireOrgAdmin, async (req, res) => {
       return;
     }
 
-    // Load all vehicles for this org and build lookup maps
-    const orgVehicles = await db.query.vehiclesTable.findMany({
-      where: eq(vehiclesTable.organisationId, orgId),
-    });
-    const byName = new Map(orgVehicles.map(v => [v.name.toLowerCase().trim(), v]));
-    const byRego = new Map(
-      orgVehicles.filter(v => v.registration).map(v => [v.registration!.toLowerCase().trim(), v])
-    );
-
-    let imported = 0;
-    let skippedDuplicates = 0;
-    const created: string[] = [];
-    const errors: string[] = [];
-
-    // Pre-load existing tn360-import event keys so a re-uploaded report (or a
-    // double-clicked import button) doesn't insert the same trip twice.
-    const existingEvents = await db
-      .select({
-        vehicleId: fleetEventsTable.vehicleId,
-        recordedAt: fleetEventsTable.recordedAt,
-        distanceKm: fleetEventsTable.distanceKm,
-      })
-      .from(fleetEventsTable)
-      .where(and(
-        eq(fleetEventsTable.organisationId, orgId),
-        eq(fleetEventsTable.source, "tn360-import"),
-      ));
-    const existingKeys = new Set(
-      existingEvents.map(e => `${e.vehicleId}|${e.recordedAt?.toISOString().slice(0, 10)}|${e.distanceKm ?? ""}`),
-    );
-
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      const label = row.vehicle?.trim() || `Row ${i + 1}`;
-      const vehicleKey = label.toLowerCase();
-
-      let vehicle = byName.get(vehicleKey) ?? byRego.get(vehicleKey);
-      if (!vehicle) {
-        // Auto-create the vehicle so new registrations aren't silently dropped
-        const [newVehicle] = await db.insert(vehiclesTable).values({
-          id: uuidv4(),
-          organisationId: orgId,
-          name: label,
-          registration: label,
-          fuelType: "diesel",
-          isActive: true,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        }).returning();
-        vehicle = newVehicle;
-        byName.set(vehicleKey, newVehicle);
-        byRego.set(vehicleKey, newVehicle);
-        created.push(label);
-        await logAudit({ req, action: "vehicle.auto_create", resourceType: "vehicle", resourceId: newVehicle.id, organisationId: orgId, details: { name: label, source: "import" } });
-      }
-
-      const distanceKm = Number(row.distanceKm);
-      if (!distanceKm || distanceKm <= 0) {
-        errors.push(`${label}: invalid distance "${row.distanceKm}"`);
-        continue;
-      }
-
-      // Parse date — supports YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY
-      let recordedAt: Date;
-      try {
-        const dateStr = (row.date || "").trim();
-        const ddmm = dateStr.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
-        recordedAt = ddmm
-          ? new Date(`${ddmm[3]}-${ddmm[2].padStart(2, "0")}-${ddmm[1].padStart(2, "0")}`)
-          : new Date(dateStr);
-        if (isNaN(recordedAt.getTime())) throw new Error("invalid");
-      } catch {
-        errors.push(`${label}: invalid date "${row.date}"`);
-        continue;
-      }
-
-      const fuelLitres = row.fuelLitres ? Number(row.fuelLitres) : undefined;
-
-      const dedupeKey = `${vehicle.id}|${recordedAt.toISOString().slice(0, 10)}|${distanceKm}`;
-      if (existingKeys.has(dedupeKey)) {
-        skippedDuplicates++;
-        continue;
-      }
-      existingKeys.add(dedupeKey);
-
-      await insertFleetEvent({
-        vehicleId: vehicle.id,
-        organisationId: orgId,
-        eventType: "manual-import",
-        distanceKm,
-        fuelLitres: fuelLitres && fuelLitres > 0 ? fuelLitres : undefined,
-        source: "tn360-import",
-        recordedAt,
-        rawPayload: JSON.stringify(row),
-        fuelType: vehicle.fuelType,
-        emissionFactor: vehicle.emissionFactorKgPerKm ?? undefined,
-        make: vehicle.make ?? undefined,
-        model: vehicle.model ?? undefined,
-        name: vehicle.name ?? undefined,
-      });
-
-      imported++;
-    }
-
-    const importAuditId = await logAudit({
+    const { imported, skippedDuplicates, created, errors, importAuditId } = await importKmRows({
+      orgId,
+      rows,
       req,
-      action: "fleet.import_km",
-      outcome: "success",
-      details: { imported, skippedDuplicates, created: created.length, errors: errors.length },
-      organisationId: orgId,
     });
 
     if (errors.length > 0) {

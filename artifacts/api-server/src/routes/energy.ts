@@ -10,6 +10,8 @@ import { getCurrentGridIntensity } from "../lib/em6.js";
 import { parseBillText } from "../lib/billParser.js";
 import { archiveDocument } from "../lib/documentArchive.js";
 import { notify } from "../lib/notifications.js";
+import { importKmRows } from "./fleet.js";
+import { looksLikeTN360TripReport, parseTN360TripReportBuffer } from "../lib/tn360-parser.js";
 import { createRequire } from "module";
 // pdf-parse v2 is ESM-first — load the CJS build via createRequire so it works from our ESM bundle
 const { PDFParse } = createRequire(import.meta.url)("pdf-parse") as {
@@ -642,27 +644,209 @@ energyEmailWebhookRouter.post("/inbound-email", async (req, res) => {
     }
 
     if (fleetProvider) {
-      const auditId = await logAudit({
-        req,
-        action: "webhook.energy.inbound_email",
-        outcome: "failure",
-        organisationId: org.id,
-        details: { reason: "fleet_report_routed_to_energy", from, subject, emailId, fleetProvider, matchedBy: fleetMatchedBy },
-      });
-      void notify({
-        organisationId: org.id,
-        category: "webhook.energy.fleet_report_received",
-        severity: "warn",
-        title: `${fleetProvider} report received — please import manually`,
-        body: `${fleetMatchedBy === "content" ? "A forwarded" : "An automatic"} ${fleetProvider} report ("${subject || "(no subject)"}") arrived at your EnviroIQ inbox. ${fleetProvider} fleet reports can't be ingested through the energy-bill pipeline — please import the spreadsheet under Fleet → Import to add it to your emissions data.`,
-        linkUrl: "/fleet",
-        sourceAuditId: auditId,
-        // Dedupe per-email so a Resend retry can't double-fire, but include
-        // emailId so a fresh report from the same sender does fire again.
-        dedupeKey: `webhook.energy.fleet_report_received:${org.id}:${emailId}`,
-        context: { provider: fleetProvider, from, subject, emailId },
-      });
-      res.json({ message: "Fleet report received — admin notified" });
+      // Acknowledge immediately so Resend doesn't retry while we download +
+      // parse the attachment. Everything below runs after the response is sent.
+      res.json({ message: "Fleet report received — auto-ingest queued" });
+
+      // ── Try to auto-ingest Teletrac Navman TN360 "Distance Trip Report" ────
+      // For Navman, we know the canonical report shape (a single XLSX named
+      // "Distance Trip ….xlsx") and have a server-side parser, so we can
+      // import the spreadsheet automatically and skip the manual step.
+      // Other fleet providers fall through to the manual-import notification.
+      const orgForFleet = org;
+      void (async () => {
+        try {
+          const sharedAuditDetails = { from, subject, emailId, fleetProvider, matchedBy: fleetMatchedBy };
+
+          // Manual-import fallback (shared across no-attachment / parse-failed
+          // / non-Navman branches below). Captures the auditId on the calling
+          // side so dedupe stays per-email.
+          const sendManualImportNotice = async (reason: string, extraContext?: Record<string, unknown>) => {
+            const fbAuditId = await logAudit({
+              req,
+              action: "webhook.energy.inbound_email",
+              outcome: "failure",
+              organisationId: orgForFleet.id,
+              details: { reason, ...sharedAuditDetails, ...extraContext },
+            });
+            void notify({
+              organisationId: orgForFleet.id,
+              category: "webhook.energy.fleet_report_received",
+              severity: "warn",
+              title: `${fleetProvider} report received — please import manually`,
+              body: `${fleetMatchedBy === "content" ? "A forwarded" : "An automatic"} ${fleetProvider} report ("${subject || "(no subject)"}") arrived at your EnviroIQ inbox, but EnviroIQ couldn't auto-ingest it. Please import the spreadsheet under Fleet → Import to add it to your emissions data.`,
+              linkUrl: "/fleet",
+              sourceAuditId: fbAuditId,
+              // Dedupe per-email so a Resend retry can't double-fire, but
+              // include emailId so a fresh report from the same sender does
+              // fire again.
+              dedupeKey: `webhook.energy.fleet_report_received:${orgForFleet.id}:${emailId}`,
+              context: { provider: fleetProvider, from, subject, emailId, reason, ...extraContext },
+            });
+          };
+
+          if (fleetProvider !== "Teletrac Navman") {
+            await sendManualImportNotice("fleet_provider_not_supported_for_auto_import");
+            return;
+          }
+
+          // Pull the attachment list from Resend (same endpoint the PDF
+          // pipeline uses below). Inline `attachments` on the webhook
+          // sometimes contains base64 `content`, but the documented path is
+          // the inbound API, so we treat that as the source of truth.
+          const resendApiKey = process.env.RESEND_API_KEY;
+          if (!resendApiKey) {
+            req.log?.error("RESEND_API_KEY not set — cannot auto-import fleet report");
+            await sendManualImportNotice("resend_api_key_missing");
+            return;
+          }
+
+          const attachResp = await fetch(`https://api.resend.com/emails/inbound/${emailId}/attachments`, {
+            headers: { Authorization: `Bearer ${resendApiKey}` },
+          });
+          if (!attachResp.ok) {
+            const errText = await attachResp.text().catch(() => "");
+            req.log?.warn({ emailId, status: attachResp.status, body: errText.slice(0, 500) }, "Resend attachments API failed for fleet report");
+            await sendManualImportNotice("resend_attachments_fetch_failed", { httpStatus: attachResp.status });
+            return;
+          }
+          const attachData = await attachResp.json() as { data?: Array<{ id: string; filename?: string | null; content_type: string; size: number; download_url: string }> };
+          const attachments = attachData.data ?? [];
+
+          // Find the most likely TN360 spreadsheet — Navman names them
+          // "Distance Trip ….xlsx" and they're the only XLSX they ship.
+          const xlsxAttachments = attachments.filter(a =>
+            a.content_type?.includes("spreadsheet") ||
+            a.content_type?.includes("excel") ||
+            (a.filename?.toLowerCase().endsWith(".xlsx") ?? false) ||
+            (a.filename?.toLowerCase().endsWith(".xls") ?? false),
+          );
+          if (xlsxAttachments.length === 0) {
+            await sendManualImportNotice("no_xlsx_attachment_found", { attachmentCount: attachments.length });
+            return;
+          }
+
+          let parsedRows: Awaited<ReturnType<typeof parseTN360TripReportBuffer>> | null = null;
+          let pickedAttachment: typeof xlsxAttachments[number] | null = null;
+
+          for (const att of xlsxAttachments) {
+            const dlResp = await fetch(att.download_url, { signal: AbortSignal.timeout(20000) });
+            if (!dlResp.ok) {
+              req.log?.warn({ filename: att.filename, status: dlResp.status }, "Failed to download fleet attachment");
+              continue;
+            }
+            const buf = Buffer.from(await dlResp.arrayBuffer());
+            if (!looksLikeTN360TripReport(buf)) continue;
+            const parsed = parseTN360TripReportBuffer(buf);
+            if (parsed.ok) {
+              parsedRows = parsed;
+              pickedAttachment = att;
+              break;
+            }
+          }
+
+          if (!parsedRows || !pickedAttachment) {
+            await sendManualImportNotice("xlsx_did_not_match_tn360_format", {
+              attachmentNames: xlsxAttachments.map(a => a.filename).filter(Boolean),
+            });
+            return;
+          }
+
+          if (parsedRows.rows.length === 0) {
+            // Parsed cleanly but the report had no usable trips (e.g. all
+            // implausible) — still let the admin know rather than silently
+            // succeeding.
+            await sendManualImportNotice("tn360_report_had_no_usable_rows", {
+              attachmentName: pickedAttachment.filename,
+              skippedTrips: parsedRows.meta.skippedTrips,
+              period: parsedRows.meta.period,
+            });
+            return;
+          }
+
+          const importResult = await importKmRows({
+            orgId: orgForFleet.id,
+            rows: parsedRows.rows,
+            req,
+            auditAction: "fleet.import_km.email_auto",
+          });
+
+          await logAudit({
+            req,
+            action: "webhook.energy.inbound_email",
+            outcome: "success",
+            organisationId: orgForFleet.id,
+            details: {
+              ...sharedAuditDetails,
+              autoImported: true,
+              attachmentName: pickedAttachment.filename,
+              imported: importResult.imported,
+              skippedDuplicates: importResult.skippedDuplicates,
+              created: importResult.created.length,
+              parseErrors: parsedRows.errors,
+              rowErrors: importResult.errors.length,
+              period: parsedRows.meta.period,
+            },
+          });
+
+          const summaryBits: string[] = [
+            `${importResult.imported.toLocaleString()} trip day${importResult.imported === 1 ? "" : "s"} imported`,
+          ];
+          if (importResult.skippedDuplicates > 0) summaryBits.push(`${importResult.skippedDuplicates} duplicate${importResult.skippedDuplicates === 1 ? "" : "s"} skipped`);
+          if (importResult.created.length > 0)   summaryBits.push(`${importResult.created.length} new vehicle${importResult.created.length === 1 ? "" : "s"} created`);
+          if (importResult.errors.length > 0)    summaryBits.push(`${importResult.errors.length} row${importResult.errors.length === 1 ? "" : "s"} skipped`);
+
+          void notify({
+            organisationId: orgForFleet.id,
+            category: "webhook.energy.fleet_report_imported",
+            severity: importResult.errors.length > 0 ? "warn" : "info",
+            title: `${fleetProvider} report auto-imported — ${importResult.imported.toLocaleString()} trip day${importResult.imported === 1 ? "" : "s"}`,
+            body: `${summaryBits.join(", ")}. Source: "${subject || pickedAttachment.filename || "Navman email"}"${parsedRows.meta.period ? ` · period ${parsedRows.meta.period}` : ""}.`,
+            linkUrl: "/fleet",
+            sourceAuditId: importResult.importAuditId,
+            dedupeKey: `webhook.energy.fleet_report_imported:${orgForFleet.id}:${emailId}`,
+            context: {
+              provider: fleetProvider,
+              from,
+              subject,
+              emailId,
+              attachmentName: pickedAttachment.filename,
+              imported: importResult.imported,
+              skippedDuplicates: importResult.skippedDuplicates,
+              created: importResult.created,
+              rowErrors: importResult.errors.slice(0, 20),
+              period: parsedRows.meta.period,
+            },
+          });
+        } catch (err) {
+          req.log?.error({ err, emailId, orgId: orgForFleet.id }, "Fleet report auto-import crashed");
+          // Fall back to the same manual-import warn notice the no-attachment
+          // / parse-failed branches use — admins shouldn't see two different
+          // "your report is stuck" tones depending on whether the failure was
+          // anticipated or a crash. The error string is captured in the audit
+          // row context for debugging.
+          const sharedAuditDetails = { from, subject, emailId, fleetProvider, matchedBy: fleetMatchedBy };
+          const fbAuditId = await logAudit({
+            req,
+            action: "webhook.energy.inbound_email",
+            outcome: "failure",
+            organisationId: orgForFleet.id,
+            details: { reason: "fleet_auto_import_crashed", ...sharedAuditDetails, error: err instanceof Error ? err.message : String(err) },
+          });
+          void notify({
+            organisationId: orgForFleet.id,
+            category: "webhook.energy.fleet_report_received",
+            severity: "warn",
+            title: `${fleetProvider} report received — please import manually`,
+            body: `${fleetMatchedBy === "content" ? "A forwarded" : "An automatic"} ${fleetProvider} report ("${subject || "(no subject)"}") arrived at your EnviroIQ inbox, but EnviroIQ couldn't auto-ingest it. Please import the spreadsheet under Fleet → Import to add it to your emissions data.`,
+            linkUrl: "/fleet",
+            sourceAuditId: fbAuditId,
+            dedupeKey: `webhook.energy.fleet_report_received:${orgForFleet.id}:${emailId}`,
+            context: { provider: fleetProvider, from, subject, emailId, reason: "fleet_auto_import_crashed", error: err instanceof Error ? err.message : String(err) },
+          });
+        }
+      })();
+
       return;
     }
 
