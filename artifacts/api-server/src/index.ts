@@ -352,8 +352,33 @@ async function verifyAndStart(): Promise<void> {
   logger.info({ tablesChecked: result.tablesChecked }, "Database schema verified");
 }
 
+/**
+ * One-shot data fix: correct Acme Ltd contract signed-at timestamp.
+ * Target: 15 May 2026 1:38 PM NZT (= 2026-05-15T01:38:00Z, NZ = UTC+12 in May).
+ * Idempotent via IS DISTINCT FROM predicate. Runs on every boot; once the
+ * prod row matches, subsequent runs are no-ops. Safe to remove later.
+ */
+async function applyOneShotContractFix(): Promise<void> {
+  try {
+    const target = "2026-05-15T01:38:00.000Z";
+    const result = await db.execute(sql`
+      update subscriptions
+      set entitlements = jsonb_set(entitlements, '{signerMeta,signedAt}', to_jsonb(${target}::text))
+      where id = 'dc036d92-3504-4242-8aec-e72b71bae39c'
+        and entitlements->'signerMeta'->>'signedAt' is distinct from ${target}
+    `);
+    const rows = (result as { rowCount?: number | null }).rowCount ?? 0;
+    if (rows > 0) {
+      logger.info({ rows, target }, "One-shot fix applied: acme-plumbing contract signedAt");
+    }
+  } catch (err) {
+    logger.error({ err }, "One-shot contract fix failed (non-fatal, continuing)");
+  }
+}
+
 ensureSessionTable()
   .then(() => ensureSuperAdmin())
+  .then(() => applyOneShotContractFix())
   .then(() => ensureOrgBillingColumns())
   .then(() => ensureSsoSchema())
   .then(() => ensureDocumentArchiveSchema())
