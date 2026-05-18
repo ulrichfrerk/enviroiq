@@ -1,47 +1,44 @@
 /**
  * Contract / Order Form PDF template.
  *
- * Renders the EnviroIQ master terms + a customer-specific Order Form cover page
- * showing pricing, term, signer details and acceptance metadata. Designed to be
- * printed to PDF via the shared puppeteer wrapper in ./pdf.ts.
+ * Renders a cover page + commercial Order Form + Master Terms styled to match
+ * the EnviroIQ ESG Board Pack visual language (dark navy cover, green accent,
+ * card-based KPI display, slim sans serif body). Printed to PDF via the shared
+ * puppeteer wrapper in ./pdf.ts.
  *
  * The legal clauses below are kept in lock-step with
  * artifacts/marketing/src/pages/terms.tsx (version 1.0, 5 May 2026). When the
- * marketing terms change, bump CONTRACT_TERMS_VERSION below and update the
- * clauses in both files.
+ * marketing terms change, bump CONTRACT_TERMS_VERSION below and update both.
  */
 
 export const CONTRACT_TERMS_VERSION = "1.0";
 export const CONTRACT_TERMS_LAST_UPDATED = "5 May 2026";
 
 export type ContractRenderInput = {
-  /** Customer organisation. */
   orgName: string;
   orgSlug: string;
   industry?: string | null;
   country?: string | null;
   legalEntityName?: string | null;
 
-  /** Commercials. */
   planName: string;
-  monthlyPriceMinor: number; // store as smallest whole-cent unit to avoid float
-  currency: string; // ISO 4217, e.g. "NZD"
+  monthlyPriceMinor: number;
+  currency: string;
   billingCadence: "monthly" | "annual";
   termMonths: number;
   startDate: Date;
   customIntegration: boolean;
   notes?: string | null;
 
-  /** Acceptance metadata. */
   signerName: string;
+  /** Stored in the audit log but intentionally NOT printed on the PDF. */
   signerEmail: string;
   signerTitle?: string | null;
   signedAt: Date;
   signedIp?: string | null;
   signedUserAgent?: string | null;
 
-  /** Audit. */
-  contractRef: string; // e.g. subscription id
+  contractRef: string;
   generatedAt: Date;
 };
 
@@ -53,44 +50,20 @@ function fmtMoney(amountMinor: number, currency: string): string {
     return `${currency} ${major.toFixed(2)}`;
   }
 }
-
 function fmtDate(d: Date): string {
   return d.toLocaleDateString("en-NZ", { day: "2-digit", month: "long", year: "numeric" });
 }
-
 function fmtDateTime(d: Date): string {
   return d.toLocaleString("en-NZ", { dateStyle: "long", timeStyle: "short", timeZone: "Pacific/Auckland" }) + " NZT";
 }
-
 function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c]!));
 }
 
-function calcContractValue(input: ContractRenderInput): {
-  monthlyDisplay: string;
-  periodDisplay: string;
-  totalDisplay: string;
-} {
-  const monthly = input.monthlyPriceMinor;
-  const total = monthly * input.termMonths;
-  const periodAmount = input.billingCadence === "annual" ? monthly * 12 : monthly;
-  return {
-    monthlyDisplay: fmtMoney(monthly, input.currency),
-    periodDisplay: fmtMoney(periodAmount, input.currency) + (input.billingCadence === "annual" ? " / year" : " / month"),
-    totalDisplay: fmtMoney(total, input.currency),
-  };
-}
-
-/**
- * The clauses, mirrored from the public Terms page.
- *
- * Kept as plain HTML strings (no React) so they can render server-side without
- * any JSX runtime. Cancellation clause 6 is intentionally verbose because it
- * carries the commercial teeth.
- */
+/** Clauses mirrored from marketing/src/pages/terms.tsx — keep in sync. */
 const CLAUSES: { id: string; title: string; html: string }[] = [
   {
-    id: "1-parties",
+    id: "1",
     title: "1. Parties and acceptance",
     html: `
       <p>These Terms and Conditions ("Terms") form a binding agreement between
@@ -103,7 +76,7 @@ const CLAUSES: { id: string; title: string; html: string }[] = [
     `,
   },
   {
-    id: "2-definitions",
+    id: "2",
     title: "2. Definitions",
     html: `
       <ul>
@@ -116,7 +89,7 @@ const CLAUSES: { id: string; title: string; html: string }[] = [
     `,
   },
   {
-    id: "3-service",
+    id: "3",
     title: "3. The Service",
     html: `
       <p>EnviroIQ grants the Customer a non-exclusive, non-transferable, non-sublicensable
@@ -130,7 +103,7 @@ const CLAUSES: { id: string; title: string; html: string }[] = [
     `,
   },
   {
-    id: "4-fees",
+    id: "4",
     title: "4. Fees and payment",
     html: `
       <p>The Customer must pay the Fees set out in the Order Form. Unless the Order Form
@@ -148,7 +121,7 @@ const CLAUSES: { id: string; title: string; html: string }[] = [
     `,
   },
   {
-    id: "5-term",
+    id: "5",
     title: "5. Term and renewal",
     html: `
       <p>These Terms commence on the date the first Order Form is accepted and continue
@@ -159,11 +132,11 @@ const CLAUSES: { id: string; title: string; html: string }[] = [
     `,
   },
   {
-    id: "6-cancellation",
+    id: "6",
     title: "6. Cancellation and notice periods",
     html: `
       <div class="callout callout-primary">
-        <p class="callout-title">Standard subscriptions — 3 months' notice</p>
+        <div class="callout-title">Standard subscriptions — 3 months' notice</div>
         <p>Either party may cancel the Service by giving the other party at least
           <strong>three (3) months' written notice</strong>. The notice period runs from
           the first day of the calendar month following receipt of the notice. Fees
@@ -171,7 +144,7 @@ const CLAUSES: { id: string; title: string; html: string }[] = [
           Customer continues to use the Service.</p>
       </div>
       <div class="callout callout-warning">
-        <p class="callout-title">Where Custom Integration has been delivered — 12 months' notice <em>or</em> Early Termination Charge</p>
+        <div class="callout-title">Where Custom Integration has been delivered — 12 months' notice <em>or</em> Early Termination Charge</div>
         <p>Where EnviroIQ has performed any Custom Integration for the Customer (including
           any bespoke connector, data pipeline, embedded widget, white-labelled
           deployment, or engineering work scoped to the Customer), the Customer may
@@ -180,7 +153,7 @@ const CLAUSES: { id: string; title: string; html: string }[] = [
           <li>giving at least <strong>twelve (12) months' written notice</strong>, with Fees payable in full for the entire notice period; <strong>or</strong></li>
           <li>paying an <strong>Early Termination Charge equal to eighty percent (80%) of the remaining contract value</strong> (calculated as the total Subscription Fees that would have been payable for the unexpired portion of the then-current Subscription Term and any signed renewal, exclusive of GST). The Early Termination Charge is due in a single payment on the date of cancellation.</li>
         </ul>
-        <p class="muted">The Customer chooses which option to take by stating it in the cancellation notice. If no option is stated, the 12-month notice period applies by default.</p>
+        <p class="callout-foot">The Customer chooses which option to take by stating it in the cancellation notice. If no option is stated, the 12-month notice period applies by default.</p>
       </div>
       <p>The cancellation provisions in this clause 6 reflect that Custom Integration
         work involves up-front engineering investment by EnviroIQ that is amortised over
@@ -192,7 +165,7 @@ const CLAUSES: { id: string; title: string; html: string }[] = [
     `,
   },
   {
-    id: "7-termination",
+    id: "7",
     title: "7. Termination for cause",
     html: `
       <p>Either party may terminate these Terms (and any Order Form) immediately by written notice if:</p>
@@ -211,7 +184,7 @@ const CLAUSES: { id: string; title: string; html: string }[] = [
     `,
   },
   {
-    id: "8-customer-data",
+    id: "8",
     title: "8. Customer Data",
     html: `
       <p>As between the parties, the Customer owns all Customer Data. The Customer grants
@@ -230,7 +203,7 @@ const CLAUSES: { id: string; title: string; html: string }[] = [
     `,
   },
   {
-    id: "9-acceptable-use",
+    id: "9",
     title: "9. Acceptable use",
     html: `
       <p>The Customer must not, and must not allow any user to:</p>
@@ -244,7 +217,7 @@ const CLAUSES: { id: string; title: string; html: string }[] = [
     `,
   },
   {
-    id: "10-ip",
+    id: "10",
     title: "10. Intellectual property",
     html: `
       <p>EnviroIQ (and its licensors) own all intellectual property rights in the Service,
@@ -258,7 +231,7 @@ const CLAUSES: { id: string; title: string; html: string }[] = [
     `,
   },
   {
-    id: "11-confidentiality",
+    id: "11",
     title: "11. Confidentiality",
     html: `
       <p>Each party will keep confidential any non-public information of the other party
@@ -268,7 +241,7 @@ const CLAUSES: { id: string; title: string; html: string }[] = [
     `,
   },
   {
-    id: "12-warranties",
+    id: "12",
     title: "12. Warranties and disclaimers",
     html: `
       <p>EnviroIQ warrants that it will provide the Service with reasonable care and
@@ -282,7 +255,7 @@ const CLAUSES: { id: string; title: string; html: string }[] = [
     `,
   },
   {
-    id: "13-liability",
+    id: "13",
     title: "13. Limitation of liability",
     html: `
       <p>To the fullest extent permitted by law, neither party is liable to the other for
@@ -295,7 +268,7 @@ const CLAUSES: { id: string; title: string; html: string }[] = [
     `,
   },
   {
-    id: "14-indemnity",
+    id: "14",
     title: "14. Indemnity",
     html: `
       <p>The Customer indemnifies EnviroIQ against all losses, damages, claims and costs
@@ -305,7 +278,7 @@ const CLAUSES: { id: string; title: string; html: string }[] = [
     `,
   },
   {
-    id: "15-force-majeure",
+    id: "15",
     title: "15. Force majeure",
     html: `
       <p>Neither party is liable for any failure or delay in performance (other than an
@@ -313,7 +286,7 @@ const CLAUSES: { id: string; title: string; html: string }[] = [
     `,
   },
   {
-    id: "16-general",
+    id: "16",
     title: "16. General",
     html: `
       <ul>
@@ -328,169 +301,294 @@ const CLAUSES: { id: string; title: string; html: string }[] = [
 ];
 
 export function renderContractHtml(input: ContractRenderInput): string {
-  const v = calcContractValue(input);
+  const monthly = input.monthlyPriceMinor;
+  const total = monthly * input.termMonths;
+  const periodAmount = input.billingCadence === "annual" ? monthly * 12 : monthly;
+  const monthlyDisplay = fmtMoney(monthly, input.currency);
+  const periodDisplay = fmtMoney(periodAmount, input.currency);
+  const totalDisplay = fmtMoney(total, input.currency);
+
   const endDate = new Date(input.startDate);
   endDate.setMonth(endDate.getMonth() + input.termMonths);
 
   const partyName = esc(input.legalEntityName?.trim() || input.orgName);
-  const tradingName = input.legalEntityName && input.legalEntityName.trim() !== input.orgName
+  const tradingLine = input.legalEntityName && input.legalEntityName.trim() !== input.orgName
     ? `<div class="party-trading">trading as ${esc(input.orgName)}</div>`
     : "";
 
+  const refShort = input.contractRef.slice(0, 8);
+
   const clausesHtml = CLAUSES.map(
-    (c) => `<section class="clause"><h2>${esc(c.title)}</h2>${c.html}</section>`,
+    (c) => `<section class="clause"><h3 class="clause-title">${esc(c.title)}</h3>${c.html}</section>`,
   ).join("");
 
-  return `<!doctype html>
+  const css = `
+    @page { size: A4; margin: 0; }
+    @media print {
+      html, body { margin: 0 !important; padding: 0 !important; }
+      .page { page-break-after: always; break-after: page; }
+      .page:last-child { page-break-after: avoid; break-after: avoid; }
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { font-family: 'Inter', system-ui, -apple-system, sans-serif; background: #fff; color: #1e293b; font-size: 13px; line-height: 1.55; }
+
+    /* ── Page chrome ──────────────────────────────────────────────────── */
+    .page { width: 210mm; min-height: 297mm; display: flex; flex-direction: column; }
+    .page-body { flex: 1; padding: 36px 48px 24px; }
+    .page-footer { padding: 14px 48px; border-top: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: space-between; font-size: 10px; color: #94a3b8; font-weight: 500; }
+    .page-footer-brand { font-weight: 700; color: #64748b; }
+
+    /* ── Cover page ───────────────────────────────────────────────────── */
+    .cover { background: #0f172a; color: #fff; }
+    .cover-top { padding: 48px 56px 0; }
+    .cover-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 72px; }
+    .cover-brand-dot { width: 12px; height: 12px; background: #22c55e; border-radius: 50%; }
+    .cover-brand-name { font-size: 15px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #94a3b8; }
+    .cover-accent-line { width: 64px; height: 4px; background: #22c55e; border-radius: 2px; margin-bottom: 32px; }
+    .cover-doc-type { font-size: 13px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: #64748b; margin-bottom: 12px; }
+    .cover-title { font-size: 42px; font-weight: 900; line-height: 1.1; color: #fff; margin-bottom: 8px; }
+    .cover-subtitle { font-size: 18px; font-weight: 400; color: #94a3b8; margin-bottom: 48px; }
+    .cover-company-block { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; padding: 20px 28px; display: inline-block; }
+    .cover-company-label { font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: #64748b; margin-bottom: 4px; }
+    .cover-company-name { font-size: 26px; font-weight: 800; color: #f1f5f9; }
+    .cover-company-sub { font-size: 13px; font-weight: 500; color: #94a3b8; margin-top: 4px; }
+    .cover-meta { padding: 36px 56px; background: rgba(0,0,0,0.25); }
+    .cover-meta-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px; }
+    .cover-meta-label { font-size: 10px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: #64748b; margin-bottom: 4px; }
+    .cover-meta-value { font-size: 13px; font-weight: 600; color: #cbd5e1; }
+    .cover-meta-value.mono { font-family: 'SFMono-Regular', Menlo, Consolas, monospace; font-size: 11px; }
+
+    /* ── Section header (matches ESG Board Pack) ──────────────────────── */
+    .section-header { background: #1e293b; color: #fff; padding: 20px 28px; border-radius: 10px; margin-bottom: 24px; }
+    .section-header-eyebrow { font-size: 10px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: #64748b; margin-bottom: 4px; }
+    .section-header-title { font-size: 20px; font-weight: 800; color: #f1f5f9; }
+    .section-header-desc { font-size: 12px; color: #94a3b8; margin-top: 4px; }
+
+    /* ── Parties grid ─────────────────────────────────────────────────── */
+    .parties { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px; }
+    .party-card { border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px 18px; background: #f8fafc; }
+    .party-eyebrow { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; color: #64748b; margin-bottom: 8px; }
+    .party-name { font-size: 16px; font-weight: 800; color: #0f172a; }
+    .party-trading { font-size: 12px; color: #64748b; margin-top: 2px; }
+    .party-meta { margin-top: 10px; font-size: 11px; color: #475569; line-height: 1.7; }
+    .party-meta .k { color: #94a3b8; font-weight: 600; }
+
+    /* ── Commercial KPI cards ─────────────────────────────────────────── */
+    .commercial-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+    .kpi-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px 18px; }
+    .kpi-card.featured { background: #0f172a; border-color: #0f172a; color: #fff; }
+    .kpi-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: #94a3b8; margin-bottom: 8px; }
+    .kpi-card.featured .kpi-label { color: #64748b; }
+    .kpi-value { font-size: 22px; font-weight: 900; color: #16a34a; line-height: 1.05; }
+    .kpi-card.featured .kpi-value { color: #22c55e; font-size: 26px; }
+    .kpi-sub { font-size: 11px; color: #64748b; margin-top: 6px; }
+    .kpi-card.featured .kpi-sub { color: #94a3b8; }
+
+    /* ── Detail table ─────────────────────────────────────────────────── */
+    .detail-table { width: 100%; border-collapse: collapse; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden; margin-bottom: 16px; }
+    .detail-table th, .detail-table td { padding: 12px 16px; text-align: left; font-size: 12px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
+    .detail-table tr:last-child th, .detail-table tr:last-child td { border-bottom: none; }
+    .detail-table th { background: #f8fafc; color: #64748b; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; font-size: 10px; width: 36%; }
+    .detail-table td { color: #0f172a; font-weight: 500; }
+    .detail-table td strong { font-weight: 700; }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
+    .pill-warn { background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa; }
+    .pill-ok { background: #f0fdf4; color: #15803d; border: 1px solid #bbf7d0; }
+
+    /* ── Notes ────────────────────────────────────────────────────────── */
+    .notes-card { border-left: 3px solid #22c55e; background: #f0fdf4; border-radius: 6px; padding: 12px 16px; margin-bottom: 16px; }
+    .notes-label { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; color: #15803d; margin-bottom: 4px; }
+    .notes-body { font-size: 12px; color: #374151; line-height: 1.6; white-space: pre-wrap; }
+
+    /* ── Acceptance ───────────────────────────────────────────────────── */
+    .accept { border: 2px solid #0f172a; border-radius: 10px; padding: 20px 24px; background: #fff; margin-top: 8px; }
+    .accept-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 14px; }
+    .accept-title { font-size: 14px; font-weight: 800; color: #0f172a; }
+    .accept-intro { font-size: 11px; color: #64748b; margin-bottom: 14px; line-height: 1.6; }
+    .accept-grid { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 16px; margin-bottom: 12px; }
+    .accept-field-label { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: #94a3b8; margin-bottom: 4px; }
+    .accept-field-value { font-size: 13px; font-weight: 700; color: #0f172a; }
+    .accept-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; border-top: 1px solid #e2e8f0; padding-top: 12px; margin-top: 4px; }
+    .accept-meta .accept-field-value { font-size: 11px; font-weight: 500; color: #475569; font-family: 'SFMono-Regular', Menlo, Consolas, monospace; word-break: break-all; line-height: 1.5; }
+    .accept-foot { font-size: 10px; color: #94a3b8; line-height: 1.6; margin-top: 12px; }
+
+    /* ── Master terms ─────────────────────────────────────────────────── */
+    .terms-body { padding: 36px 48px 24px; }
+    .terms-intro { color: #64748b; font-size: 12px; margin-bottom: 20px; }
+    .clause { margin-bottom: 18px; page-break-inside: avoid; }
+    .clause-title { font-size: 13px; font-weight: 800; color: #0f172a; margin: 0 0 8px; padding-bottom: 4px; border-bottom: 1px solid #e2e8f0; }
+    .clause p { font-size: 12px; color: #374151; line-height: 1.65; margin: 0 0 8px; }
+    .clause ul { margin: 4px 0 8px 18px; padding: 0; }
+    .clause li { font-size: 12px; color: #374151; line-height: 1.65; margin-bottom: 4px; }
+    .clause strong { color: #0f172a; }
+    .callout { border-radius: 8px; padding: 12px 16px; margin: 6px 0 10px; page-break-inside: avoid; }
+    .callout-title { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }
+    .callout-primary { background: #eff6ff; border: 1px solid #bfdbfe; }
+    .callout-primary .callout-title { color: #1d4ed8; }
+    .callout-warning { background: #fff7ed; border: 1px solid #fed7aa; }
+    .callout-warning .callout-title { color: #c2410c; }
+    .callout p, .callout li { font-size: 11px; }
+    .callout-foot { font-size: 10px; color: #64748b; margin-top: 6px; }
+  `;
+
+  const footer = (page: string) =>
+    `<div class="page-footer"><span class="page-footer-brand">EnviroIQ Order Form</span><span>— ${esc(input.orgName)} · Ref ${esc(refShort)} —</span><span>Page ${page}</span></div>`;
+
+  return `<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<title>EnviroIQ Order Form &amp; Master Agreement — ${partyName}</title>
-<style>
-  @page { size: A4; margin: 18mm 16mm; }
-  :root {
-    --fg: #0f172a;
-    --muted: #475569;
-    --line: #e2e8f0;
-    --accent: #0ea5e9;
-    --warn: #d97706;
-    --warn-bg: #fff7ed;
-    --accent-bg: #ecfeff;
-  }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; }
-  body { font-family: "Helvetica Neue", Inter, Arial, sans-serif; color: var(--fg); font-size: 10.5pt; line-height: 1.55; }
-
-  /* Cover / Order Form */
-  .cover { padding: 0 0 18mm; }
-  .cover-head { display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 6mm; border-bottom: 2px solid var(--fg); }
-  .brand { font-size: 18pt; font-weight: 700; letter-spacing: -0.01em; }
-  .brand-sub { font-size: 9pt; color: var(--muted); margin-top: 2px; }
-  .doc-meta { text-align: right; font-size: 9pt; color: var(--muted); }
-  .doc-meta .ref { font-family: "SFMono-Regular", Menlo, Consolas, monospace; color: var(--fg); }
-
-  h1.cover-title { font-size: 20pt; font-weight: 700; margin: 8mm 0 2mm; letter-spacing: -0.01em; }
-  .cover-sub { color: var(--muted); margin: 0 0 6mm; }
-
-  .parties { display: grid; grid-template-columns: 1fr 1fr; gap: 6mm; margin-top: 6mm; }
-  .party { border: 1px solid var(--line); border-radius: 6px; padding: 5mm; }
-  .party h3 { margin: 0 0 2mm; font-size: 8.5pt; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
-  .party-name { font-size: 12pt; font-weight: 600; }
-  .party-trading { color: var(--muted); font-size: 9.5pt; margin-top: 1mm; }
-  .party-meta { margin-top: 3mm; font-size: 9.5pt; color: var(--muted); line-height: 1.6; }
-
-  .order-table { width: 100%; border-collapse: collapse; margin-top: 6mm; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
-  .order-table th, .order-table td { padding: 3mm 4mm; text-align: left; font-size: 10pt; border-bottom: 1px solid var(--line); }
-  .order-table th { background: #f8fafc; font-weight: 600; width: 38%; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; font-size: 8.5pt; }
-  .order-table tr:last-child th, .order-table tr:last-child td { border-bottom: none; }
-  .order-total td, .order-total th { background: #f1f5f9; font-weight: 700; }
-  .price-big { font-size: 13pt; font-weight: 700; }
-
-  .accept-box { margin-top: 8mm; border: 2px solid var(--fg); border-radius: 6px; padding: 6mm; background: #fafafa; }
-  .accept-box h3 { margin: 0 0 3mm; font-size: 11pt; }
-  .accept-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4mm 6mm; font-size: 10pt; }
-  .accept-grid div { display: flex; flex-direction: column; }
-  .accept-grid .label { font-size: 8pt; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; margin-bottom: 1mm; }
-  .accept-grid .value { font-weight: 600; }
-  .accept-grid .value.mono { font-family: "SFMono-Regular", Menlo, Consolas, monospace; font-weight: 500; font-size: 9pt; word-break: break-all; }
-  .accept-note { margin-top: 4mm; font-size: 8.5pt; color: var(--muted); line-height: 1.5; }
-
-  .notes-box { margin-top: 6mm; border-left: 3px solid var(--accent); padding: 3mm 5mm; background: #f8fafc; font-size: 9.5pt; }
-  .notes-box h4 { margin: 0 0 1mm; font-size: 9pt; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
-
-  /* Terms */
-  .terms { page-break-before: always; }
-  .terms-head { padding-bottom: 4mm; border-bottom: 1px solid var(--line); margin-bottom: 6mm; }
-  .terms-head h1 { margin: 0; font-size: 16pt; }
-  .terms-head .meta { color: var(--muted); font-size: 9pt; margin-top: 1mm; }
-
-  .clause { margin-bottom: 5mm; page-break-inside: avoid; }
-  .clause h2 { font-size: 11pt; margin: 0 0 2mm; }
-  .clause p { margin: 0 0 2mm; }
-  .clause ul { margin: 0 0 2mm; padding-left: 6mm; }
-  .clause li { margin-bottom: 1.5mm; }
-  .callout { border: 1px solid; border-radius: 4px; padding: 3mm 4mm; margin: 2mm 0 3mm; page-break-inside: avoid; }
-  .callout-title { font-weight: 700; margin: 0 0 1mm; }
-  .callout-primary { border-color: var(--accent); background: var(--accent-bg); }
-  .callout-warning { border-color: var(--warn); background: var(--warn-bg); }
-  .muted { color: var(--muted); font-size: 9pt; }
-</style>
+<meta charset="UTF-8">
+<title>EnviroIQ Order Form — ${partyName}</title>
+<style>${css}</style>
 </head>
 <body>
 
-<section class="cover">
-  <div class="cover-head">
-    <div>
-      <div class="brand">EnviroIQ</div>
-      <div class="brand-sub">Frerken Companies Limited · enviroiq.net</div>
+<!-- ══ PAGE 1: COVER ══════════════════════════════════════════════════════ -->
+<div class="page cover">
+  <div class="cover-top" style="padding-top:48px;">
+    <div class="cover-brand">
+      <div class="cover-brand-dot"></div>
+      <div class="cover-brand-name">EnviroIQ &nbsp;·&nbsp; ESG Platform</div>
     </div>
-    <div class="doc-meta">
-      <div>Order Form &amp; Master Agreement</div>
-      <div>Generated: ${esc(fmtDateTime(input.generatedAt))}</div>
-      <div>Ref: <span class="ref">${esc(input.contractRef)}</span></div>
-      <div>Terms version: ${esc(CONTRACT_TERMS_VERSION)} · ${esc(CONTRACT_TERMS_LAST_UPDATED)}</div>
+    <div class="cover-accent-line"></div>
+    <div class="cover-doc-type">Order Form &amp; Master Agreement</div>
+    <div class="cover-title">Subscription Agreement</div>
+    <div class="cover-subtitle">${esc(input.planName)} — ${input.termMonths} month term</div>
+    <div class="cover-company-block">
+      <div class="cover-company-label">Prepared for</div>
+      <div class="cover-company-name">${partyName}</div>
+      ${input.legalEntityName && input.legalEntityName.trim() !== input.orgName ? `<div class="cover-company-sub">trading as ${esc(input.orgName)}</div>` : ""}
     </div>
   </div>
-
-  <h1 class="cover-title">${partyName} — ${esc(input.planName)}</h1>
-  <p class="cover-sub">This Order Form records the commercial terms agreed between EnviroIQ and the Customer, and incorporates the Master Terms set out from page 2.</p>
-
-  <div class="parties">
-    <div class="party">
-      <h3>EnviroIQ (Supplier)</h3>
-      <div class="party-name">Frerken Companies Limited</div>
-      <div class="party-trading">trading as EnviroIQ</div>
-      <div class="party-meta">
-        New Zealand company<br />
-        contact@frerkencompanies.com<br />
-        enviroiq.net
+  <div style="flex:1;"></div>
+  <div class="cover-meta">
+    <div class="cover-meta-grid">
+      <div>
+        <div class="cover-meta-label">Generated</div>
+        <div class="cover-meta-value">${esc(fmtDateTime(input.generatedAt))}</div>
       </div>
-    </div>
-    <div class="party">
-      <h3>Customer</h3>
-      <div class="party-name">${partyName}</div>
-      ${tradingName}
-      <div class="party-meta">
-        ${input.industry ? `Industry: ${esc(input.industry)}<br />` : ""}
-        ${input.country ? `Country: ${esc(input.country)}<br />` : ""}
-        Org ref: <span style="font-family:SFMono-Regular,Menlo,Consolas,monospace;">${esc(input.orgSlug)}</span>
+      <div>
+        <div class="cover-meta-label">Terms version</div>
+        <div class="cover-meta-value">v${esc(CONTRACT_TERMS_VERSION)} · ${esc(CONTRACT_TERMS_LAST_UPDATED)}</div>
+      </div>
+      <div>
+        <div class="cover-meta-label">Contract reference</div>
+        <div class="cover-meta-value mono">${esc(input.contractRef)}</div>
       </div>
     </div>
   </div>
+</div>
 
-  <table class="order-table">
-    <tr><th>Plan</th><td>${esc(input.planName)}</td></tr>
-    <tr><th>Subscription fee</th><td><span class="price-big">${v.monthlyDisplay}</span> per month <span style="color:var(--muted)">(${esc(input.currency)}, exclusive of GST)</span></td></tr>
-    <tr><th>Billing cadence</th><td>${input.billingCadence === "annual" ? `Annual in advance — ${v.periodDisplay}` : `Monthly in advance — ${v.periodDisplay}`}</td></tr>
-    <tr><th>Term</th><td>${input.termMonths} months — ${esc(fmtDate(input.startDate))} to ${esc(fmtDate(endDate))}</td></tr>
-    <tr><th>Custom integration</th><td>${input.customIntegration ? "<strong>Yes</strong> — clause 6 12-month notice / 80% early termination charge applies" : "No"}</td></tr>
-    <tr class="order-total"><th>Total contract value</th><td><span class="price-big">${v.totalDisplay}</span> <span style="color:var(--muted)">over ${input.termMonths} months, exclusive of GST</span></td></tr>
-  </table>
-
-  ${input.notes ? `<div class="notes-box"><h4>Order notes</h4><div>${esc(input.notes).replace(/\n/g, "<br />")}</div></div>` : ""}
-
-  <div class="accept-box">
-    <h3>Acceptance</h3>
-    <p style="margin:0 0 4mm;font-size:10pt;">The Customer accepts this Order Form and the Master Terms attached, on the date and by the person recorded below.</p>
-    <div class="accept-grid">
-      <div><span class="label">Signed by</span><span class="value">${esc(input.signerName)}</span></div>
-      <div><span class="label">Title</span><span class="value">${esc(input.signerTitle || "—")}</span></div>
-      <div><span class="label">Email</span><span class="value">${esc(input.signerEmail)}</span></div>
-      <div><span class="label">Date &amp; time</span><span class="value">${esc(fmtDateTime(input.signedAt))}</span></div>
-      ${input.signedIp ? `<div><span class="label">IP address</span><span class="value mono">${esc(input.signedIp)}</span></div>` : ""}
-      ${input.signedUserAgent ? `<div><span class="label">User agent</span><span class="value mono">${esc(input.signedUserAgent)}</span></div>` : ""}
+<!-- ══ PAGE 2: ORDER FORM ════════════════════════════════════════════════ -->
+<div class="page">
+  <div class="page-body">
+    <div class="section-header">
+      <div class="section-header-eyebrow">Section 1</div>
+      <div class="section-header-title">Order Form</div>
+      <div class="section-header-desc">Commercial terms agreed between EnviroIQ and the Customer. Incorporates the Master Terms attached.</div>
     </div>
-    <p class="accept-note">The acceptance metadata above was captured by the EnviroIQ admin console at the time the contract was recorded. This document is the authoritative record of the agreement and supersedes any prior verbal or written quotes.</p>
-  </div>
-</section>
 
-<section class="terms">
-  <div class="terms-head">
-    <h1>Master Terms</h1>
-    <div class="meta">EnviroIQ Terms and Conditions · Version ${esc(CONTRACT_TERMS_VERSION)} · Last updated ${esc(CONTRACT_TERMS_LAST_UPDATED)}</div>
+    <div class="parties">
+      <div class="party-card">
+        <div class="party-eyebrow">EnviroIQ (Supplier)</div>
+        <div class="party-name">Frerken Companies Limited</div>
+        <div class="party-trading">trading as EnviroIQ</div>
+        <div class="party-meta">
+          <span class="k">Jurisdiction</span> New Zealand<br/>
+          <span class="k">Contact</span> contact@frerkencompanies.com<br/>
+          <span class="k">Web</span> enviroiq.net
+        </div>
+      </div>
+      <div class="party-card">
+        <div class="party-eyebrow">Customer</div>
+        <div class="party-name">${partyName}</div>
+        ${tradingLine}
+        <div class="party-meta">
+          ${input.industry ? `<span class="k">Industry</span> ${esc(input.industry)}<br/>` : ""}
+          ${input.country ? `<span class="k">Country</span> ${esc(input.country)}<br/>` : ""}
+          <span class="k">Org ref</span> <span style="font-family:'SFMono-Regular',Menlo,Consolas,monospace;font-size:11px;">${esc(input.orgSlug)}</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="commercial-grid">
+      <div class="kpi-card">
+        <div class="kpi-label">Monthly subscription</div>
+        <div class="kpi-value">${monthlyDisplay}</div>
+        <div class="kpi-sub">${esc(input.currency)} · exclusive of GST</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Billing cadence</div>
+        <div class="kpi-value" style="font-size:18px;">${input.billingCadence === "annual" ? "Annual in advance" : "Monthly in advance"}</div>
+        <div class="kpi-sub">${periodDisplay} per ${input.billingCadence === "annual" ? "year" : "month"}</div>
+      </div>
+      <div class="kpi-card featured">
+        <div class="kpi-label">Total contract value</div>
+        <div class="kpi-value">${totalDisplay}</div>
+        <div class="kpi-sub">${input.termMonths} months · excl. GST</div>
+      </div>
+    </div>
+
+    <table class="detail-table">
+      <tr><th>Plan</th><td><strong>${esc(input.planName)}</strong></td></tr>
+      <tr><th>Subscription term</th><td>${input.termMonths} months — ${esc(fmtDate(input.startDate))} to ${esc(fmtDate(endDate))}</td></tr>
+      <tr><th>Custom integration</th><td>${input.customIntegration
+        ? `<span class="pill pill-warn">Yes</span> &nbsp; Clause 6 applies — 12-month notice or 80% early-termination charge`
+        : `<span class="pill pill-ok">No</span> &nbsp; Standard clause 6 — 3 months' notice`}</td></tr>
+      <tr><th>Governing law</th><td>Laws of New Zealand · exclusive jurisdiction of the NZ courts</td></tr>
+    </table>
+
+    ${input.notes ? `<div class="notes-card"><div class="notes-label">Order notes</div><div class="notes-body">${esc(input.notes)}</div></div>` : ""}
+
+    <div class="accept">
+      <div class="accept-head">
+        <div class="accept-title">Acceptance</div>
+        <div style="font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;">Recorded electronically</div>
+      </div>
+      <div class="accept-intro">
+        The Customer accepts this Order Form and the Master Terms attached, on the date and by the person recorded below.
+      </div>
+      <div class="accept-grid">
+        <div>
+          <div class="accept-field-label">Signed by</div>
+          <div class="accept-field-value">${esc(input.signerName)}</div>
+        </div>
+        <div>
+          <div class="accept-field-label">Title</div>
+          <div class="accept-field-value">${esc(input.signerTitle || "—")}</div>
+        </div>
+        <div>
+          <div class="accept-field-label">Date &amp; time</div>
+          <div class="accept-field-value">${esc(fmtDateTime(input.signedAt))}</div>
+        </div>
+      </div>
+      ${input.signedIp || input.signedUserAgent ? `
+      <div class="accept-meta">
+        ${input.signedIp ? `<div><div class="accept-field-label">IP address</div><div class="accept-field-value">${esc(input.signedIp)}</div></div>` : "<div></div>"}
+        ${input.signedUserAgent ? `<div><div class="accept-field-label">User agent</div><div class="accept-field-value">${esc(input.signedUserAgent)}</div></div>` : ""}
+      </div>` : ""}
+      <div class="accept-foot">
+        The acceptance metadata above was captured by the EnviroIQ admin console at the time the contract was recorded.
+        This document is the authoritative record of the agreement and supersedes any prior verbal or written quotes.
+      </div>
+    </div>
   </div>
-  ${clausesHtml}
-</section>
+  ${footer("2")}
+</div>
+
+<!-- ══ PAGE 3+: MASTER TERMS ═════════════════════════════════════════════ -->
+<div class="page">
+  <div class="terms-body">
+    <div class="section-header">
+      <div class="section-header-eyebrow">Section 2</div>
+      <div class="section-header-title">Master Terms</div>
+      <div class="section-header-desc">EnviroIQ Terms and Conditions · Version ${esc(CONTRACT_TERMS_VERSION)} · Last updated ${esc(CONTRACT_TERMS_LAST_UPDATED)}</div>
+    </div>
+    <p class="terms-intro">These Master Terms govern the Customer's use of the EnviroIQ platform and form part of the Order Form on page 2.</p>
+    ${clausesHtml}
+  </div>
+  ${footer("3")}
+</div>
 
 </body>
 </html>`;

@@ -814,8 +814,8 @@ router.get("/:orgId/contract.pdf", requireAuth, requireRole("super_admin"), asyn
     });
 
     const pdf = await htmlToPdf(html, {
-      marginMm: { top: 0, right: 0, bottom: 14, left: 0 },
-      footerLabel: `EnviroIQ Order Form · ${org.name} · Ref ${picked.subscriptionId.slice(0, 8)}`,
+      marginMm: { top: 0, right: 0, bottom: 0, left: 0 },
+      showPageNumbers: false, // template renders its own footer inside each .page
     });
 
     const filename = `enviroiq-contract-${org.slug}-${new Date().toISOString().slice(0, 10)}.pdf`;

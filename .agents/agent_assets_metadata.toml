@@ -35,3 +35,9 @@ id = "GldJ66tForayWDd08nlQQ"
 uri = "file://.local/outputs/EnviroIQ.pptx"
 type = "slides"
 title = "EnviroIQ.pptx"
+
+[[outputs]]
+id = "ZKDxpj6sjstBUw7rgt5WJ"
+uri = "file://attached_assets/contract-preview.pdf"
+type = "pdf"
+title = "Acme Ltd — redesigned contract PDF"
