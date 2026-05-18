@@ -814,8 +814,10 @@ router.get("/:orgId/contract.pdf", requireAuth, requireRole("super_admin"), asyn
     });
 
     const pdf = await htmlToPdf(html, {
+      // CSS @page rules control margins: full-bleed cover, comfortable margins on inner pages.
       marginMm: { top: 0, right: 0, bottom: 0, left: 0 },
-      showPageNumbers: false, // template renders its own footer inside each .page
+      showPageNumbers: false,
+      preferCSSPageSize: true,
     });
 
     const filename = `enviroiq-contract-${org.slug}-${new Date().toISOString().slice(0, 10)}.pdf`;

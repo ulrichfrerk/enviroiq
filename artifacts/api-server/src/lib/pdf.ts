@@ -69,6 +69,8 @@ export type PdfOptions = {
   marginMm?: { top?: number; right?: number; bottom?: number; left?: number };
   /** Whether to render an automatic footer with page numbers + label. Defaults to true. */
   showPageNumbers?: boolean;
+  /** Honour @page CSS rules in the HTML (named pages, per-page margins). Defaults to false. */
+  preferCSSPageSize?: boolean;
 };
 
 /**
@@ -94,7 +96,7 @@ export async function htmlToPdf(html: string, opts: PdfOptions = {}): Promise<Bu
     const pdf = await page.pdf({
       format: "A4",
       printBackground: true,
-      preferCSSPageSize: false,
+      preferCSSPageSize: opts.preferCSSPageSize ?? false,
       margin: {
         top:    `${m.top    ?? 0}mm`,
         right:  `${m.right  ?? 0}mm`,

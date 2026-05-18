@@ -25,7 +25,7 @@ const html = renderContractHtml({
   contractRef: "dc036d92-3504-4242-8aec-e72b71bae39c",
   generatedAt: new Date(),
 });
-const pdf = await htmlToPdf(html, { marginMm: { top: 0, right: 0, bottom: 0, left: 0 }, showPageNumbers: false });
+const pdf = await htmlToPdf(html, { marginMm: { top: 0, right: 0, bottom: 0, left: 0 }, showPageNumbers: false, preferCSSPageSize: true });
 fs.writeFileSync("/home/runner/workspace/attached_assets/contract-preview.pdf", pdf);
 console.log("Wrote", pdf.length, "bytes");
 await shutdownPdfRenderer();

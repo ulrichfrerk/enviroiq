@@ -323,23 +323,18 @@ export function renderContractHtml(input: ContractRenderInput): string {
   ).join("");
 
   const css = `
-    @page { size: A4; margin: 0; }
-    @media print {
-      html, body { margin: 0 !important; padding: 0 !important; }
-      .page { page-break-after: always; break-after: page; }
-      .page:last-child { page-break-after: avoid; break-after: avoid; }
-    }
+    /* Cover gets a full-bleed (no-margin) named page so the navy fills A4 edge-to-edge.
+       All other pages get a comfortable margin and the puppeteer running footer. */
+    @page { size: A4; margin: 16mm 16mm 18mm 16mm; }
+    @page cover { margin: 0; }
+    .cover { page: cover; }
+    .order-form, .master-terms { page-break-before: always; break-before: page; }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body { font-family: 'Inter', system-ui, -apple-system, sans-serif; background: #fff; color: #1e293b; font-size: 13px; line-height: 1.55; }
-
-    /* ── Page chrome ──────────────────────────────────────────────────── */
-    .page { width: 210mm; min-height: 297mm; display: flex; flex-direction: column; }
-    .page-body { flex: 1; padding: 36px 48px 24px; }
-    .page-footer { padding: 14px 48px; border-top: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: space-between; font-size: 10px; color: #94a3b8; font-weight: 500; }
-    .page-footer-brand { font-weight: 700; color: #64748b; }
+    html, body { font-family: 'Inter', system-ui, -apple-system, sans-serif; background: #fff; color: #1e293b; font-size: 12px; line-height: 1.55; }
 
     /* ── Cover page ───────────────────────────────────────────────────── */
-    .cover { background: #0f172a; color: #fff; }
+    .cover { background: #0f172a; color: #fff; width: 210mm; height: 297mm; display: flex; flex-direction: column; }
+    .cover-spacer { flex: 1; }
     .cover-top { padding: 48px 56px 0; }
     .cover-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 72px; }
     .cover-brand-dot { width: 12px; height: 12px; background: #22c55e; border-radius: 50%; }
@@ -431,9 +426,6 @@ export function renderContractHtml(input: ContractRenderInput): string {
     .callout-foot { font-size: 10px; color: #64748b; margin-top: 6px; }
   `;
 
-  const footer = (page: string) =>
-    `<div class="page-footer"><span class="page-footer-brand">EnviroIQ Order Form</span><span>— ${esc(input.orgName)} · Ref ${esc(refShort)} —</span><span>Page ${page}</span></div>`;
-
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -444,7 +436,7 @@ export function renderContractHtml(input: ContractRenderInput): string {
 <body>
 
 <!-- ══ PAGE 1: COVER ══════════════════════════════════════════════════════ -->
-<div class="page cover">
+<div class="cover">
   <div class="cover-top" style="padding-top:48px;">
     <div class="cover-brand">
       <div class="cover-brand-dot"></div>
@@ -460,7 +452,7 @@ export function renderContractHtml(input: ContractRenderInput): string {
       ${input.legalEntityName && input.legalEntityName.trim() !== input.orgName ? `<div class="cover-company-sub">trading as ${esc(input.orgName)}</div>` : ""}
     </div>
   </div>
-  <div style="flex:1;"></div>
+  <div class="cover-spacer"></div>
   <div class="cover-meta">
     <div class="cover-meta-grid">
       <div>
@@ -480,8 +472,7 @@ export function renderContractHtml(input: ContractRenderInput): string {
 </div>
 
 <!-- ══ PAGE 2: ORDER FORM ════════════════════════════════════════════════ -->
-<div class="page">
-  <div class="page-body">
+<section class="order-form">
     <div class="section-header">
       <div class="section-header-eyebrow">Section 1</div>
       <div class="section-header-title">Order Form</div>
@@ -572,13 +563,10 @@ export function renderContractHtml(input: ContractRenderInput): string {
         This document is the authoritative record of the agreement and supersedes any prior verbal or written quotes.
       </div>
     </div>
-  </div>
-  ${footer("2")}
-</div>
+</section>
 
 <!-- ══ PAGE 3+: MASTER TERMS ═════════════════════════════════════════════ -->
-<div class="page">
-  <div class="terms-body">
+<section class="master-terms">
     <div class="section-header">
       <div class="section-header-eyebrow">Section 2</div>
       <div class="section-header-title">Master Terms</div>
@@ -586,9 +574,7 @@ export function renderContractHtml(input: ContractRenderInput): string {
     </div>
     <p class="terms-intro">These Master Terms govern the Customer's use of the EnviroIQ platform and form part of the Order Form on page 2.</p>
     ${clausesHtml}
-  </div>
-  ${footer("3")}
-</div>
+</section>
 
 </body>
 </html>`;
