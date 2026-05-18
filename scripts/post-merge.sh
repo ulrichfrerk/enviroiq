@@ -34,12 +34,13 @@ echo "[post-merge] verifying database matches the declared Drizzle schema"
 pnpm --filter @workspace/db run verify-schema
 
 # One-shot data fix: correct Acme Ltd contract signed-at timestamp to
-# 5 May 2026 10:48 AM NZT (= 22:48 UTC on 4 May). Idempotent — safe to re-run.
-# A missing target row naturally yields UPDATE 0 (success); real psql/connection
-# failures are NOT swallowed so they fail the post-merge loudly.
+# 15 May 2026 1:38 PM NZT (= 01:38 UTC on 15 May; NZ is UTC+12 in May).
+# Idempotent — safe to re-run. A missing target row naturally yields UPDATE 0
+# (success); real psql/connection failures are NOT swallowed so they fail the
+# post-merge loudly.
 echo "[post-merge] applying one-shot data fix: acme-plumbing contract signedAt"
 if [ -n "${DATABASE_URL:-}" ]; then
-  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "update subscriptions set entitlements = jsonb_set(entitlements, '{signerMeta,signedAt}', '\"2026-05-04T22:48:00.000Z\"'::jsonb) where id = 'dc036d92-3504-4242-8aec-e72b71bae39c' and entitlements->'signerMeta'->>'signedAt' is distinct from '2026-05-04T22:48:00.000Z';"
+  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "update subscriptions set entitlements = jsonb_set(entitlements, '{signerMeta,signedAt}', '\"2026-05-15T01:38:00.000Z\"'::jsonb) where id = 'dc036d92-3504-4242-8aec-e72b71bae39c' and entitlements->'signerMeta'->>'signedAt' is distinct from '2026-05-15T01:38:00.000Z';"
 fi
 
 echo "[post-merge] done"

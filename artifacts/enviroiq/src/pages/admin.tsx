@@ -50,6 +50,12 @@ export default function Admin() {
   const [contractSaving, setContractSaving] = useState(false);
   const [contractHasExisting, setContractHasExisting] = useState(false);
   const todayIso = new Date().toISOString().slice(0, 10);
+  // datetime-local input value (YYYY-MM-DDTHH:mm) in the user's local timezone
+  const nowLocalIso = (() => {
+    const d = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  })();
   const emptyContractForm = {
     planName: "Pro",
     monthlyPriceDollars: "" as string, // user enters dollars, we convert to cents on save
@@ -62,7 +68,7 @@ export default function Admin() {
     signerName: "",
     signerEmail: "",
     signerTitle: "",
-    signedAt: todayIso,
+    signedAt: nowLocalIso,
   };
   const [contractForm, setContractForm] = useState(emptyContractForm);
 
@@ -165,7 +171,13 @@ export default function Admin() {
             signerName: data.contract.signerName,
             signerEmail: data.contract.signerEmail,
             signerTitle: data.contract.signerTitle ?? "",
-            signedAt: data.contract.signedAt ? data.contract.signedAt.slice(0, 10) : todayIso,
+            signedAt: data.contract.signedAt
+              ? (() => {
+                  const d = new Date(data.contract!.signedAt as string);
+                  const pad = (n: number) => String(n).padStart(2, "0");
+                  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+                })()
+              : nowLocalIso,
           });
         }
       }
@@ -737,8 +749,8 @@ export default function Admin() {
                       onChange={(e) => setContractForm({ ...contractForm, signerEmail: e.target.value })} />
                   </div>
                   <div>
-                    <Label>Signed on</Label>
-                    <Input type="date" value={contractForm.signedAt}
+                    <Label>Signed on (date &amp; time)</Label>
+                    <Input type="datetime-local" value={contractForm.signedAt}
                       onChange={(e) => setContractForm({ ...contractForm, signedAt: e.target.value })} />
                   </div>
                 </div>
