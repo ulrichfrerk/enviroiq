@@ -391,12 +391,13 @@ export function renderContractHtml(input: ContractRenderInput): string {
     .pill-ok { background: #f0fdf4; color: #15803d; border: 1px solid #bbf7d0; }
 
     /* ── Notes ────────────────────────────────────────────────────────── */
-    .notes-card { border-left: 3px solid #22c55e; background: #f0fdf4; border-radius: 6px; padding: 12px 16px; margin-bottom: 16px; }
+    .notes-card { border-left: 3px solid #22c55e; background: #f0fdf4; border-radius: 6px; padding: 12px 16px; margin-bottom: 16px; page-break-inside: avoid; break-inside: avoid; }
     .notes-label { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; color: #15803d; margin-bottom: 4px; }
     .notes-body { font-size: 12px; color: #374151; line-height: 1.6; white-space: pre-wrap; }
 
     /* ── Acceptance ───────────────────────────────────────────────────── */
-    .accept { border: 2px solid #0f172a; border-radius: 10px; padding: 20px 24px; background: #fff; margin-top: 8px; }
+    .accept { border: 2px solid #0f172a; border-radius: 10px; padding: 20px 24px; background: #fff; margin-top: 8px; page-break-inside: avoid; break-inside: avoid; }
+    .section-header, .parties, .commercial-grid, .detail-table, .party-card, .kpi-card { page-break-inside: avoid; break-inside: avoid; }
     .accept-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 14px; }
     .accept-title { font-size: 14px; font-weight: 800; color: #0f172a; }
     .accept-intro { font-size: 11px; color: #64748b; margin-bottom: 14px; line-height: 1.6; }
