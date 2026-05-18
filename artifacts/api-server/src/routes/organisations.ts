@@ -1,6 +1,8 @@
 import { Router } from "express";
 import { randomBytes } from "crypto";
-import { db, organisationsTable, usersTable, vehiclesTable, widgetConfigsTable, auditLogsTable } from "@workspace/db";
+import { db, organisationsTable, usersTable, vehiclesTable, widgetConfigsTable, auditLogsTable, subscriptionsTable } from "@workspace/db";
+import { htmlToPdf } from "../lib/pdf.js";
+import { renderContractHtml, CONTRACT_TERMS_VERSION } from "../lib/contract-template.js";
 import { eq, and, count, desc, sql } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
 import { requireAuth, requireRole, requireOrgAccess, requireOrgAdmin } from "../lib/auth.js";
@@ -597,6 +599,241 @@ router.get("/:orgId/summary", requireAuth, requireOrgAccess, async (req, res) =>
   } catch (err) {
     req.log.error({ err }, "Get summary failed");
     res.status(500).json({ error: "Internal Server Error", message: "Failed to get summary" });
+  }
+});
+
+// ── Contract / Order Form ──────────────────────────────────────────────────
+// The "contract" for an org is stored as a row in `subscriptions` plus an
+// audit log entry recording acceptance metadata (signer, IP, user agent). The
+// PDF is regenerated on demand from those two sources so it always reflects
+// the source of truth — we do not stash a copy of the rendered PDF.
+
+type ContractBody = {
+  planName?: string;
+  monthlyPriceMinor?: number; // store as integer cents to avoid float drift
+  currency?: string;
+  billingCadence?: "monthly" | "annual";
+  termMonths?: number;
+  startDate?: string; // ISO date
+  customIntegration?: boolean;
+  notes?: string | null;
+  signerName?: string;
+  signerEmail?: string;
+  signerTitle?: string | null;
+  signedAt?: string; // ISO datetime; defaults to now
+};
+
+function pickContractFromSubscription(sub: typeof subscriptionsTable.$inferSelect | undefined) {
+  if (!sub) return null;
+  const ent = (sub.entitlements ?? {}) as Record<string, unknown>;
+  const sm = (ent.signerMeta ?? {}) as Record<string, unknown>;
+  return {
+    subscriptionId: sub.id,
+    planName: (ent.planName as string) ?? sub.planCode ?? "Subscription",
+    monthlyPriceMinor: Math.round(((sub.monthlyPrice ?? 0) as number) * 100),
+    currency: sub.currency ?? "NZD",
+    billingCadence: ((ent.billingCadence as string) ?? "monthly") as "monthly" | "annual",
+    termMonths: (ent.termMonths as number) ?? 12,
+    startDate: sub.startDate?.toISOString() ?? null,
+    endDate: sub.endDate?.toISOString() ?? null,
+    customIntegration: Boolean(ent.customIntegration),
+    notes: (ent.notes as string | null) ?? null,
+    signerName: (sm.name as string) ?? "",
+    signerEmail: (sm.email as string) ?? "",
+    signerTitle: (sm.title as string | null) ?? null,
+    signedAt: (sm.signedAt as string | null) ?? null,
+    signedIp: (sm.ip as string | null) ?? null,
+    signedUserAgent: (sm.userAgent as string | null) ?? null,
+    termsVersion: (ent.termsVersion as string) ?? CONTRACT_TERMS_VERSION,
+  };
+}
+
+// GET /organisations/:orgId/contract — fetch latest stored contract (for prefill).
+router.get("/:orgId/contract", requireAuth, requireRole("super_admin"), async (req, res) => {
+  try {
+    const orgId = req.params.orgId as string;
+    const org = await db.query.organisationsTable.findFirst({ where: eq(organisationsTable.id, orgId) });
+    if (!org) { res.status(404).json({ error: "Not Found" }); return; }
+    const [sub] = await db
+      .select()
+      .from(subscriptionsTable)
+      .where(and(eq(subscriptionsTable.organisationId, orgId), eq(subscriptionsTable.contractStatus, "signed")))
+      .orderBy(desc(subscriptionsTable.createdAt))
+      .limit(1);
+    res.json({
+      organisation: { id: org.id, name: org.name, slug: org.slug, industry: org.industry, country: org.country, legalEntityName: (org as { legalEntityName?: string | null }).legalEntityName ?? null },
+      contract: pickContractFromSubscription(sub),
+    });
+  } catch (err) {
+    req.log.error({ err }, "Get contract failed");
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+// POST /organisations/:orgId/contract — record / replace the contract.
+router.post("/:orgId/contract", requireAuth, requireRole("super_admin"), async (req, res) => {
+  try {
+    const orgId = req.params.orgId as string;
+    const body = (req.body ?? {}) as ContractBody;
+
+    // Validate inputs strictly — contract data is legally relevant.
+    const planName = (body.planName ?? "").trim();
+    const currency = (body.currency ?? "NZD").trim().toUpperCase();
+    const billingCadence = body.billingCadence === "annual" ? "annual" : "monthly";
+    const termMonths = Number.isFinite(body.termMonths) ? Math.floor(body.termMonths!) : 0;
+    const monthlyPriceMinor = Number.isFinite(body.monthlyPriceMinor) ? Math.round(body.monthlyPriceMinor!) : -1;
+    const signerName = (body.signerName ?? "").trim();
+    const signerEmail = (body.signerEmail ?? "").trim();
+    const startDate = body.startDate ? new Date(body.startDate) : new Date();
+    const signedAt = body.signedAt ? new Date(body.signedAt) : new Date();
+
+    const problems: string[] = [];
+    if (!planName) problems.push("planName is required");
+    if (monthlyPriceMinor < 0) problems.push("monthlyPriceMinor must be ≥ 0 (cents)");
+    if (!/^[A-Z]{3}$/.test(currency)) problems.push("currency must be a 3-letter ISO code");
+    if (termMonths < 1 || termMonths > 120) problems.push("termMonths must be between 1 and 120");
+    if (!signerName) problems.push("signerName is required");
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(signerEmail)) problems.push("signerEmail must be a valid email");
+    if (Number.isNaN(startDate.getTime())) problems.push("startDate is invalid");
+    if (Number.isNaN(signedAt.getTime())) problems.push("signedAt is invalid");
+    if (problems.length) { res.status(400).json({ error: "Bad Request", problems }); return; }
+
+    const org = await db.query.organisationsTable.findFirst({ where: eq(organisationsTable.id, orgId) });
+    if (!org) { res.status(404).json({ error: "Not Found" }); return; }
+
+    const endDate = new Date(startDate);
+    endDate.setMonth(endDate.getMonth() + termMonths);
+
+    const entitlements = {
+      planName,
+      billingCadence,
+      termMonths,
+      customIntegration: Boolean(body.customIntegration),
+      notes: body.notes ?? null,
+      termsVersion: CONTRACT_TERMS_VERSION,
+      signerMeta: {
+        name: signerName,
+        email: signerEmail,
+        title: body.signerTitle ?? null,
+        signedAt: signedAt.toISOString(),
+        ip: req.ip ?? null,
+        userAgent: req.headers["user-agent"] ?? null,
+      },
+    };
+
+    const planCode = planName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "custom";
+    const id = uuidv4();
+    const [sub] = await db
+      .insert(subscriptionsTable)
+      .values({
+        id,
+        organisationId: orgId,
+        planCode,
+        status: "active",
+        contractStatus: "signed",
+        billingStatus: "active",
+        startDate,
+        endDate,
+        monthlyPrice: monthlyPriceMinor / 100,
+        currency,
+        entitlements,
+        sourceSystem: "admin_console",
+        createdBy: req.session.userId ?? null,
+        updatedBy: req.session.userId ?? null,
+      })
+      .returning();
+
+    await logAudit({
+      req,
+      action: "organisation.contract.recorded",
+      resourceType: "subscription",
+      resourceId: sub.id,
+      organisationId: orgId,
+      details: {
+        planName,
+        monthlyPriceMinor,
+        currency,
+        billingCadence,
+        termMonths,
+        totalValueMinor: monthlyPriceMinor * termMonths,
+        customIntegration: Boolean(body.customIntegration),
+        signerEmail,
+        signerName,
+        termsVersion: CONTRACT_TERMS_VERSION,
+      },
+    });
+
+    res.status(201).json({ ok: true, subscriptionId: sub.id });
+  } catch (err) {
+    req.log.error({ err }, "Record contract failed");
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
+// GET /organisations/:orgId/contract.pdf — render the contract PDF.
+router.get("/:orgId/contract.pdf", requireAuth, requireRole("super_admin"), async (req, res) => {
+  try {
+    const orgId = req.params.orgId as string;
+    const org = await db.query.organisationsTable.findFirst({ where: eq(organisationsTable.id, orgId) });
+    if (!org) { res.status(404).json({ error: "Not Found" }); return; }
+
+    const [sub] = await db
+      .select()
+      .from(subscriptionsTable)
+      .where(and(eq(subscriptionsTable.organisationId, orgId), eq(subscriptionsTable.contractStatus, "signed")))
+      .orderBy(desc(subscriptionsTable.createdAt))
+      .limit(1);
+    const picked = pickContractFromSubscription(sub);
+    if (!picked) {
+      res.status(404).json({ error: "Not Found", message: "No contract recorded for this organisation. Use the Contract dialog in the admin console to record one first." });
+      return;
+    }
+
+    const html = renderContractHtml({
+      orgName: org.name,
+      orgSlug: org.slug,
+      industry: org.industry ?? null,
+      country: org.country ?? null,
+      legalEntityName: (org as { legalEntityName?: string | null }).legalEntityName ?? null,
+      planName: picked.planName,
+      monthlyPriceMinor: picked.monthlyPriceMinor,
+      currency: picked.currency,
+      billingCadence: picked.billingCadence,
+      termMonths: picked.termMonths,
+      startDate: picked.startDate ? new Date(picked.startDate) : new Date(),
+      customIntegration: picked.customIntegration,
+      notes: picked.notes,
+      signerName: picked.signerName,
+      signerEmail: picked.signerEmail,
+      signerTitle: picked.signerTitle,
+      signedAt: picked.signedAt ? new Date(picked.signedAt) : new Date(),
+      signedIp: picked.signedIp,
+      signedUserAgent: picked.signedUserAgent,
+      contractRef: picked.subscriptionId,
+      generatedAt: new Date(),
+    });
+
+    const pdf = await htmlToPdf(html, {
+      marginMm: { top: 0, right: 0, bottom: 14, left: 0 },
+      footerLabel: `EnviroIQ Order Form · ${org.name} · Ref ${picked.subscriptionId.slice(0, 8)}`,
+    });
+
+    const filename = `enviroiq-contract-${org.slug}-${new Date().toISOString().slice(0, 10)}.pdf`;
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.setHeader("Cache-Control", "no-store");
+    res.send(pdf);
+
+    await logAudit({
+      req,
+      action: "organisation.contract.pdf_downloaded",
+      resourceType: "subscription",
+      resourceId: picked.subscriptionId,
+      organisationId: orgId,
+    });
+  } catch (err) {
+    req.log.error({ err }, "Render contract PDF failed");
+    res.status(500).json({ error: "Internal Server Error", message: "Failed to render contract PDF" });
   }
 });
 

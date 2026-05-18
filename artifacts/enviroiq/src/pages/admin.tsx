@@ -10,10 +10,13 @@ import {
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
 import {
   Building2, Users, Car, CloudRain, Plus, Loader2,
   CheckCircle, XCircle, Pencil, Trash2, Power, PowerOff,
-  ExternalLink, RefreshCw, BrainCircuit,
+  ExternalLink, RefreshCw, BrainCircuit, FileSignature, Download,
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
@@ -40,6 +43,28 @@ export default function Admin() {
   const [recalcOrg, setRecalcOrg] = useState<Organisation | null>(null);
   const [recalcRunning, setRecalcRunning] = useState(false);
   const [recalcResult, setRecalcResult] = useState<{ updated: number; skipped: number; errors: number; totalEvents: number } | null>(null);
+
+  // Contract / Order Form dialog state.
+  const [contractOrg, setContractOrg] = useState<Organisation | null>(null);
+  const [contractLoading, setContractLoading] = useState(false);
+  const [contractSaving, setContractSaving] = useState(false);
+  const [contractHasExisting, setContractHasExisting] = useState(false);
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const emptyContractForm = {
+    planName: "Pro",
+    monthlyPriceDollars: "" as string, // user enters dollars, we convert to cents on save
+    currency: "NZD",
+    billingCadence: "monthly" as "monthly" | "annual",
+    termMonths: "12" as string,
+    startDate: todayIso,
+    customIntegration: false,
+    notes: "",
+    signerName: "",
+    signerEmail: "",
+    signerTitle: "",
+    signedAt: todayIso,
+  };
+  const [contractForm, setContractForm] = useState(emptyContractForm);
 
   const { data: stats, isLoading: loadingStats } = useGetAdminStats({
     query: { enabled: session?.role === "super_admin" },
@@ -107,6 +132,127 @@ export default function Admin() {
     } catch (e: unknown) {
       toast({ variant: "destructive", title: "Error", description: e instanceof Error ? e.message : "Could not delete" });
     }
+  };
+
+  const openContract = async (org: Organisation) => {
+    setContractOrg(org);
+    setContractForm(emptyContractForm);
+    setContractHasExisting(false);
+    setContractLoading(true);
+    try {
+      const res = await fetch(`/api/organisations/${org.id}/contract`, { credentials: "include" });
+      if (res.ok) {
+        const data = await res.json() as {
+          contract: null | {
+            planName: string; monthlyPriceMinor: number; currency: string;
+            billingCadence: "monthly" | "annual"; termMonths: number;
+            startDate: string | null; customIntegration: boolean; notes: string | null;
+            signerName: string; signerEmail: string; signerTitle: string | null;
+            signedAt: string | null;
+          };
+        };
+        if (data.contract) {
+          setContractHasExisting(true);
+          setContractForm({
+            planName: data.contract.planName,
+            monthlyPriceDollars: (data.contract.monthlyPriceMinor / 100).toFixed(2),
+            currency: data.contract.currency,
+            billingCadence: data.contract.billingCadence,
+            termMonths: String(data.contract.termMonths),
+            startDate: data.contract.startDate ? data.contract.startDate.slice(0, 10) : todayIso,
+            customIntegration: data.contract.customIntegration,
+            notes: data.contract.notes ?? "",
+            signerName: data.contract.signerName,
+            signerEmail: data.contract.signerEmail,
+            signerTitle: data.contract.signerTitle ?? "",
+            signedAt: data.contract.signedAt ? data.contract.signedAt.slice(0, 10) : todayIso,
+          });
+        }
+      }
+    } catch (e) {
+      toast({ variant: "destructive", title: "Could not load existing contract", description: e instanceof Error ? e.message : "Unknown error" });
+    } finally {
+      setContractLoading(false);
+    }
+  };
+
+  const saveContract = async (): Promise<boolean> => {
+    if (!contractOrg) return false;
+    const priceDollars = parseFloat(contractForm.monthlyPriceDollars);
+    if (!Number.isFinite(priceDollars) || priceDollars < 0) {
+      toast({ variant: "destructive", title: "Invalid price", description: "Enter the monthly price in dollars (e.g. 499.00)." });
+      return false;
+    }
+    const termMonths = parseInt(contractForm.termMonths, 10);
+    if (!Number.isFinite(termMonths) || termMonths < 1 || termMonths > 120) {
+      toast({ variant: "destructive", title: "Invalid term", description: "Term must be between 1 and 120 months." });
+      return false;
+    }
+    if (!contractForm.signerName.trim() || !contractForm.signerEmail.trim()) {
+      toast({ variant: "destructive", title: "Signer required", description: "Enter the name and email of the person accepting the contract." });
+      return false;
+    }
+    setContractSaving(true);
+    try {
+      const res = await fetch(`/api/organisations/${contractOrg.id}/contract`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          planName: contractForm.planName.trim(),
+          monthlyPriceMinor: Math.round(priceDollars * 100),
+          currency: contractForm.currency.trim().toUpperCase(),
+          billingCadence: contractForm.billingCadence,
+          termMonths,
+          startDate: new Date(contractForm.startDate).toISOString(),
+          customIntegration: contractForm.customIntegration,
+          notes: contractForm.notes.trim() || null,
+          signerName: contractForm.signerName.trim(),
+          signerEmail: contractForm.signerEmail.trim(),
+          signerTitle: contractForm.signerTitle.trim() || null,
+          signedAt: new Date(contractForm.signedAt).toISOString(),
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({})) as { message?: string; problems?: string[] };
+        throw new Error(err.problems?.join("; ") || err.message || `HTTP ${res.status}`);
+      }
+      toast({ title: "Contract recorded", description: "Subscription + acceptance saved." });
+      setContractHasExisting(true);
+      return true;
+    } catch (e) {
+      toast({ variant: "destructive", title: "Could not save contract", description: e instanceof Error ? e.message : "Unknown error" });
+      return false;
+    } finally {
+      setContractSaving(false);
+    }
+  };
+
+  const downloadContractPdf = async () => {
+    if (!contractOrg) return;
+    try {
+      const res = await fetch(`/api/organisations/${contractOrg.id}/contract.pdf`, { credentials: "include" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({})) as { message?: string };
+        throw new Error(err.message || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `enviroiq-contract-${contractOrg.slug}-${new Date().toISOString().slice(0, 10)}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      toast({ variant: "destructive", title: "Could not download PDF", description: e instanceof Error ? e.message : "Unknown error" });
+    }
+  };
+
+  const saveAndDownloadContract = async () => {
+    const ok = await saveContract();
+    if (ok) await downloadContractPdf();
   };
 
   const handleRecalculate = async () => {
@@ -319,6 +465,15 @@ export default function Admin() {
                           <RefreshCw className="w-4 h-4 text-blue-400" />
                         </Button>
 
+                        {/* Contract / Order Form */}
+                        <Button
+                          variant="ghost" size="icon"
+                          title="Contract & pricing"
+                          onClick={() => openContract(org)}
+                        >
+                          <FileSignature className="w-4 h-4 text-emerald-400" />
+                        </Button>
+
                         {/* Edit */}
                         <Button
                           variant="ghost" size="icon"
@@ -483,6 +638,155 @@ export default function Admin() {
                 }
               </Button>
             )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Contract / Order Form dialog */}
+      <Dialog open={!!contractOrg} onOpenChange={(o) => { if (!o && !contractSaving) setContractOrg(null); }}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FileSignature className="w-5 h-5 text-emerald-400" />
+              Contract &amp; Pricing — {contractOrg?.name}
+            </DialogTitle>
+          </DialogHeader>
+
+          {contractLoading ? (
+            <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
+              <Loader2 className="w-4 h-4 animate-spin" /> Loading existing contract…
+            </div>
+          ) : (
+            <div className="space-y-4 py-2 text-sm">
+              {contractHasExisting && (
+                <div className="rounded border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-300">
+                  A contract is already on file for this organisation. Saving will record a new version.
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label>Plan name</Label>
+                  <Input value={contractForm.planName} onChange={(e) => setContractForm({ ...contractForm, planName: e.target.value })} placeholder="Pro" />
+                </div>
+                <div>
+                  <Label>Monthly price ({contractForm.currency})</Label>
+                  <Input type="number" step="0.01" min="0" value={contractForm.monthlyPriceDollars}
+                    onChange={(e) => setContractForm({ ...contractForm, monthlyPriceDollars: e.target.value })}
+                    placeholder="499.00" />
+                </div>
+                <div>
+                  <Label>Currency</Label>
+                  <Input value={contractForm.currency} maxLength={3}
+                    onChange={(e) => setContractForm({ ...contractForm, currency: e.target.value.toUpperCase() })} />
+                </div>
+                <div>
+                  <Label>Billing cadence</Label>
+                  <select className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm"
+                    value={contractForm.billingCadence}
+                    onChange={(e) => setContractForm({ ...contractForm, billingCadence: e.target.value as "monthly" | "annual" })}>
+                    <option value="monthly">Monthly in advance</option>
+                    <option value="annual">Annual in advance</option>
+                  </select>
+                </div>
+                <div>
+                  <Label>Term (months)</Label>
+                  <Input type="number" min="1" max="120" value={contractForm.termMonths}
+                    onChange={(e) => setContractForm({ ...contractForm, termMonths: e.target.value })} />
+                </div>
+                <div>
+                  <Label>Start date</Label>
+                  <Input type="date" value={contractForm.startDate}
+                    onChange={(e) => setContractForm({ ...contractForm, startDate: e.target.value })} />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between rounded border border-input px-3 py-2">
+                <div>
+                  <div className="font-medium">Custom integration delivered</div>
+                  <div className="text-xs text-muted-foreground">Triggers clause 6 (12-month notice or 80% early-termination charge).</div>
+                </div>
+                <Switch checked={contractForm.customIntegration}
+                  onCheckedChange={(v) => setContractForm({ ...contractForm, customIntegration: Boolean(v) })} />
+              </div>
+
+              <div>
+                <Label>Order notes (optional)</Label>
+                <Textarea rows={2} value={contractForm.notes}
+                  onChange={(e) => setContractForm({ ...contractForm, notes: e.target.value })}
+                  placeholder="e.g. includes Acme Ltd FuelSaver connector and Microsoft SSO." />
+              </div>
+
+              <div className="border-t border-border pt-3">
+                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">Acceptance</div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label>Signer name</Label>
+                    <Input value={contractForm.signerName}
+                      onChange={(e) => setContractForm({ ...contractForm, signerName: e.target.value })} />
+                  </div>
+                  <div>
+                    <Label>Signer title</Label>
+                    <Input value={contractForm.signerTitle}
+                      onChange={(e) => setContractForm({ ...contractForm, signerTitle: e.target.value })}
+                      placeholder="Managing Director" />
+                  </div>
+                  <div>
+                    <Label>Signer email</Label>
+                    <Input type="email" value={contractForm.signerEmail}
+                      onChange={(e) => setContractForm({ ...contractForm, signerEmail: e.target.value })} />
+                  </div>
+                  <div>
+                    <Label>Signed on</Label>
+                    <Input type="date" value={contractForm.signedAt}
+                      onChange={(e) => setContractForm({ ...contractForm, signedAt: e.target.value })} />
+                  </div>
+                </div>
+                <div className="text-xs text-muted-foreground mt-2">
+                  IP address and browser user agent will be captured automatically and printed on the PDF as part of the acceptance record.
+                </div>
+              </div>
+
+              {(() => {
+                const price = parseFloat(contractForm.monthlyPriceDollars);
+                const months = parseInt(contractForm.termMonths, 10);
+                if (!Number.isFinite(price) || !Number.isFinite(months) || price < 0 || months <= 0) return null;
+                const ccy = contractForm.currency.trim().toUpperCase();
+                const amount = price * months;
+                // Intl.NumberFormat throws RangeError for invalid currency codes (e.g. partial typing).
+                // Guard with the ISO format check, and fall back to a plain numeric string.
+                let total: string;
+                try {
+                  total = /^[A-Z]{3}$/.test(ccy)
+                    ? amount.toLocaleString(undefined, { style: "currency", currency: ccy })
+                    : `${amount.toFixed(2)} ${ccy || "?"}`;
+                } catch {
+                  total = `${amount.toFixed(2)} ${ccy || "?"}`;
+                }
+                return (
+                  <div className="rounded border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-sm">
+                    <span className="text-muted-foreground">Total contract value:</span>{" "}
+                    <span className="font-semibold text-emerald-300">{total}</span>
+                    <span className="text-muted-foreground"> over {months} months (excl. GST)</span>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setContractOrg(null)} disabled={contractSaving}>Cancel</Button>
+            {contractHasExisting && (
+              <Button variant="outline" onClick={downloadContractPdf} disabled={contractSaving} className="gap-2">
+                <Download className="w-4 h-4" /> Download current PDF
+              </Button>
+            )}
+            <Button onClick={saveAndDownloadContract} disabled={contractSaving || contractLoading} className="gap-2">
+              {contractSaving
+                ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</>
+                : <><Download className="w-4 h-4" /> Save &amp; download PDF</>
+              }
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
