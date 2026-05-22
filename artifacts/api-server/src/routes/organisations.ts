@@ -178,10 +178,19 @@ router.get("/:orgId", requireAuth, requireOrgAccess, async (req, res) => {
 // PATCH /organisations/:orgId
 router.patch("/:orgId", requireAuth, requireOrgAdmin, async (req, res) => {
   try {
-    const { name, industry, country, logoUrl, isActive } = req.body;
+    const { name, industry, country, logoUrl, isActive, fyStartMonth } = req.body;
+    let fyStartMonthClean: number | undefined;
+    if (fyStartMonth !== undefined && fyStartMonth !== null && fyStartMonth !== "") {
+      const n = typeof fyStartMonth === "number" ? fyStartMonth : parseInt(String(fyStartMonth), 10);
+      if (!Number.isInteger(n) || n < 1 || n > 12) {
+        res.status(400).json({ error: "Bad Request", message: "fyStartMonth must be an integer 1–12" });
+        return;
+      }
+      fyStartMonthClean = n;
+    }
     const [org] = await db
       .update(organisationsTable)
-      .set({ name, industry, country, logoUrl, isActive, updatedAt: new Date() })
+      .set({ name, industry, country, logoUrl, isActive, fyStartMonth: fyStartMonthClean, updatedAt: new Date() })
       .where(eq(organisationsTable.id, req.params.orgId as string))
       .returning();
     if (!org) {

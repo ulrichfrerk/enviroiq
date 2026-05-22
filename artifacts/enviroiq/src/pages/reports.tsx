@@ -21,22 +21,54 @@ type ReportTypeKey = keyof typeof ReportReportType;
 
 type PeriodPreset = "Q1" | "Q2" | "Q3" | "Q4" | "H1" | "H2" | "FY";
 
-const PRESET_LABELS: Record<PeriodPreset, string> = {
-  Q1: "Q1 (Jan–Mar)", Q2: "Q2 (Apr–Jun)", Q3: "Q3 (Jul–Sep)", Q4: "Q4 (Oct–Dec)",
-  H1: "H1 (Jan–Jun)", H2: "H2 (Jul–Dec)", FY: "Full Year",
-};
+const MONTH_NAMES_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
-function periodDates(preset: PeriodPreset, year: number): { from: Date; to: Date } {
+/** Returns [startDate, endDateInclusiveExclusive) for the Nth slice of FY,
+ *  where each slice is `slice` months long. FY starts on day 1 of
+ *  `fyStartMonth` (1–12) of the given calendar `year`. */
+function fySlice(year: number, fyStartMonth: number, sliceIndex: number, sliceMonths: number) {
+  const startMonth0 = (fyStartMonth - 1) + sliceIndex * sliceMonths; // 0..23
+  const startYear = year + Math.floor(startMonth0 / 12);
+  const startMonth = startMonth0 % 12;
+  const endMonth0 = startMonth0 + sliceMonths;
+  const endYear = year + Math.floor(endMonth0 / 12);
+  const endMonth = endMonth0 % 12;
+  // end = last second of the month before endMonth, i.e. day 0 of endMonth
+  const from = new Date(startYear, startMonth, 1, 0, 0, 0);
+  const to = new Date(endYear, endMonth, 0, 23, 59, 59);
+  return { from, to, startMonth, endMonth: (endMonth + 11) % 12 };
+}
+
+function presetDates(preset: PeriodPreset, year: number, fyStartMonth: number): { from: Date; to: Date } {
   switch (preset) {
-    case "Q1": return { from: new Date(year, 0, 1), to: new Date(year, 2, 31, 23, 59, 59) };
-    case "Q2": return { from: new Date(year, 3, 1), to: new Date(year, 5, 30, 23, 59, 59) };
-    case "Q3": return { from: new Date(year, 6, 1), to: new Date(year, 8, 30, 23, 59, 59) };
-    case "Q4": return { from: new Date(year, 9, 1), to: new Date(year, 11, 31, 23, 59, 59) };
-    case "H1": return { from: new Date(year, 0, 1), to: new Date(year, 5, 30, 23, 59, 59) };
-    case "H2": return { from: new Date(year, 6, 1), to: new Date(year, 11, 31, 23, 59, 59) };
-    case "FY": return { from: new Date(year, 0, 1), to: new Date(year, 11, 31, 23, 59, 59) };
+    case "Q1": return fySlice(year, fyStartMonth, 0, 3);
+    case "Q2": return fySlice(year, fyStartMonth, 1, 3);
+    case "Q3": return fySlice(year, fyStartMonth, 2, 3);
+    case "Q4": return fySlice(year, fyStartMonth, 3, 3);
+    case "H1": return fySlice(year, fyStartMonth, 0, 6);
+    case "H2": return fySlice(year, fyStartMonth, 1, 6);
+    case "FY": return fySlice(year, fyStartMonth, 0, 12);
   }
 }
+
+function presetLabel(preset: PeriodPreset, fyStartMonth: number): string {
+  const slice = (idx: number, months: number) => {
+    const startM = (fyStartMonth - 1 + idx * months) % 12;
+    const endM = (fyStartMonth - 1 + (idx + 1) * months - 1) % 12;
+    return `${MONTH_NAMES_SHORT[startM]}–${MONTH_NAMES_SHORT[endM]}`;
+  };
+  switch (preset) {
+    case "Q1": return `Q1 (${slice(0, 3)})`;
+    case "Q2": return `Q2 (${slice(1, 3)})`;
+    case "Q3": return `Q3 (${slice(2, 3)})`;
+    case "Q4": return `Q4 (${slice(3, 3)})`;
+    case "H1": return `H1 (${slice(0, 6)})`;
+    case "H2": return `H2 (${slice(1, 6)})`;
+    case "FY": return fyStartMonth === 1 ? "Full Year" : `Full Year (FY${slice(0, 12)})`;
+  }
+}
+
+const PRESET_KEYS: PeriodPreset[] = ["Q1", "Q2", "Q3", "Q4", "H1", "H2", "FY"];
 
 const MONTH_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 function monthLabel(ym: string) {
@@ -63,10 +95,24 @@ export default function Reports() {
   const qc = useQueryClient();
   const [isOpen, setIsOpen] = useState(false);
 
-  const currentYear = new Date().getFullYear();
+  const { data: org } = useQuery<{ fyStartMonth?: number }>({
+    queryKey: [`/api/organisations/${orgId}`],
+    queryFn: () => fetch(`/api/organisations/${orgId}`, { credentials: "include" }).then(r => r.json()),
+    enabled: !!orgId,
+  });
+  const fyStartMonth = org?.fyStartMonth ?? 4;
+
+  // FY label year = the calendar year the FY *ends* in if FY starts mid-year.
+  // For a NZ April-start FY, "FY2026" = Apr 2025 → Mar 2026, so we work with
+  // the calendar year that contains the FY start: thatYear = endYear - 1 when
+  // fyStartMonth > 1. We expose `year` as the start-year for date math; label
+  // it as the end-year for the UI.
+  const now = new Date();
+  const currentFyStartYear = now.getMonth() + 1 >= fyStartMonth ? now.getFullYear() : now.getFullYear() - 1;
   const [preset, setPreset] = useState<PeriodPreset>("FY");
-  const [year, setYear] = useState(currentYear);
+  const [year, setYear] = useState(currentFyStartYear);
   const [reportType, setReportType] = useState<ReportTypeKey>("board_summary");
+  const fyLabelYear = fyStartMonth === 1 ? year : year + 1;
 
   const { data: reports, isLoading, refetch } = useListReports(orgId!, { query: { enabled: !!orgId } });
   const generate = useGenerateReport();
@@ -77,10 +123,10 @@ export default function Reports() {
     enabled: !!orgId,
   });
 
-  const autoTitle = `${year} ${PRESET_LABELS[preset]} ESG Board Report`;
+  const autoTitle = `${fyLabelYear} ${presetLabel(preset, fyStartMonth)} ESG Board Report`;
 
   const handleGenerate = async () => {
-    const { from, to } = periodDates(preset, year);
+    const { from, to } = presetDates(preset, year, fyStartMonth);
     try {
       await generate.mutateAsync({
         orgId: orgId!,
@@ -220,7 +266,7 @@ export default function Reports() {
 
   if (isLoading) return <div className="p-8 flex justify-center"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
 
-  const yearOptions = Array.from({ length: 5 }, (_, i) => currentYear - i);
+  const yearOptions = Array.from({ length: 5 }, (_, i) => currentFyStartYear - i);
 
   return (
     <div className="space-y-8 pb-10">
@@ -268,8 +314,8 @@ export default function Reports() {
                     {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
                   </select>
                   <span className="text-sm text-muted-foreground flex-1">
-                    {PRESET_LABELS[preset]}
-                    {(() => { const { from, to } = periodDates(preset, year); return ` · ${format(from, "d MMM")} – ${format(to, "d MMM yyyy")}`; })()}
+                    {presetLabel(preset, fyStartMonth)}
+                    {(() => { const { from, to } = presetDates(preset, year, fyStartMonth); return ` · ${format(from, "d MMM yyyy")} – ${format(to, "d MMM yyyy")}`; })()}
                   </span>
                 </div>
               </div>

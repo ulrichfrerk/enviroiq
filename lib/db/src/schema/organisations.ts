@@ -35,6 +35,11 @@ export const organisationsTable = pgTable("organisations", {
   preferredCurrency: text("preferred_currency").notNull().default("NZD"),
   defaultTimezone: text("default_timezone").notNull().default("Pacific/Auckland"),
   defaultLanguage: text("default_language").notNull().default("en-NZ"),
+  // Reporting financial-year start month (1 = January … 12 = December).
+  // FY runs from the 1st of this month through the last day of the month
+  // before it the following year (e.g. 4 = NZ standard April 1 – March 31).
+  // Drives the FY/H1/H2/Q1–Q4 presets in /reports.
+  fyStartMonth: integer("fy_start_month").notNull().default(4),
   privacyClassification: text("privacy_classification"),
   securityClassification: text("security_classification"),
   dpaNdaStatus: text("dpa_nda_status"),

@@ -37,7 +37,7 @@ export default function Admin() {
   const [form, setForm] = useState(EMPTY_FORM);
 
   const [editOrg, setEditOrg] = useState<Organisation | null>(null);
-  const [editForm, setEditForm] = useState({ name: "", industry: "", country: "" });
+  const [editForm, setEditForm] = useState({ name: "", industry: "", country: "", fyStartMonth: 4 });
 
   const [deleteOrg, setDeleteOrg] = useState<Organisation | null>(null);
   const [recalcOrg, setRecalcOrg] = useState<Organisation | null>(null);
@@ -492,7 +492,12 @@ export default function Admin() {
                           title="Edit organisation"
                           onClick={() => {
                             setEditOrg(org);
-                            setEditForm({ name: org.name, industry: org.industry || "", country: org.country || "NZ" });
+                            setEditForm({
+                              name: org.name,
+                              industry: org.industry || "",
+                              country: org.country || "NZ",
+                              fyStartMonth: (org as Organisation & { fyStartMonth?: number }).fyStartMonth ?? 4,
+                            });
                           }}
                         >
                           <Pencil className="w-4 h-4" />
@@ -563,6 +568,30 @@ export default function Admin() {
             <div>
               <label className="text-sm font-medium mb-1 block">Country</label>
               <Input value={editForm.country} onChange={e => setEditForm(f => ({ ...f, country: e.target.value }))} />
+            </div>
+            <div>
+              <label className="text-sm font-medium mb-1 block">Reporting Financial Year Start</label>
+              <select
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                value={editForm.fyStartMonth}
+                onChange={e => setEditForm(f => ({ ...f, fyStartMonth: parseInt(e.target.value, 10) }))}
+              >
+                <option value={1}>January (Jan–Dec)</option>
+                <option value={4}>April (Apr–Mar) — NZ standard</option>
+                <option value={7}>July (Jul–Jun) — Australia</option>
+                <option value={10}>October (Oct–Sep)</option>
+                <option value={2}>February</option>
+                <option value={3}>March</option>
+                <option value={5}>May</option>
+                <option value={6}>June</option>
+                <option value={8}>August</option>
+                <option value={9}>September</option>
+                <option value={11}>November</option>
+                <option value={12}>December</option>
+              </select>
+              <p className="text-xs text-muted-foreground mt-1">
+                Used by the Reports page presets (FY, H1/H2, Q1–Q4).
+              </p>
             </div>
           </div>
           <DialogFooter className="mt-4">

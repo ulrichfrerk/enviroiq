@@ -73,6 +73,12 @@ async function ensureOrgBillingColumns(): Promise<void> {
   await db.execute(
     sql`ALTER TABLE organisations ADD COLUMN IF NOT EXISTS billing_status text NOT NULL DEFAULT 'active'`,
   );
+  // Reporting financial-year start month (1–12). Default 4 = NZ standard
+  // April 1 – March 31, which matches the majority of NZ businesses.
+  // Existing rows inherit the default; admins can change per-org.
+  await db.execute(
+    sql`ALTER TABLE organisations ADD COLUMN IF NOT EXISTS fy_start_month integer NOT NULL DEFAULT 4`,
+  );
   logger.info("Organisation billing columns ready");
 }
 
