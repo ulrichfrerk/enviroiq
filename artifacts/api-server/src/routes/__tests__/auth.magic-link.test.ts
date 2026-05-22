@@ -53,6 +53,12 @@ type MagicLinkRow = {
   token: string; // hashed, as the route writes it
   expiresAt: Date;
   usedAt: Date | null;
+  codeHash: string | null; // hashed 6-digit OTP, or null on legacy rows
+  codeAttempts: number;
+  // Single-use gate for the CODE redemption path. Deliberately independent
+  // of `usedAt` (which is the TOKEN single-use gate) — see the production
+  // schema comment for the cookie-jar fallback rationale.
+  codeUsedAt: Date | null;
 };
 
 const dbState: {
@@ -117,6 +123,9 @@ vi.mock("@workspace/db", () => {
           token: String(row.token),
           expiresAt: row.expiresAt as Date,
           usedAt: (row.usedAt as Date | null | undefined) ?? null,
+          codeHash: (row.codeHash as string | null | undefined) ?? null,
+          codeAttempts: (row.codeAttempts as number | undefined) ?? 0,
+          codeUsedAt: (row.codeUsedAt as Date | null | undefined) ?? null,
         };
       }
       // Both `await db.insert(t).values(row)` and
@@ -133,26 +142,69 @@ vi.mock("@workspace/db", () => {
     set: vi.fn((updates: Record<string, unknown>) => {
       // The route uses `.where(...).returning()` for the atomic mark on
       // magic-link verify, and bare `.where(...)` (awaited) for the simple
-      // `lastLoginAt` update. We expose both shapes.
+      // `lastLoginAt` update and the codeAttempts bump. We expose both
+      // shapes here so any of these call sites resolve correctly.
       const exec = async () => {
+        if (table !== tables.magicLinksTable || !dbState.magicLink) {
+          return [];
+        }
+        // codeAttempts-only update (wrong-code path). Production uses a SQL
+        // expression (`code_attempts + 1`) with a `WHERE code_attempts < MAX`
+        // guard, so the increment is atomic AND can never push past the cap.
+        // We mirror both semantics here: the value is treated as "+ 1" (not
+        // a literal), and the bump is refused once the cap is reached so
+        // tests can assert the lockout behaviour.
         if (
-          table === tables.magicLinksTable &&
-          dbState.magicLink &&
-          dbState.magicLink.usedAt === null
+          updates.codeAttempts !== undefined &&
+          updates.usedAt === undefined &&
+          updates.codeUsedAt === undefined
         ) {
-          dbState.magicLink.usedAt =
-            (updates.usedAt as Date | undefined) ?? new Date();
+          if (dbState.magicLink.codeAttempts >= 5) {
+            // WHERE codeAttempts < MAX matched zero rows.
+            return [];
+          }
+          dbState.magicLink.codeAttempts += 1;
           return [{ ...dbState.magicLink }];
+        }
+        // Atomic code single-use mark — production gates on
+        // `WHERE code_used_at IS NULL`. Decoupled from `usedAt` so a
+        // token-click that succeeded in an isolated cookie jar does not
+        // block the OTP fallback path.
+        if (updates.codeUsedAt !== undefined) {
+          if (dbState.magicLink.codeUsedAt === null) {
+            dbState.magicLink.codeUsedAt =
+              (updates.codeUsedAt as Date | undefined) ?? new Date();
+            return [{ ...dbState.magicLink }];
+          }
+          return [];
+        }
+        // Atomic mark-used (TOKEN path) — only flips when currently null
+        // (production enforces this via `WHERE usedAt IS NULL`).
+        if (updates.usedAt !== undefined) {
+          if (dbState.magicLink.usedAt === null) {
+            dbState.magicLink.usedAt =
+              (updates.usedAt as Date | undefined) ?? new Date();
+            return [{ ...dbState.magicLink }];
+          }
+          return [];
         }
         return [];
       };
       const whereResult = {
         // Make the chain awaitable directly (returns undefined like prod
-        // when `.returning()` is not called).
+        // when `.returning()` is not called). Both the lastLoginAt update
+        // and the codeAttempts bump use the bare `.where(...)` form, so
+        // we run the side-effect on `then` too — otherwise the codeAttempts
+        // counter would never increment in tests.
         then: <T>(
           onFulfilled?: (value: undefined) => T | PromiseLike<T>,
           onRejected?: (reason: unknown) => T | PromiseLike<T>,
-        ) => Promise.resolve<undefined>(undefined).then(onFulfilled, onRejected),
+        ) => {
+          return (async () => {
+            await exec();
+            return undefined as undefined;
+          })().then(onFulfilled, onRejected);
+        },
         returning: vi.fn(exec),
       };
       return { where: vi.fn(() => whereResult) };
@@ -176,14 +228,17 @@ vi.mock("@workspace/db", () => {
           // token test works without separate plumbing. Replay protection
           // is enforced by the atomic UPDATE below, not here.
           if (dbState.magicLink.expiresAt.getTime() <= Date.now()) return null;
-          // Fidelity check: the route MUST query with the SHA-256 hash of
-          // the raw token. Walk the drizzle where expression and confirm
-          // the stored hash appears in it; otherwise treat as no match.
-          // This catches regressions that drop the token predicate or
-          // accidentally compare against the raw token.
-          if (!whereContainsValue(args?.where, dbState.magicLink.token)) {
-            return null;
-          }
+          // Two valid lookup shapes exist in production:
+          //   1. Magic-link verify path queries by the SHA-256 token hash.
+          //   2. Code-entry path queries by userId (+ isNotNull(codeHash)),
+          //      because we need the row in hand to bump codeAttempts on
+          //      a wrong code; codeHash is compared in JS after fetch.
+          // Either predicate present in the where expression counts; if
+          // neither is, treat as no match (catches regressions that drop
+          // the token/userId binding entirely).
+          const matchesToken = whereContainsValue(args?.where, dbState.magicLink.token);
+          const matchesUser = whereContainsValue(args?.where, dbState.magicLink.userId);
+          if (!matchesToken && !matchesUser) return null;
           return { ...dbState.magicLink };
         }),
       },
@@ -226,9 +281,9 @@ function getAuditCalls(): AuditCall[] {
   return mock.mock.calls.map((c) => c[0]);
 }
 
-function getMailerCalls(): Array<[string, string]> {
+function getMailerCalls(): Array<[string, string, string]> {
   const mock = mailer.sendMagicLinkEmail as unknown as {
-    mock: { calls: [string, string][] };
+    mock: { calls: [string, string, string][] };
   };
   return mock.mock.calls;
 }
@@ -306,6 +361,15 @@ function extractTokenFromMail(): string {
   const token = u.searchParams.get("token");
   expect(token).toBeTruthy();
   return token!;
+}
+
+/** Extract the raw OTP code passed to the mailer's 3rd argument. */
+function extractCodeFromMail(): string {
+  const calls = getMailerCalls();
+  expect(calls.length).toBe(1);
+  const [, , code] = calls[0];
+  expect(code).toMatch(/^\d{6}$/);
+  return code;
 }
 
 // ─── POST /api/auth/magic-link/request ──────────────────────────────────────
@@ -915,5 +979,276 @@ describe("POST /api/auth/magic-link/verify", () => {
 
     const me = await secondAgent.get("/__test/whoami");
     expect(me.body.userId).toBe(baseUser.id);
+  });
+});
+
+// ─── POST /api/auth/magic-link/code (OTP fallback for cookie-jar-isolated email clients) ─
+//
+// This endpoint exists because Outlook Desktop + Microsoft Defender Safe Links
+// can open the magic-link verify URL in an internal Edge WebView with an
+// isolated cookie jar. The server-side session is established correctly but
+// the Set-Cookie never reaches the user's real browser, so the dashboard
+// 401s and bounces them back to sign-in in an endless loop. The code endpoint
+// is invoked by `fetch` from the sign-in page in the user's real tab, so the
+// cookie lands where it needs to.
+describe("POST /api/auth/magic-link/code", () => {
+  async function seedCode(): Promise<{ rawCode: string; agent: ReturnType<typeof request.agent> }> {
+    dbState.user = { ...baseUser };
+    const app = makeApp();
+    const agent = request.agent(app);
+    await agent
+      .post("/api/auth/magic-link/request")
+      .send({ email: baseUser.email })
+      .expect(200);
+    const rawCode = extractCodeFromMail();
+    // The persisted code is the SHA-256(rawCode), never the raw 6 digits.
+    expect(dbState.magicLink!.codeHash).toBe(sha256b64url(rawCode));
+    expect(dbState.magicLink!.codeHash).not.toBe(rawCode);
+    expect(dbState.magicLink!.codeAttempts).toBe(0);
+    return { rawCode, agent };
+  }
+
+  it("request emits a 6-digit numeric code, hashed at rest, alongside the magic link", async () => {
+    dbState.user = { ...baseUser };
+    const app = makeApp();
+    await request(app)
+      .post("/api/auth/magic-link/request")
+      .send({ email: baseUser.email })
+      .expect(200);
+
+    const calls = getMailerCalls();
+    expect(calls).toHaveLength(1);
+    const [to, url, code] = calls[0];
+    expect(to).toBe(baseUser.email);
+    expect(new URL(url).searchParams.get("token")).toBeTruthy();
+    expect(code).toMatch(/^\d{6}$/);
+
+    expect(dbState.magicLink).not.toBeNull();
+    expect(dbState.magicLink!.codeHash).toBe(sha256b64url(code));
+    expect(dbState.magicLink!.codeAttempts).toBe(0);
+  });
+
+  it("rejects a malformed email or non-6-digit code with 400 and never queries the DB", async () => {
+    const app = makeApp();
+    const a = await request(app)
+      .post("/api/auth/magic-link/code")
+      .send({ email: "not-an-email", code: "123456" });
+    expect(a.status).toBe(400);
+
+    const b = await request(app)
+      .post("/api/auth/magic-link/code")
+      .send({ email: baseUser.email, code: "12345" });
+    expect(b.status).toBe(400);
+
+    const c = await request(app)
+      .post("/api/auth/magic-link/code")
+      .send({ email: baseUser.email, code: "abcdef" });
+    expect(c.status).toBe(400);
+
+    expect(dbState.magicLink).toBeNull();
+  });
+
+  it("happy path: correct code establishes a session in the caller's tab and returns JSON (NOT a 303 redirect)", async () => {
+    const { rawCode, agent } = await seedCode();
+
+    const res = await agent
+      .post("/api/auth/magic-link/code")
+      .send({ email: baseUser.email, code: rawCode });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true });
+    expect(res.body.redirect).toMatch(/^\/(dashboard|account)/);
+    // Critical contract: no Location header — the SPA decides where to go.
+    // A 303 here would defeat the whole purpose of the endpoint, which is
+    // to keep the session-binding response inside the user's browser tab.
+    expect(res.headers.location).toBeUndefined();
+
+    // Atomic single-use mark must have fired on the CODE-path gate.
+    // Crucially the TOKEN-path `usedAt` is untouched — the two gates
+    // are independent so a token click in an isolated cookie jar can't
+    // permanently lock out the code path, and vice versa.
+    expect(dbState.magicLink!.codeUsedAt).toBeInstanceOf(Date);
+    expect(dbState.magicLink!.usedAt).toBeNull();
+
+    // Session is now bound for this agent.
+    const me = await agent.get("/__test/whoami");
+    expect(me.body).toMatchObject({
+      userId: baseUser.id,
+      email: baseUser.email,
+      role: baseUser.role,
+    });
+
+    const success = getAuditCalls().filter(
+      (a) => a.action === "auth.magic_link.code.verify" && a.outcome === "success",
+    );
+    expect(success).toHaveLength(1);
+    expect(success[0]).toMatchObject({ userId: baseUser.id });
+  });
+
+  it("wrong code increments codeAttempts on the row and returns 400 without establishing a session", async () => {
+    const { rawCode, agent } = await seedCode();
+    // Force a guaranteed-different 6-digit value.
+    const wrong = String((Number(rawCode) + 1) % 1_000_000).padStart(6, "0");
+    expect(wrong).not.toBe(rawCode);
+
+    const res = await agent
+      .post("/api/auth/magic-link/code")
+      .send({ email: baseUser.email, code: wrong });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ error: "invalid_code" });
+    expect(dbState.magicLink!.codeAttempts).toBe(1);
+    expect(dbState.magicLink!.codeUsedAt).toBeNull();
+    expect(dbState.magicLink!.usedAt).toBeNull();
+
+    const me = await agent.get("/__test/whoami");
+    expect(me.body.userId).toBeNull();
+  });
+
+  it("locks the row out after MAX_CODE_ATTEMPTS wrong submissions — even the correct code on the 6th try returns generic invalid_code (no oracle)", async () => {
+    const { rawCode, agent } = await seedCode();
+    const wrong = String((Number(rawCode) + 1) % 1_000_000).padStart(6, "0");
+
+    for (let i = 0; i < 5; i++) {
+      await agent
+        .post("/api/auth/magic-link/code")
+        .send({ email: baseUser.email, code: wrong })
+        .expect(400);
+    }
+    expect(dbState.magicLink!.codeAttempts).toBe(5);
+
+    // 6th attempt — even with the CORRECT code — is rejected because the
+    // attempts ceiling fires first. User must request a fresh link.
+    // The response is the SAME generic invalid_code as wrong-code/unknown-
+    // user/already-used so an unauthenticated caller can't use distinct
+    // status/error codes as an enumeration or grief-lockout oracle.
+    const res = await agent
+      .post("/api/auth/magic-link/code")
+      .send({ email: baseUser.email, code: rawCode });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ error: "invalid_code" });
+    expect(dbState.magicLink!.codeUsedAt).toBeNull();
+    // Audit log internally distinguishes the lockout reason for forensics.
+    const lockoutAudit = getAuditCalls().find(
+      (a) =>
+        a.action === "auth.magic_link.code.verify" &&
+        a.outcome === "failure" &&
+        a.details?.reason === "attempts_exhausted",
+    );
+    expect(lockoutAudit).toBeDefined();
+  });
+
+  it("wrong-code submissions past the ceiling cannot push the counter over MAX (atomic SQL increment + WHERE code_attempts < MAX guard, not stale-read RMW)", async () => {
+    const { rawCode, agent } = await seedCode();
+    const wrong = String((Number(rawCode) + 1) % 1_000_000).padStart(6, "0");
+
+    // Fire 10 wrong-code requests. The production UPDATE is
+    //   SET code_attempts = code_attempts + 1
+    //   WHERE id = ? AND code_attempts < MAX_CODE_ATTEMPTS
+    // so once the counter saturates at the cap, further increments find
+    // zero rows and the value cannot climb past MAX even under sustained
+    // hammering. A read-modify-write (`set codeAttempts = stale + 1`) with
+    // no SQL-level cap could be coaxed past MAX by concurrent-or-rapid
+    // submissions and would degrade the brute-force defence proportionally
+    // to the attacker's parallelism budget.
+    for (let i = 0; i < 10; i++) {
+      await agent
+        .post("/api/auth/magic-link/code")
+        .send({ email: baseUser.email, code: wrong })
+        .expect(400);
+    }
+    expect(dbState.magicLink!.codeAttempts).toBe(5);
+    expect(dbState.magicLink!.codeUsedAt).toBeNull();
+  });
+
+  it("replay of a successfully-used code returns generic invalid_code (NOT a distinguishable already_used) and does not re-establish a session", async () => {
+    const { rawCode, agent } = await seedCode();
+    await agent
+      .post("/api/auth/magic-link/code")
+      .send({ email: baseUser.email, code: rawCode })
+      .expect(200);
+    expect(dbState.magicLink!.codeUsedAt).toBeInstanceOf(Date);
+    const firstCodeUsedAt = dbState.magicLink!.codeUsedAt!.getTime();
+
+    // Fresh agent so a leftover session can't mask the result.
+    const app = makeApp();
+    const replayAgent = request.agent(app);
+    const replay = await replayAgent
+      .post("/api/auth/magic-link/code")
+      .send({ email: baseUser.email, code: rawCode });
+
+    expect(replay.status).toBe(400);
+    // Critical: same generic body as wrong-code/unknown-user so attackers
+    // can't tell "this code already succeeded" apart from any other failure.
+    expect(replay.body).toMatchObject({ error: "invalid_code" });
+    expect(dbState.magicLink!.codeUsedAt!.getTime()).toBe(firstCodeUsedAt);
+
+    const me = await replayAgent.get("/__test/whoami");
+    expect(me.body.userId).toBeNull();
+  });
+
+  it("token-click that set `usedAt` (e.g. Outlook WebView consumed the link in an isolated cookie jar) does NOT block subsequent code redemption — this is the entire point of the endpoint", async () => {
+    const { rawCode, agent } = await seedCode();
+    // Simulate the production failure mode: the magic-link click "succeeded"
+    // server-side (usedAt is set) but the Set-Cookie never landed in the
+    // user's real browser tab. They now type the 6-digit code from the same
+    // email into the sign-in page. The code path MUST still work; otherwise
+    // we've shipped a feature that's broken for exactly the users it exists
+    // to help.
+    dbState.magicLink!.usedAt = new Date();
+
+    const res = await agent
+      .post("/api/auth/magic-link/code")
+      .send({ email: baseUser.email, code: rawCode });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true });
+    expect(dbState.magicLink!.codeUsedAt).toBeInstanceOf(Date);
+
+    const me = await agent.get("/__test/whoami");
+    expect(me.body.userId).toBe(baseUser.id);
+  });
+
+  it("returns generic 400 for an unknown email — does NOT enumerate accounts", async () => {
+    dbState.user = null;
+    const app = makeApp();
+    const res = await request(app)
+      .post("/api/auth/magic-link/code")
+      .send({ email: "nobody@example.com", code: "123456" });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ error: "invalid_code" });
+
+    const fail = getAuditCalls().filter(
+      (a) => a.action === "auth.magic_link.code.verify" && a.outcome === "failure",
+    );
+    expect(fail).toHaveLength(1);
+    expect(fail[0].details).toMatchObject({ reason: "unknown_or_inactive" });
+  });
+
+  it("returns generic 400 for an inactive user (no enumeration leak)", async () => {
+    dbState.user = { ...baseUser, isActive: false };
+    const app = makeApp();
+    const res = await request(app)
+      .post("/api/auth/magic-link/code")
+      .send({ email: baseUser.email, code: "123456" });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ error: "invalid_code" });
+  });
+
+  it("does not match an expired row even with the right code", async () => {
+    const { rawCode } = await seedCode();
+    // Backdate the row past its TTL.
+    dbState.magicLink!.expiresAt = new Date(Date.now() - 60_000);
+
+    const app = makeApp();
+    const res = await request(app)
+      .post("/api/auth/magic-link/code")
+      .send({ email: baseUser.email, code: rawCode });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ error: "invalid_code" });
+    expect(dbState.magicLink!.codeUsedAt).toBeNull();
   });
 });

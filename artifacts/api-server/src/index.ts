@@ -136,6 +136,23 @@ async function ensureSsoSchema(): Promise<void> {
   await db.execute(
     sql`ALTER TABLE passkeys ADD COLUMN IF NOT EXISTS label text`,
   );
+  // Magic-link OTP code columns (lib/db/src/schema/users.ts). The 6-digit code
+  // is emailed alongside the link so users on email clients that break the
+  // click-redirect cookie flow (Outlook Desktop + Defender Safe Links) can
+  // type the code into the sign-in page from their real browser tab instead.
+  await db.execute(
+    sql`ALTER TABLE magic_links ADD COLUMN IF NOT EXISTS code_hash text`,
+  );
+  await db.execute(
+    sql`ALTER TABLE magic_links ADD COLUMN IF NOT EXISTS code_attempts integer NOT NULL DEFAULT 0`,
+  );
+  // Separate single-use gate for the OTP-code path. Deliberately independent
+  // of magic_links.used_at so a token-click that "succeeded" inside an
+  // isolated-cookie-jar email-client WebView does NOT permanently lock the
+  // user out of the OTP fallback path the column exists to enable.
+  await db.execute(
+    sql`ALTER TABLE magic_links ADD COLUMN IF NOT EXISTS code_used_at timestamptz`,
+  );
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS sso_identities (
       id              text PRIMARY KEY,

@@ -1,4 +1,4 @@
-import { pgTable, text, boolean, timestamp, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, boolean, timestamp, jsonb, integer } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -75,6 +75,31 @@ export const magicLinksTable = pgTable("magic_links", {
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   usedAt: timestamp("used_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  // 6-digit numeric one-time code paired with the magic link. Stored as the
+  // SHA-256 hash (base64url) so a DB compromise doesn't hand attackers usable
+  // codes. NULL on legacy rows from before this column existed. The matching
+  // raw code is included in the sign-in email so users on locked-down corp
+  // email clients (Outlook + Defender Safe Links, etc.) where the magic-link
+  // *click* fails to carry a session cookie can instead type the code into
+  // the sign-in page — the resulting fetch happens in the user's real browser
+  // tab, sidestepping the cookie-jar mismatch entirely.
+  codeHash: text("code_hash"),
+  // Brute-force guard for the code-entry path. Each wrong code increments
+  // this; once it hits a small ceiling the row is locked out (the user must
+  // request a new link). Replay/timing protection on the token path is
+  // independent and unaffected.
+  codeAttempts: integer("code_attempts").notNull().default(0),
+  // Single-use gate for the OTP-code redemption path. Deliberately separate
+  // from `usedAt` (which the token-click path consumes) because the entire
+  // reason this endpoint exists is the cookie-jar-isolated email-client
+  // failure mode: the user's Outlook/Defender WebView "successfully" clicks
+  // the link (setting usedAt) but the session cookie never reaches the user's
+  // real browser, so they fall back to typing the code. If we shared usedAt,
+  // that fallback would be permanently broken for exactly the users it's
+  // meant to help. Each issuance is single-recipient (email contains BOTH the
+  // link and the code), so the threat model is unchanged by allowing both
+  // sides to be redeemed at most once independently.
+  codeUsedAt: timestamp("code_used_at", { withTimezone: true }),
 });
 
 export const webAuthnChallengesTable = pgTable("webauthn_challenges", {

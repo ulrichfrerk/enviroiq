@@ -161,6 +161,14 @@ export default function SignInPage() {
   const [sent, setSent] = useState(false);
   const [err, setErr] = useState<string | null>(initialError);
   const [passkeyBusy, setPasskeyBusy] = useState(false);
+  // OTP code entry — shown alongside the "Check your email" screen so users
+  // whose Outlook + Defender Safe Links setup breaks the magic-link click
+  // flow can type the 6-digit code from the email instead. The code-entry
+  // path runs in the user's real browser tab (not the email client's
+  // WebView) so the session cookie reliably lands in the right jar.
+  const [code, setCode] = useState("");
+  const [codeSubmitting, setCodeSubmitting] = useState(false);
+  const [codeErr, setCodeErr] = useState<string | null>(null);
   const [restrictionState, setRestrictionState] = useState<
     { code: string; source: "user" | "org" | null } | null
   >(initialRestriction);
@@ -184,10 +192,73 @@ export default function SignInPage() {
         throw new Error((data as { error?: string }).error || "Request failed");
       }
       setSent(true);
+      setCode("");
+      setCodeErr(null);
     } catch (e) {
       setErr((e as Error).message);
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  // Map server-side error codes from POST /api/auth/magic-link/code into the
+  // short, friendly phrases shown under the input. Keeping the strings here
+  // (not on the server) lets us tune wording without a redeploy of the API.
+  function codeErrorMessage(code: string): string {
+    switch (code) {
+      case "invalid_code":
+        return "That code didn't match. Double-check the 6 digits from your email and try again.";
+      case "already_used":
+        return "That code was already used. Request a new sign-in email below.";
+      case "too_many_attempts":
+        return "Too many attempts. Request a new sign-in email below.";
+      default:
+        return "Something went wrong. Please try again.";
+    }
+  }
+
+  async function submitCode(e: React.FormEvent) {
+    e.preventDefault();
+    setCodeErr(null);
+    const cleaned = code.replace(/\D/g, "");
+    if (cleaned.length !== 6) {
+      setCodeErr("Enter the 6-digit code from your email.");
+      return;
+    }
+    setCodeSubmitting(true);
+    try {
+      const res = await fetch("/api/auth/magic-link/code", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: email.trim().toLowerCase(),
+          code: cleaned,
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        redirect?: string;
+      };
+      if (!res.ok || !data.ok) {
+        setCodeErr(codeErrorMessage(data.error || "server_error"));
+        return;
+      }
+      // Session is now bound in THIS browser tab. Refresh auth state so the
+      // useEffect above (and any other auth-aware UI) picks it up, then
+      // navigate to where the server told us to land. We honour the original
+      // redirect_url if it points somewhere in /app; otherwise use the
+      // server-suggested destination.
+      await refresh();
+      const target = redirectTarget !== "/dashboard"
+        ? redirectTarget
+        : (data.redirect || "/dashboard");
+      setLocation(target);
+    } catch (e) {
+      setCodeErr((e as Error).message || "Something went wrong. Please try again.");
+    } finally {
+      setCodeSubmitting(false);
     }
   }
 
@@ -274,20 +345,104 @@ export default function SignInPage() {
           </p>
 
           {sent ? (
-            <div className="rounded-lg border border-primary/30 bg-primary/5 p-5 text-center">
-              <CheckCircle2 className="h-8 w-8 text-primary mx-auto mb-3" />
-              <h2 className="text-base font-semibold text-foreground mb-1">Check your email</h2>
-              <p className="text-sm text-muted-foreground">
-                If <span className="text-foreground font-medium">{email}</span> is registered, a sign-in link is on its way.
-                It expires in 15 minutes.
-              </p>
-              <button
-                type="button"
-                onClick={() => { setSent(false); setEmail(""); }}
-                className="mt-4 text-xs text-primary hover:underline"
+            <div className="space-y-4">
+              <div className="rounded-lg border border-primary/30 bg-primary/5 p-5 text-center">
+                <CheckCircle2 className="h-8 w-8 text-primary mx-auto mb-3" />
+                <h2 className="text-base font-semibold text-foreground mb-1">Check your email</h2>
+                <p className="text-sm text-muted-foreground">
+                  If <span className="text-foreground font-medium">{email}</span> is registered, a sign-in link
+                  and a 6-digit code are on their way. They expire in 15 minutes.
+                </p>
+              </div>
+
+              {/* Code-entry fallback. Critical for Outlook/Defender users
+                  where the magic-link click opens in an isolated WebView
+                  cookie jar and never carries the session back to the
+                  user's real browser tab. Entering the code here runs the
+                  fetch from THIS tab, so the cookie lands correctly. */}
+              <form
+                onSubmit={submitCode}
+                className="rounded-lg border border-border/60 bg-card p-5 space-y-3"
+                data-testid="form-magic-link-code"
               >
-                Use a different email
-              </button>
+                <div>
+                  <label
+                    htmlFor="otp-code"
+                    className="block text-sm font-medium text-foreground mb-1"
+                  >
+                    Or enter the 6-digit code from your email
+                  </label>
+                  <p className="text-xs text-muted-foreground mb-2">
+                    Use this if the sign-in link bounces you back to this page
+                    (common on Outlook + Microsoft Defender).
+                  </p>
+                  <input
+                    id="otp-code"
+                    name="code"
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    pattern="[0-9 ]*"
+                    maxLength={7}
+                    autoFocus
+                    value={code}
+                    onChange={(e) => {
+                      // Strip non-digits and re-format as "123 456" for
+                      // readability. We keep the raw value short (max 6
+                      // digits) and tolerate a space in the middle.
+                      const digits = e.target.value.replace(/\D/g, "").slice(0, 6);
+                      setCode(
+                        digits.length > 3
+                          ? `${digits.slice(0, 3)} ${digits.slice(3)}`
+                          : digits,
+                      );
+                      if (codeErr) setCodeErr(null);
+                    }}
+                    placeholder="123 456"
+                    className="w-full h-12 px-3 rounded-md bg-input border border-border focus:border-primary focus:ring-1 focus:ring-primary outline-none text-foreground text-center text-xl tracking-[0.3em] font-mono"
+                    data-testid="input-magic-link-code"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={codeSubmitting || code.replace(/\D/g, "").length !== 6}
+                  className="w-full h-11 rounded-md bg-primary text-primary-foreground font-medium hover:bg-primary/90 disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center justify-center gap-2"
+                  data-testid="button-verify-code"
+                >
+                  {codeSubmitting ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <KeyRound className="h-4 w-4" />
+                  )}
+                  Sign in with code
+                </button>
+                {codeErr && (
+                  <div
+                    className="rounded-md border border-destructive/40 bg-destructive/10 p-3 flex gap-2 items-start"
+                    role="alert"
+                    data-testid="alert-code-error"
+                  >
+                    <AlertCircle className="h-4 w-4 text-destructive flex-shrink-0 mt-0.5" />
+                    <p className="text-sm text-destructive-foreground">{codeErr}</p>
+                  </div>
+                )}
+              </form>
+
+              <div className="text-center">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSent(false);
+                    setEmail("");
+                    setCode("");
+                    setCodeErr(null);
+                  }}
+                  className="text-xs text-primary hover:underline"
+                  data-testid="button-different-email"
+                >
+                  Use a different email
+                </button>
+              </div>
             </div>
           ) : (
             <>

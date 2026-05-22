@@ -146,7 +146,13 @@ const REPLY_TO = process.env.SUPPORT_REPLY_TO || "support@enviroiq.net";
 const COMPANY_NAME = process.env.COMPANY_LEGAL_NAME || "EnviroIQ";
 const COMPANY_ADDRESS = process.env.COMPANY_POSTAL_ADDRESS || "Auckland, New Zealand";
 
-const emailHtml = (to: string, magicUrl: string, refCode: string) => `<!DOCTYPE html>
+// Format a 6-digit code as "123 456" for readability in the email body.
+function formatCode(code: string): string {
+  const clean = code.replace(/\D/g, "");
+  return clean.length === 6 ? `${clean.slice(0, 3)} ${clean.slice(3)}` : clean;
+}
+
+const emailHtml = (to: string, magicUrl: string, refCode: string, otpCode: string) => `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -163,17 +169,26 @@ const emailHtml = (to: string, magicUrl: string, refCode: string) => `<!DOCTYPE 
     <h1 style="font-size:20px;font-weight:600;color:#111827;margin:0 0 8px;line-height:1.35;">Your sign-in link is ready</h1>
     <p style="color:#374151;margin:0 0 20px;font-size:14px;line-height:1.55;">
       Hi — you (or someone using <strong style="color:#111827;">${escapeHtml(to)}</strong>) just requested to sign in to EnviroIQ.
-      Click the button below to continue. This link expires in <strong>15 minutes</strong> and can only be used once.
+      Use <strong>either</strong> option below. Both expire in <strong>15 minutes</strong> and can only be used once.
     </p>
 
+    <h2 style="font-size:13px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.06em;margin:0 0 10px;">Option 1 — Click the button</h2>
     <table cellpadding="0" cellspacing="0" border="0" style="margin:0 0 24px;"><tr><td>
       <a href="${magicUrl}" style="display:inline-block;background:#16a34a;color:#fff;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:600;font-size:15px;">Sign in to EnviroIQ</a>
     </td></tr></table>
 
-    <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:14px 16px;margin:0 0 20px;">
-      <div style="color:#6b7280;font-size:12px;margin:0 0 4px;text-transform:uppercase;letter-spacing:0.04em;">Reference code</div>
-      <div style="color:#111827;font-family:'SFMono-Regular',Menlo,Consolas,monospace;font-size:18px;font-weight:600;letter-spacing:0.08em;">${refCode}</div>
-      <div style="color:#6b7280;font-size:12px;margin-top:6px;">Use this to confirm the link you click matches the one we sent.</div>
+    <h2 style="font-size:13px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.06em;margin:0 0 10px;">Option 2 — Enter this code on the sign-in page</h2>
+    <p style="color:#6b7280;margin:0 0 10px;font-size:13px;line-height:1.55;">
+      If the button above takes you back to the sign-in page (common on Outlook with Microsoft Defender), type this code instead:
+    </p>
+    <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:16px 18px;margin:0 0 24px;text-align:center;">
+      <div style="color:#111827;font-family:'SFMono-Regular',Menlo,Consolas,monospace;font-size:30px;font-weight:700;letter-spacing:0.18em;">${formatCode(otpCode)}</div>
+      <div style="color:#6b7280;font-size:12px;margin-top:8px;">Enter this 6-digit code on the EnviroIQ sign-in page.</div>
+    </div>
+
+    <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:12px 14px;margin:0 0 20px;">
+      <div style="color:#6b7280;font-size:11px;margin:0 0 3px;text-transform:uppercase;letter-spacing:0.04em;">Reference</div>
+      <div style="color:#374151;font-family:'SFMono-Regular',Menlo,Consolas,monospace;font-size:14px;font-weight:500;letter-spacing:0.06em;">${refCode}</div>
     </div>
 
     <p style="color:#6b7280;margin:0 0 8px;font-size:13px;line-height:1.55;">
@@ -191,22 +206,26 @@ const emailHtml = (to: string, magicUrl: string, refCode: string) => `<!DOCTYPE 
 </body>
 </html>`;
 
-const emailText = (to: string, magicUrl: string, refCode: string) =>
+const emailText = (to: string, magicUrl: string, refCode: string, otpCode: string) =>
   `EnviroIQ — Your sign-in link is ready
 
 You (or someone using ${to}) just requested to sign in to EnviroIQ.
+Use EITHER option below. Both expire in 15 minutes, single-use.
 
-Open this link in your browser to sign in (expires in 15 minutes,
-single-use):
-
+Option 1 — Click the link:
 ${magicUrl}
 
-Reference code: ${refCode}
-(Use this to confirm the link matches what we sent.)
+Option 2 — If the link bounces back to the sign-in page (common on
+Outlook with Microsoft Defender), type this 6-digit code on the
+EnviroIQ sign-in page instead:
 
-Didn't request this? Ignore this email — the link will expire and no
-one can access your account without it. If these keep arriving, reply
-to this email and we'll help.
+  ${formatCode(otpCode)}
+
+Reference: ${refCode}
+
+Didn't request this? Ignore this email — the link and code will expire
+and no one can access your account without them. If these keep
+arriving, reply to this email and we'll help.
 
 —
 ${COMPANY_NAME} • ${COMPANY_ADDRESS}
@@ -216,6 +235,7 @@ Transactional sign-in email — not promotional.`;
 export async function sendMagicLinkEmail(
   to: string,
   magicUrl: string,
+  otpCode: string,
 ): Promise<{ sent: boolean; devMode: boolean }> {
   const resend = await getResendClient();
   const refCode = deriveReferenceCode(magicUrl);
@@ -225,9 +245,9 @@ export async function sendMagicLinkEmail(
       from: resend.from,
       to,
       replyTo: REPLY_TO,
-      subject: `Your EnviroIQ sign-in link (code ${refCode}, expires in 15 min)`,
-      html: emailHtml(to, magicUrl, refCode),
-      text: emailText(to, magicUrl, refCode),
+      subject: `Your EnviroIQ sign-in code: ${formatCode(otpCode)} (expires in 15 min)`,
+      html: emailHtml(to, magicUrl, refCode, otpCode),
+      text: emailText(to, magicUrl, refCode, otpCode),
       headers: {
         "X-Entity-Ref-ID": refCode,
         "Auto-Submitted": "auto-generated",
@@ -247,7 +267,7 @@ export async function sendMagicLinkEmail(
   if (process.env.NODE_ENV !== "production") {
     // eslint-disable-next-line no-console
     console.log(
-      `\n[MAGIC LINK — RESEND NOT CONFIGURED]\n  To: ${to}\n  URL: ${magicUrl}\n`,
+      `\n[MAGIC LINK — RESEND NOT CONFIGURED]\n  To: ${to}\n  URL: ${magicUrl}\n  Code: ${formatCode(otpCode)}\n`,
     );
     return { sent: false, devMode: true };
   }

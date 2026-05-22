@@ -9,9 +9,9 @@ import {
   organisationsTable,
   ssoIdentitiesTable,
 } from "@workspace/db";
-import { eq, and, gt, isNull, lt } from "drizzle-orm";
+import { eq, and, gt, isNull, isNotNull, lt, sql } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
-import { randomBytes, createHash } from "node:crypto";
+import { randomBytes, createHash, timingSafeEqual } from "node:crypto";
 import {
   generateRegistrationOptions,
   verifyRegistrationResponse,
@@ -63,6 +63,28 @@ function newToken(bytes = 32): string {
 /** SHA-256 the token before storing/looking up so DB compromise doesn't leak usable links. */
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("base64url");
+}
+
+/**
+ * Generate a uniformly-distributed 6-digit numeric code using rejection
+ * sampling. Naïve `randomBytes() % 1_000_000` is biased — 256^N is not a
+ * multiple of 1,000,000 — which is OK for usability but not great for a
+ * security primitive paired with a small attempt budget. Rejecting values
+ * above the largest multiple of 1,000,000 removes the bias entirely.
+ */
+function newOtpCode(): string {
+  const MAX = 1_000_000;
+  // 2^32 = 4,294,967,296; largest multiple of MAX ≤ 2^32 is 4,294,000,000.
+  const CEILING = 4_294_000_000;
+  while (true) {
+    const n = randomBytes(4).readUInt32BE(0);
+    if (n < CEILING) return String(n % MAX).padStart(6, "0");
+  }
+}
+
+/** SHA-256 the code before storing — DB compromise must not yield usable codes. */
+function hashCode(code: string): string {
+  return createHash("sha256").update(code).digest("base64url");
 }
 
 /** Minimal HTML escape for safe interpolation into the magic-link interstitial template. */
@@ -239,16 +261,18 @@ router.post("/magic-link/request", async (req, res) => {
     }
 
     const token = newToken(32);
+    const otpCode = newOtpCode();
     const expiresAt = new Date(Date.now() + MAGIC_LINK_TTL_MS);
     await db.insert(magicLinksTable).values({
       id: uuidv4(),
       userId: user.id,
       token: hashToken(token), // store hash, not the raw token
+      codeHash: hashCode(otpCode), // ditto for the paired OTP code
       expiresAt,
     });
 
     const url = `${appBaseUrl(req)}/api/auth/magic-link/verify?token=${encodeURIComponent(token)}`;
-    await sendMagicLinkEmail(email, url);
+    await sendMagicLinkEmail(email, url, otpCode);
     await logAudit({ req, action: "auth.magic_link.request", outcome: "success", userId: user.id });
     res.json(generic);
   } catch (err) {
@@ -456,6 +480,163 @@ router.post("/magic-link/verify", async (req, res) => {
   } catch (err) {
     req.log?.error({ err }, "magic-link verify failed");
     res.redirect(303, `${base}/app/sign-in?error=server_error`);
+  }
+});
+
+/**
+ * POST /auth/magic-link/code
+ * Body: { email: string, code: string }
+ *
+ * OTP alternative to clicking the magic-link button. Exists specifically for
+ * users whose corporate email client (Outlook Desktop + Microsoft Defender
+ * Safe Links, internal Edge WebView) breaks the click-redirect cookie flow
+ * by opening the verify URL in an isolated cookie jar that never reaches
+ * the user's real browser — so even a successful server-side session never
+ * arrives in the tab they're actually trying to sign in from.
+ *
+ * Because this endpoint is called by `fetch` from the user's real browser
+ * tab on the sign-in page, the Set-Cookie response is guaranteed to land in
+ * the right cookie jar. Returns JSON (no redirect) so the SPA can refresh
+ * its auth state and navigate client-side.
+ *
+ * Replay defence: same atomic UPDATE…WHERE usedAt IS NULL pattern as the
+ * token path. Brute-force defence: per-row code_attempts counter, hard cap
+ * at MAX_CODE_ATTEMPTS — beyond that the row is locked out and the user
+ * must request a fresh link/code. Constant-ish-time generic response on
+ * any failure mode so we don't enumerate which email/code combos exist.
+ */
+const MAX_CODE_ATTEMPTS = 5;
+
+router.post("/magic-link/code", async (req, res) => {
+  const email = String(req.body?.email || "").trim().toLowerCase();
+  const code = String(req.body?.code || "").trim().replace(/\s+/g, "");
+  const genericFail = { error: "invalid_code" } as const;
+
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !/^\d{6}$/.test(code)) {
+    res.status(400).json(genericFail);
+    return;
+  }
+
+  try {
+    const user = await db.query.usersTable.findFirst({ where: eq(usersTable.email, email) });
+    if (!user || !user.isActive) {
+      await logAudit({ req, action: "auth.magic_link.code.verify", outcome: "failure", details: { reason: "unknown_or_inactive", email } });
+      res.status(400).json(genericFail);
+      return;
+    }
+
+    // Find the most recent unexpired magic-link row for this user that has
+    // a code attached. We deliberately do NOT filter on codeHash match — we
+    // need the row itself so a wrong code can increment its per-row attempts
+    // counter (the brute-force gate). We also do NOT filter on `usedAt`
+    // (the TOKEN single-use marker) — the OTP path is intentionally decoupled
+    // from the token-click path. The whole reason this endpoint exists is
+    // that some clients (Outlook + Defender Safe Links WebView) "click" the
+    // link in an isolated cookie jar — setting usedAt — without the session
+    // cookie ever reaching the user's real browser. If we gated the code
+    // path on usedAt, the OTP fallback would be permanently broken for
+    // exactly the users it's meant to help. The code path has its own
+    // single-use gate: `codeUsedAt`.
+    const link = await db.query.magicLinksTable.findFirst({
+      where: and(
+        eq(magicLinksTable.userId, user.id),
+        gt(magicLinksTable.expiresAt, new Date()),
+        isNotNull(magicLinksTable.codeHash),
+      ),
+      orderBy: (t, { desc }) => [desc(t.createdAt)],
+    });
+
+    if (!link || !link.codeHash) {
+      await logAudit({ req, action: "auth.magic_link.code.verify", outcome: "failure", userId: user.id, userEmail: user.email, details: { reason: "no_active_code" } });
+      res.status(400).json(genericFail);
+      return;
+    }
+
+    // Internally distinguish "already redeemed via code" and "attempts
+    // exhausted" for audit/forensics, but externally collapse BOTH into the
+    // same generic `invalid_code` so an unauthenticated caller can't use
+    // distinct error codes as an oracle to detect whether a given email
+    // belongs to a real user with a recently-issued OTP (account
+    // enumeration) or to grief specific accounts into lockout-detection.
+    if (link.codeUsedAt) {
+      await logAudit({ req, action: "auth.magic_link.code.verify", outcome: "failure", userId: user.id, details: { reason: "already_used" } });
+      res.status(400).json(genericFail);
+      return;
+    }
+
+    if ((link.codeAttempts ?? 0) >= MAX_CODE_ATTEMPTS) {
+      await logAudit({ req, action: "auth.magic_link.code.verify", outcome: "failure", userId: user.id, details: { reason: "attempts_exhausted" } });
+      res.status(400).json(genericFail);
+      return;
+    }
+
+    // Constant-time compare on the SHA-256 hashes to deny timing oracles
+    // about how many leading digits matched.
+    const expected = Buffer.from(link.codeHash, "utf8");
+    const presented = Buffer.from(hashCode(code), "utf8");
+    const match = expected.length === presented.length && timingSafeEqual(expected, presented);
+    if (!match) {
+      // Atomic SQL increment — uses the row's current value at UPDATE time
+      // rather than the (potentially stale) value we read above. Without
+      // this, two concurrent wrong-code submissions read the same N, both
+      // write N+1, and the per-row cap collapses by 1 each round — the
+      // attacker effectively doubles their budget per parallel connection.
+      // The `code_attempts < MAX` predicate further ensures we can never
+      // increment past the ceiling: once locked, the row stays locked.
+      const [bumped] = await db
+        .update(magicLinksTable)
+        .set({ codeAttempts: sql`${magicLinksTable.codeAttempts} + 1` })
+        .where(
+          and(
+            eq(magicLinksTable.id, link.id),
+            lt(magicLinksTable.codeAttempts, MAX_CODE_ATTEMPTS),
+          ),
+        )
+        .returning({ codeAttempts: magicLinksTable.codeAttempts });
+      await logAudit({ req, action: "auth.magic_link.code.verify", outcome: "failure", userId: user.id, details: { reason: "wrong_code", attempt: bumped?.codeAttempts ?? null } });
+      res.status(400).json(genericFail);
+      return;
+    }
+
+    // Atomic single-use mark for the CODE path. WHERE code_used_at IS NULL
+    // guards against two concurrent correct-code submissions (impatient
+    // retry, double-tap) both establishing sessions. Note we update
+    // `codeUsedAt` not `usedAt` — see comment on the findFirst above for
+    // why these two single-use gates must be independent.
+    const [marked] = await db
+      .update(magicLinksTable)
+      .set({ codeUsedAt: new Date() })
+      .where(and(eq(magicLinksTable.id, link.id), isNull(magicLinksTable.codeUsedAt)))
+      .returning();
+
+    if (!marked) {
+      // Lost the race — another concurrent submit already consumed the row.
+      await logAudit({ req, action: "auth.magic_link.code.verify", outcome: "failure", userId: user.id, details: { reason: "race_lost" } });
+      res.status(400).json(genericFail);
+      return;
+    }
+
+    // Rotate session ID before binding the user (anti-fixation), then
+    // establish the session in the caller's real browser tab.
+    await regenerateSession(req);
+    req.session.userId = user.id;
+    req.session.email = user.email;
+    req.session.name = user.name;
+    req.session.role = user.role as "super_admin" | "org_admin" | "org_viewer";
+    req.session.organisationId = user.organisationId;
+    req.session.verifiedEmail = user.email;
+
+    await db.update(usersTable).set({ lastLoginAt: new Date() }).where(eq(usersTable.id, user.id));
+    await logAudit({ req, action: "auth.magic_link.code.verify", outcome: "success", userId: user.id });
+
+    // Mirror the verify-link redirect logic so the SPA knows where to go.
+    const existingPasskey = await db.query.passkeysTable.findFirst({ where: eq(passkeysTable.userId, user.id) });
+    const dest = existingPasskey ? "/dashboard" : "/account?enroll_passkey=1";
+
+    req.session.save(() => res.json({ ok: true, redirect: dest }));
+  } catch (err) {
+    req.log?.error({ err }, "magic-link code verify failed");
+    res.status(500).json({ error: "server_error" });
   }
 });
 
