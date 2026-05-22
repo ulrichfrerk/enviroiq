@@ -825,7 +825,7 @@ describe("POST /api/auth/magic-link/verify", () => {
     expect(dbState.magicLink!.usedAt).toBeInstanceOf(Date);
   });
 
-  it("replay of an already-used token redirects to ?error=already_used and does not re-establish a session", async () => {
+  it("replay of an already-used token (outside the 10s concurrency window) redirects to ?error=already_used and does not re-establish a session", async () => {
     // First request + verify.
     dbState.user = { ...baseUser };
     const app = makeApp();
@@ -843,7 +843,14 @@ describe("POST /api/auth/magic-link/verify", () => {
       .redirects(0)
       .expect(303);
     expect(dbState.magicLink!.usedAt).toBeInstanceOf(Date);
-    const firstUsedAt = dbState.magicLink!.usedAt!.getTime();
+
+    // Simulate a true replay: backdate `usedAt` past the 10s same-browser
+    // race-recovery window. Anything inside that window is treated as the
+    // user's auto-submit/click double-fire and is permitted to sign them in;
+    // outside it, the link is dead.
+    const backdatedUsedAt = new Date(Date.now() - 60_000);
+    dbState.magicLink!.usedAt = backdatedUsedAt;
+    const firstUsedAt = backdatedUsedAt.getTime();
 
     // Replay with a fresh agent so a leftover session can't make this look
     // like success.
@@ -869,5 +876,44 @@ describe("POST /api/auth/magic-link/verify", () => {
       (a) => a.action === "auth.magic_link.verify" && a.outcome === "success",
     );
     expect(verifySuccess).toHaveLength(1);
+  });
+
+  it("duplicate submit within the 10s window (auto-submit + impatient click race) signs the user in on the second POST too", async () => {
+    dbState.user = { ...baseUser };
+    const app = makeApp();
+    const agent = request.agent(app);
+    await agent
+      .post("/api/auth/magic-link/request")
+      .send({ email: baseUser.email })
+      .expect(200);
+
+    const rawToken = extractTokenFromMail();
+
+    // First POST consumes the token normally.
+    await agent
+      .post("/api/auth/magic-link/verify")
+      .type("form")
+      .send({ token: rawToken })
+      .redirects(0)
+      .expect(303);
+    expect(dbState.magicLink!.usedAt).toBeInstanceOf(Date);
+
+    // Second POST from a FRESH agent immediately after (still within the
+    // 10s race window). This models the browser firing both the JS
+    // auto-submit and the user's manual click — both arrive within
+    // milliseconds, both must complete the sign-in so whichever response
+    // the browser ends up following lands the user in the app.
+    const secondAgent = request.agent(app);
+    const second = await secondAgent
+      .post("/api/auth/magic-link/verify")
+      .type("form")
+      .send({ token: rawToken })
+      .redirects(0);
+
+    expect(second.status).toBe(303);
+    expect(second.headers.location).toMatch(/\/app\/(dashboard|account)/);
+
+    const me = await secondAgent.get("/__test/whoami");
+    expect(me.body.userId).toBe(baseUser.id);
   });
 });

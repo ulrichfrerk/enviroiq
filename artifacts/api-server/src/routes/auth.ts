@@ -310,6 +310,7 @@ router.get("/magic-link/verify", (req, res) => {
   @media (prefers-color-scheme: dark) { p { color: #94a3b8; } }
   button { font-size: 15px; font-weight: 500; padding: 10px 20px; border-radius: 8px; border: 0; background: #2563eb; color: #fff; cursor: pointer; }
   button:hover { background: #1d4ed8; }
+  button:disabled { background: #94a3b8; cursor: default; }
   .links { margin-top: 16px; font-size: 13px; }
   .links a { color: #2563eb; text-decoration: none; }
 </style>
@@ -320,7 +321,7 @@ router.get("/magic-link/verify", (req, res) => {
   <p>One moment while we complete your sign-in.</p>
   <form id="eiq-magic-form" method="POST" action="${safeAction}">
     <input type="hidden" name="token" value="${safeToken}">
-    <button type="submit">Continue to EnviroIQ</button>
+    <button id="eiq-magic-btn" type="submit">Continue to EnviroIQ</button>
   </form>
   <noscript>
     <p style="margin-top:16px;">JavaScript is disabled — click the button above to finish signing in.</p>
@@ -328,11 +329,34 @@ router.get("/magic-link/verify", (req, res) => {
   <div class="links"><a href="${safeCancel}">Cancel</a></div>
 </main>
 <script>
-  // Auto-submit. Email-security scanners that fetched this URL won't execute
-  // JS or follow the resulting POST, so the token is never consumed by them.
+  // Single-shot submit. The token is single-use, so two POSTs from the same
+  // browser (auto-submit + an impatient click, or a duplicate dispatch) race
+  // each other server-side and both responses fight for the same navigation,
+  // which can leave the user signed-out at the destination. Guard with a
+  // shared flag so only the first submit ever leaves this page.
   (function () {
     var f = document.getElementById('eiq-magic-form');
-    if (f) { try { f.submit(); } catch (e) { /* user can click the button */ } }
+    var btn = document.getElementById('eiq-magic-btn');
+    if (!f) return;
+    var submitted = false;
+    function doSubmit(ev) {
+      if (submitted) { if (ev) ev.preventDefault(); return; }
+      submitted = true;
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Signing you in…';
+      }
+      if (!ev) {
+        // Auto-submit path — fire the form ourselves.
+        try { f.submit(); } catch (_) { /* user can click the button */ }
+      }
+      // If ev is set (user click), the browser will submit normally — we just
+      // flipped the guard so any subsequent click/auto-submit is a no-op.
+    }
+    f.addEventListener('submit', doSubmit);
+    // Email-security scanners don't execute JS, so they never reach this line
+    // and the token stays unconsumed by them.
+    setTimeout(function () { doSubmit(null); }, 0);
   })();
 </script>
 </body>
@@ -357,10 +381,15 @@ router.post("/magic-link/verify", async (req, res) => {
   }
 
   try {
+    // Look the row up by token hash WITHOUT filtering on usedAt — we need to
+    // distinguish three cases below: never existed, expired, and "used moments
+    // ago by a concurrent submit from the same browser" (the auto-submit +
+    // impatient-click race). The last case must still sign the user in,
+    // otherwise both responses race for the same navigation and the user
+    // lands on the dashboard with no session cookie.
     const link = await db.query.magicLinksTable.findFirst({
       where: and(
         eq(magicLinksTable.token, hashToken(token)),
-        isNull(magicLinksTable.usedAt),
         gt(magicLinksTable.expiresAt, new Date()),
       ),
     });
@@ -371,15 +400,34 @@ router.post("/magic-link/verify", async (req, res) => {
       return;
     }
 
-    // Atomically mark used (prevent token replay).
-    const [marked] = await db
-      .update(magicLinksTable)
-      .set({ usedAt: new Date() })
-      .where(and(eq(magicLinksTable.id, link.id), isNull(magicLinksTable.usedAt)))
-      .returning();
-    if (!marked) {
+    // Time window in which a second POST for the same token is treated as the
+    // same-browser race (sign the user in), not a replay attack (reject).
+    // 10s is long enough to cover the auto-submit + manual-click gap and any
+    // slow proxy retry, short enough that a real attacker who exfiltrates a
+    // used token from a log or referer header has no useful window.
+    const RACE_WINDOW_MS = 10_000;
+
+    if (link.usedAt && Date.now() - link.usedAt.getTime() > RACE_WINDOW_MS) {
+      await logAudit({ req, action: "auth.magic_link.verify", outcome: "failure", userId: link.userId, details: { reason: "replay_outside_window" } });
       res.redirect(303, `${base}/app/sign-in?error=already_used`);
       return;
+    }
+
+    if (!link.usedAt) {
+      // Atomically mark used (prevent token replay). If the update returns no
+      // row, another concurrent request just won the race — fall through and
+      // establish a session for the same user. The strict reject path is the
+      // time-window check above.
+      const [marked] = await db
+        .update(magicLinksTable)
+        .set({ usedAt: new Date() })
+        .where(and(eq(magicLinksTable.id, link.id), isNull(magicLinksTable.usedAt)))
+        .returning();
+      if (!marked) {
+        await logAudit({ req, action: "auth.magic_link.verify", outcome: "success", userId: link.userId, details: { reason: "concurrent_race_recovered" } });
+      }
+    } else {
+      await logAudit({ req, action: "auth.magic_link.verify", outcome: "success", userId: link.userId, details: { reason: "duplicate_submit_within_window" } });
     }
 
     const user = await db.query.usersTable.findFirst({ where: eq(usersTable.id, link.userId) });
