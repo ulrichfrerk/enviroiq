@@ -126,35 +126,112 @@ export async function sendInviteEmail(
   throw new Error("Resend not configured — cannot send invite email in production");
 }
 
-const emailHtml = (magicUrl: string) => `<!DOCTYPE html>
+// Visual reference code derived from the magic-link token. Purely for the
+// recipient to confirm "this is the same email I just triggered" when they
+// have multiple sign-in requests in flight. Not used for verification on the
+// server side — the token in the URL is still what's authoritative.
+function deriveReferenceCode(magicUrl: string): string {
+  try {
+    const u = new URL(magicUrl);
+    const token = u.searchParams.get("token") ?? magicUrl;
+    const clean = token.replace(/[^a-zA-Z0-9]/g, "");
+    const tail = clean.slice(-6).toUpperCase();
+    return tail.length === 6 ? `${tail.slice(0, 3)}-${tail.slice(3)}` : tail || "------";
+  } catch {
+    return "------";
+  }
+}
+
+const REPLY_TO = process.env.SUPPORT_REPLY_TO || "support@enviroiq.net";
+const COMPANY_NAME = process.env.COMPANY_LEGAL_NAME || "EnviroIQ";
+const COMPANY_ADDRESS = process.env.COMPANY_POSTAL_ADDRESS || "Auckland, New Zealand";
+
+const emailHtml = (to: string, magicUrl: string, refCode: string) => `<!DOCTYPE html>
 <html lang="en">
-<head><meta charset="UTF-8"><title>Sign in to EnviroIQ</title></head>
-<body style="font-family:system-ui,sans-serif;background:#f9fafb;margin:0;padding:40px 20px;">
-  <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:12px;padding:40px;border:1px solid #e5e7eb;">
-    <div style="margin-bottom:24px;">
-      <span style="color:#16a34a;font-weight:700;font-size:20px;">EnviroIQ</span>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Your EnviroIQ sign-in link</title>
+</head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;background:#f4f6f8;margin:0;padding:32px 16px;color:#111827;">
+  <div style="max-width:520px;margin:0 auto;background:#fff;border-radius:12px;padding:36px;border:1px solid #e5e7eb;">
+    <div style="margin-bottom:20px;">
+      <span style="color:#16a34a;font-weight:700;font-size:20px;letter-spacing:-0.01em;">EnviroIQ</span>
+      <span style="color:#9ca3af;font-size:13px;margin-left:8px;">ESG Intelligence Platform</span>
     </div>
-    <h1 style="font-size:22px;font-weight:700;color:#111827;margin:0 0 12px;">Sign in to your account</h1>
-    <p style="color:#6b7280;margin:0 0 24px;font-size:15px;">Click the button below to sign in. This link expires in 15 minutes and can only be used once.</p>
-    <a href="${magicUrl}" style="display:inline-block;background:#16a34a;color:#fff;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:600;font-size:15px;">Sign in to EnviroIQ</a>
-    <p style="color:#9ca3af;margin-top:24px;font-size:12px;">If you didn't request this, you can safely ignore it. The link expires automatically.</p>
+
+    <h1 style="font-size:20px;font-weight:600;color:#111827;margin:0 0 8px;line-height:1.35;">Your sign-in link is ready</h1>
+    <p style="color:#374151;margin:0 0 20px;font-size:14px;line-height:1.55;">
+      Hi — you (or someone using <strong style="color:#111827;">${escapeHtml(to)}</strong>) just requested to sign in to EnviroIQ.
+      Click the button below to continue. This link expires in <strong>15 minutes</strong> and can only be used once.
+    </p>
+
+    <table cellpadding="0" cellspacing="0" border="0" style="margin:0 0 24px;"><tr><td>
+      <a href="${magicUrl}" style="display:inline-block;background:#16a34a;color:#fff;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:600;font-size:15px;">Sign in to EnviroIQ</a>
+    </td></tr></table>
+
+    <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:14px 16px;margin:0 0 20px;">
+      <div style="color:#6b7280;font-size:12px;margin:0 0 4px;text-transform:uppercase;letter-spacing:0.04em;">Reference code</div>
+      <div style="color:#111827;font-family:'SFMono-Regular',Menlo,Consolas,monospace;font-size:18px;font-weight:600;letter-spacing:0.08em;">${refCode}</div>
+      <div style="color:#6b7280;font-size:12px;margin-top:6px;">Use this to confirm the link you click matches the one we sent.</div>
+    </div>
+
+    <p style="color:#6b7280;margin:0 0 8px;font-size:13px;line-height:1.55;">
+      <strong style="color:#374151;">Didn't request this?</strong>
+      You can safely ignore this email — the link will expire and no one can access your account without it.
+      If you keep getting these, reply to this email and we'll help.
+    </p>
+
+    <p style="color:#9ca3af;margin-top:24px;padding-top:18px;border-top:1px solid #f3f4f6;font-size:11px;line-height:1.55;">
+      Sent by ${escapeHtml(COMPANY_NAME)} • ${escapeHtml(COMPANY_ADDRESS)}<br>
+      Questions? Reply to this email or contact <a href="mailto:${escapeHtml(REPLY_TO)}" style="color:#16a34a;text-decoration:none;">${escapeHtml(REPLY_TO)}</a><br>
+      This is a transactional sign-in email and is not promotional.
+    </p>
   </div>
 </body>
 </html>`;
+
+const emailText = (to: string, magicUrl: string, refCode: string) =>
+  `EnviroIQ — Your sign-in link is ready
+
+You (or someone using ${to}) just requested to sign in to EnviroIQ.
+
+Open this link in your browser to sign in (expires in 15 minutes,
+single-use):
+
+${magicUrl}
+
+Reference code: ${refCode}
+(Use this to confirm the link matches what we sent.)
+
+Didn't request this? Ignore this email — the link will expire and no
+one can access your account without it. If these keep arriving, reply
+to this email and we'll help.
+
+—
+${COMPANY_NAME} • ${COMPANY_ADDRESS}
+Questions? ${REPLY_TO}
+Transactional sign-in email — not promotional.`;
 
 export async function sendMagicLinkEmail(
   to: string,
   magicUrl: string,
 ): Promise<{ sent: boolean; devMode: boolean }> {
   const resend = await getResendClient();
+  const refCode = deriveReferenceCode(magicUrl);
 
   if (resend) {
     const { data, error } = await resend.client.emails.send({
       from: resend.from,
       to,
-      subject: "Sign in to EnviroIQ",
-      html: emailHtml(magicUrl),
-      text: `Sign in to EnviroIQ\n\nClick this link to sign in (expires in 15 minutes):\n${magicUrl}\n\nIf you didn't request this, ignore this email.`,
+      replyTo: REPLY_TO,
+      subject: `Your EnviroIQ sign-in link (code ${refCode}, expires in 15 min)`,
+      html: emailHtml(to, magicUrl, refCode),
+      text: emailText(to, magicUrl, refCode),
+      headers: {
+        "X-Entity-Ref-ID": refCode,
+        "Auto-Submitted": "auto-generated",
+      },
     });
 
     if (error) {
@@ -162,7 +239,7 @@ export async function sendMagicLinkEmail(
       throw new Error(`Email send failed: ${error.message}`);
     }
 
-    logger.info({ to, messageId: data?.id }, "Magic link email sent via Resend");
+    logger.info({ to, messageId: data?.id, refCode }, "Magic link email sent via Resend");
     return { sent: true, devMode: false };
   }
 
