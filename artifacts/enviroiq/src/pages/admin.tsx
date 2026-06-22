@@ -42,6 +42,7 @@ export default function Admin() {
   const [deleteOrg, setDeleteOrg] = useState<Organisation | null>(null);
   const [recalcOrg, setRecalcOrg] = useState<Organisation | null>(null);
   const [recalcRunning, setRecalcRunning] = useState(false);
+  const [exportingOrgId, setExportingOrgId] = useState<string | null>(null);
   const [recalcResult, setRecalcResult] = useState<{ updated: number; skipped: number; errors: number; totalEvents: number } | null>(null);
 
   // Contract / Order Form dialog state.
@@ -265,6 +266,31 @@ export default function Admin() {
   const saveAndDownloadContract = async () => {
     const ok = await saveContract();
     if (ok) await downloadContractPdf();
+  };
+
+  const handleExport = async (org: Organisation) => {
+    setExportingOrgId(org.id);
+    try {
+      const res = await fetch(`/api/admin/organisations/${org.id}/export`, { credentials: "include" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({})) as { message?: string };
+        throw new Error(err.message || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `enviroiq-export-${org.slug}-${new Date().toISOString().slice(0, 10)}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast({ title: "Export ready", description: `Full data export for ${org.name} downloaded.` });
+    } catch (e: unknown) {
+      toast({ variant: "destructive", title: "Export failed", description: e instanceof Error ? e.message : "Unknown error" });
+    } finally {
+      setExportingOrgId(null);
+    }
   };
 
   const handleRecalculate = async () => {
@@ -513,6 +539,18 @@ export default function Admin() {
                           {org.isActive
                             ? <PowerOff className="w-4 h-4 text-amber-500" />
                             : <Power className="w-4 h-4 text-emerald-500" />}
+                        </Button>
+
+                        {/* Export all data */}
+                        <Button
+                          variant="ghost" size="icon"
+                          title="Export all data (raw + analysed)"
+                          onClick={() => handleExport(org)}
+                          disabled={exportingOrgId === org.id}
+                        >
+                          {exportingOrgId === org.id
+                            ? <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                            : <Download className="w-4 h-4 text-primary" />}
                         </Button>
 
                         {/* Delete */}

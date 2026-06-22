@@ -7,6 +7,7 @@ import { calcFleetCo2e, calcEnergyCo2e, resolveElectricityFactor, vehicleClassEm
 import { logAudit } from "../lib/audit.js";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { runGapDetectorOnce } from "../lib/notification-gap-scanners.js";
+import { buildOrgExportZip } from "../lib/org-export.js";
 
 const router = Router();
 
@@ -213,6 +214,42 @@ router.post("/organisations/:orgId/recalculate-emissions", requireRole("super_ad
   } catch (err) {
     req.log.error({ err }, "Recalculate emissions failed");
     res.status(500).json({ error: "Internal Server Error", message: "Failed to recalculate emissions" });
+  }
+});
+
+// GET /admin/organisations/:orgId/export
+// Builds a complete ZIP export of ALL raw data + analysed/computed data for an
+// organisation (one CSV per org-scoped table, original uploaded documents,
+// aggregated metrics, stored report snapshots and the reference data used).
+router.get("/organisations/:orgId/export", requireRole("super_admin"), async (req, res) => {
+  const { orgId } = req.params as { orgId: string };
+  try {
+    const result = await buildOrgExportZip(orgId);
+    if (!result) {
+      res.status(404).json({ error: "Not Found", message: "Organisation not found" });
+      return;
+    }
+    const { buffer, org, summary } = result;
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const filename = `enviroiq-export-${org.slug}-${dateStr}.zip`;
+
+    await logAudit({
+      req,
+      action: "admin.org_data_export",
+      resourceType: "organisation",
+      resourceId: orgId,
+      outcome: "success",
+      details: summary as unknown as Record<string, unknown>,
+      organisationId: orgId,
+    });
+
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.setHeader("Content-Length", String(buffer.length));
+    res.send(buffer);
+  } catch (err) {
+    req.log.error({ err }, "Org data export failed");
+    res.status(500).json({ error: "Internal Server Error", message: "Failed to export organisation data" });
   }
 });
 
