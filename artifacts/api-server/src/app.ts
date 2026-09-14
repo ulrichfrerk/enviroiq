@@ -20,6 +20,17 @@ if (!sessionSecret && process.env.NODE_ENV === "production") {
 
 const app: Express = express();
 
+// On AWS the REST API is public; only requests relayed by CloudFront carry the
+// origin-verify header (template.yaml OriginCustomHeaders). Runs before
+// anything else so unauthenticated probes cost nothing.
+if (process.env.AWS_SERVERLESS === "true" && process.env.ORIGIN_VERIFY_SECRET) {
+  const expected = process.env.ORIGIN_VERIFY_SECRET;
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (req.headers["x-origin-verify"] !== expected) { res.status(403).json({ error: "Forbidden" }); return; }
+    next();
+  });
+}
+
 // Trust proxy (needed for X-Forwarded-For in Replit/reverse proxy environments)
 app.set("trust proxy", 1);
 
