@@ -69,7 +69,7 @@ async function computeOrgMetrics(orgId: string, from?: Date, to?: Date): Promise
   return { fleetCo2eKg, energyCo2eKg, totalCo2eKg, totalEnergyKwh, sustainabilityScore, computedAt: new Date() };
 }
 
-async function refreshAllOrgMetrics(): Promise<void> {
+export async function refreshAllOrgMetrics(): Promise<void> {
   const orgs = await db.select({ id: organisationsTable.id }).from(organisationsTable);
   let refreshed = 0;
   let failed = 0;
@@ -109,6 +109,56 @@ const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;   // 24 hours
 // table never holds more than ~one prune cycle's worth of dead rows.
 const WEBAUTHN_PRUNE_INTERVAL_MS = 10 * 60 * 1000;
 
+
+// Notification digest state: per-org "already sent today" memo. On Lambda this
+// only lives as long as the container; sendNotificationDigests itself is
+// idempotent per day, so a cold start cannot double-send.
+const lastDigestDayByOrg = new Map<string, string>();
+// Notification digest — hourly tick fires per-org digest at that org's local 8am.
+const orgLocalParts = (timezone: string) => {
+  try {
+    const fmt = new Intl.DateTimeFormat("en-NZ", {
+      timeZone: timezone,
+      hour: "2-digit",
+      hour12: false,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    const parts = Object.fromEntries(fmt.formatToParts(new Date()).map((p) => [p.type, p.value]));
+    return { hour: Number(parts.hour), ymd: `${parts.year}-${parts.month}-${parts.day}` };
+  } catch {
+    // Fall back to NZ on bad timezone string.
+    const fmt = new Intl.DateTimeFormat("en-NZ", {
+      timeZone: "Pacific/Auckland",
+      hour: "2-digit",
+      hour12: false,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    const parts = Object.fromEntries(fmt.formatToParts(new Date()).map((p) => [p.type, p.value]));
+    return { hour: Number(parts.hour), ymd: `${parts.year}-${parts.month}-${parts.day}` };
+  }
+};
+export async function runNotificationDigestTick(): Promise<void> {
+  try {
+    const orgs = await db
+      .select({ id: organisationsTable.id, defaultTimezone: organisationsTable.defaultTimezone })
+      .from(organisationsTable);
+    for (const org of orgs) {
+      const tz = org.defaultTimezone || "Pacific/Auckland";
+      const { hour, ymd } = orgLocalParts(tz);
+      if (hour !== 8) continue;
+      if (lastDigestDayByOrg.get(org.id) === ymd) continue;
+      lastDigestDayByOrg.set(org.id, ymd);
+      await sendNotificationDigests({ organisationId: org.id });
+    }
+  } catch (err) {
+    logger.warn({ err }, "Notification digest tick failed");
+  }
+}
+
 export function startScheduler(): void {
   if (schedulerHandle) return;
   void refreshAllOrgMetrics();
@@ -145,53 +195,8 @@ export function startScheduler(): void {
     "Document archive prune job scheduled (per-org retention; default 6mo, configurable per organisation)",
   );
 
-  // Notification digest — hourly tick fires per-org digest at that org's local 8am.
-  const lastDigestDayByOrg = new Map<string, string>();
-  const orgLocalParts = (timezone: string) => {
-    try {
-      const fmt = new Intl.DateTimeFormat("en-NZ", {
-        timeZone: timezone,
-        hour: "2-digit",
-        hour12: false,
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-      });
-      const parts = Object.fromEntries(fmt.formatToParts(new Date()).map((p) => [p.type, p.value]));
-      return { hour: Number(parts.hour), ymd: `${parts.year}-${parts.month}-${parts.day}` };
-    } catch {
-      // Fall back to NZ on bad timezone string.
-      const fmt = new Intl.DateTimeFormat("en-NZ", {
-        timeZone: "Pacific/Auckland",
-        hour: "2-digit",
-        hour12: false,
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-      });
-      const parts = Object.fromEntries(fmt.formatToParts(new Date()).map((p) => [p.type, p.value]));
-      return { hour: Number(parts.hour), ymd: `${parts.year}-${parts.month}-${parts.day}` };
-    }
-  };
-  const digestTick = async () => {
-    try {
-      const orgs = await db
-        .select({ id: organisationsTable.id, defaultTimezone: organisationsTable.defaultTimezone })
-        .from(organisationsTable);
-      for (const org of orgs) {
-        const tz = org.defaultTimezone || "Pacific/Auckland";
-        const { hour, ymd } = orgLocalParts(tz);
-        if (hour !== 8) continue;
-        if (lastDigestDayByOrg.get(org.id) === ymd) continue;
-        lastDigestDayByOrg.set(org.id, ymd);
-        await sendNotificationDigests({ organisationId: org.id });
-      }
-    } catch (err) {
-      logger.warn({ err }, "Notification digest tick failed");
-    }
-  };
-  void digestTick();
-  notificationDigestHandle = setInterval(() => { void digestTick(); }, 60 * 60 * 1000);
+  void runNotificationDigestTick();
+  notificationDigestHandle = setInterval(() => { void runNotificationDigestTick(); }, 60 * 60 * 1000);
   logger.info("Notification daily digest scheduler started (per-org local 8am)");
 
   // WebAuthn challenge prune — clears rows past their `expiresAt` so cancelled

@@ -1,0 +1,17 @@
+version = 0.1
+
+[default.global.parameters]
+region = "ap-southeast-6"
+
+[default.validate.parameters]
+lint = true
+
+[staging.deploy.parameters]
+stack_name = "enviroiq-staging"
+region = "ap-southeast-6"
+resolve_s3 = true
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = false
+fail_on_empty_changeset = false
+# Staging lives under shavedmonkeys.nz (Route 53 zone + wildcard cert in the account); enviroiq.net stays where it is until cutover.
+parameter_overrides = "Stage=staging AppDomainName=enviroiq-staging.shavedmonkeys.nz HostedZoneId=Z0488474335OPN3SM06IV CertificateArn=arn:aws:acm:us-east-1:722851019028:certificate/b164d26f-d6e8-4af7-a5be-3e542adb5f68 AppSecretArn=arn:aws:secretsmanager:ap-southeast-6:722851019028:secret:enviroiq/staging/app-Uff2qq VpcSubnetIds=subnet-0640643495b794f43,subnet-035cca995387092ad VpcSecurityGroupId=sg-0d4248c3c1458c95f SchedulesEnabled=false"

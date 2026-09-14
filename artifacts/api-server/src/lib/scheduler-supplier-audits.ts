@@ -214,6 +214,10 @@ async function expireOverdue(now: Date) {
 
 let running = false;
 
+export async function runSupplierAuditTick(): Promise<void> {
+  await tick();
+}
+
 async function tick() {
   if (running) return; // skip overlapping ticks
   running = true;

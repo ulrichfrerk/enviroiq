@@ -1,8 +1,36 @@
-import puppeteer, { type Browser } from "puppeteer";
+import type { Browser } from "puppeteer-core";
 import { existsSync, readdirSync } from "fs";
 import path from "path";
 
 let browserPromise: Promise<Browser> | null = null;
+
+// On AWS Lambda there is no system Chromium; @sparticuz/chromium ships a
+// Lambda-compatible build (x86_64) and puppeteer-core drives it. Elsewhere the
+// full puppeteer package (with its own download or the Nix Chromium) is used.
+async function launchBrowser(): Promise<Browser> {
+  if (process.env.AWS_SERVERLESS === "true") {
+    const chromium = (await import("@sparticuz/chromium")).default;
+    const puppeteerCore = (await import("puppeteer-core")).default;
+    return puppeteerCore.launch({
+      headless: true,
+      executablePath: await chromium.executablePath(),
+      args: [...chromium.args, "--font-render-hinting=none"],
+      defaultViewport: { width: 1280, height: 800 },
+    }) as Promise<Browser>;
+  }
+  const puppeteer = (await import("puppeteer")).default;
+  return puppeteer.launch({
+    headless: true,
+    executablePath: findExecutablePath(),
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-gpu",
+      "--font-render-hinting=none",
+    ],
+  }) as unknown as Promise<Browser>;
+}
 
 /**
  * Locate a Chromium binary that ships its own runtime libraries (system Chromium installed
@@ -39,18 +67,7 @@ function findExecutablePath(): string | undefined {
 
 async function getBrowser(): Promise<Browser> {
   if (!browserPromise) {
-    const executablePath = findExecutablePath();
-    browserPromise = puppeteer.launch({
-      headless: true,
-      executablePath,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--font-render-hinting=none",
-      ],
-    }).then((b) => {
+    browserPromise = launchBrowser().then((b) => {
       // If the browser ever disconnects (crash, OOM kill), allow a fresh launch next time.
       b.on("disconnected", () => { browserPromise = null; });
       return b;

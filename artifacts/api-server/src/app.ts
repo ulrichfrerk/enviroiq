@@ -209,7 +209,8 @@ app.use(
       conString: process.env.DATABASE_URL,
       tableName: "session",
       createTableIfMissing: false,
-      pruneSessionInterval: 60 * 15, // prune expired sessions every 15 min
+      // Lambda containers must not run timers; the maintenance job prunes instead.
+      pruneSessionInterval: process.env.AWS_SERVERLESS === "true" ? false : 60 * 15,
     }),
     secret: sessionSecret || "enviroiq-dev-only-secret-do-not-use-in-production",
     resave: false,

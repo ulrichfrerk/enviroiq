@@ -27,7 +27,7 @@ router.get("/config", requireAuth, requireOrgAccess, async (req, res) => {
       config = newConfig;
     }
 
-    const domain = process.env.REPLIT_DOMAINS?.split(",")[0] || "localhost";
+    const domain = (process.env.APP_BASE_URL && new URL(process.env.APP_BASE_URL).host) || process.env.REPLIT_DOMAINS?.split(",")[0] || "localhost";
     const embedScript = `<script src="https://${domain}/api/widget/${org.widgetKey}/widget.js" async></script>\n<div id="enviroiq-widget"></div>`;
 
     res.json({ ...config, widgetKey: org.widgetKey, embedScript });
@@ -103,7 +103,7 @@ widgetPublicRouter.get("/:widgetKey/widget.js", async (req, res) => {
       return;
     }
 
-    const domain = req.get("host") || (process.env.REPLIT_DOMAINS?.split(",")[0] ?? "localhost");
+    const domain = req.get("host") || (process.env.APP_BASE_URL && new URL(process.env.APP_BASE_URL).host) || (process.env.REPLIT_DOMAINS?.split(",")[0] ?? "localhost");
     const protocol = req.get("x-forwarded-proto") || req.protocol || "https";
     const apiBase = `${protocol}://${domain}/api/widget/${widgetKey}`;
     const accentColor = config.accentColor || "#22c55e";

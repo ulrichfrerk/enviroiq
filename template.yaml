@@ -1,0 +1,408 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >-
+  EnviroIQ application stack: REST API + Lambda for the Express app
+  (artifacts/api-server), EventBridge Scheduler + Lambda for the jobs that
+  setInterval used to run, CloudFront + S3 for the marketing site (/) and the
+  app (/app/). Build with `node script/build-aws.mjs`, deploy with `sam deploy`.
+  Region ap-southeast-6; the database is the shared platform cluster.
+
+Parameters:
+  Stage:
+    Type: String
+    Default: staging
+    AllowedPattern: "^[a-z][a-z0-9-]{1,20}$"
+  AppDomainName:
+    Type: String
+    Description: Public hostname served by CloudFront.
+    AllowedPattern: "^[a-z0-9.-]+\\.[a-z]{2,}$"
+  HostedZoneId:
+    Type: String
+    Default: ""
+  CertificateArn:
+    Type: String
+    AllowedPattern: "^arn:aws[a-zA-Z-]*:acm:us-east-1:\\d{12}:certificate/.+$"
+  AppSecretArn:
+    Type: String
+    Description: >-
+      Secrets Manager JSON secret. Keys: DATABASE_URL, SESSION_SECRET,
+      RESEND_API_KEY, INBOUND_EMAIL_WEBHOOK_SECRET, AI_INTEGRATIONS_OPENAI_API_KEY,
+      GOOGLE_OIDC_CLIENT_ID, GOOGLE_OIDC_CLIENT_SECRET, MICROSOFT_OIDC_CLIENT_ID,
+      MICROSOFT_OIDC_CLIENT_SECRET, FUELSAVER_LOGIN, ORIGIN_VERIFY_SECRET.
+  VpcSubnetIds:
+    Type: CommaDelimitedList
+    Default: ""
+  VpcSecurityGroupId:
+    Type: String
+    Default: ""
+  SuperAdminEmail:
+    Type: String
+    Default: ulrich@edgeops.nz
+  AlarmEmail:
+    Type: String
+    Default: ulrich@edgeops.nz
+  FromEmail:
+    Type: String
+    Default: "EnviroIQ <noreply@enviroiq.net>"
+  InboundEmailDomain:
+    Type: String
+    Default: enviroiq.net
+  NotificationBetaAllowlist:
+    Type: String
+    Default: ulrich@edgeops.nz
+    Description: Only these recipients receive system email. Keep set on staging.
+  OpenAiBaseUrl:
+    Type: String
+    Default: https://api.openai.com/v1
+  SchedulesEnabled:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+  LogRetentionDays:
+    Type: Number
+    Default: 30
+
+Conditions:
+  SchedulesOn: !Equals [!Ref SchedulesEnabled, "true"]
+  HasVpc: !Not [!Equals [!Join ["", !Ref VpcSubnetIds], ""]]
+  HasHostedZone: !Not [!Equals [!Ref HostedZoneId, ""]]
+
+Globals:
+  Function:
+    Runtime: nodejs24.x
+    # x86_64 because the Lambda-compatible Chromium (@sparticuz/chromium) for PDF reports is x86_64 only.
+    Architectures: [x86_64]
+    MemorySize: 2048
+    CodeUri: dist/aws
+    Tracing: Active
+    LoggingConfig:
+      LogFormat: JSON
+    VpcConfig: !If
+      - HasVpc
+      - SecurityGroupIds: [!Ref VpcSecurityGroupId]
+        SubnetIds: !Ref VpcSubnetIds
+      - !Ref AWS::NoValue
+    Environment:
+      Variables:
+        NODE_ENV: production
+        AWS_SERVERLESS: "true"
+        NODE_EXTRA_CA_CERTS: /var/task/rds-global-bundle.pem
+        APP_BASE_URL: !Sub "https://${AppDomainName}/app"
+        APP_URL: !Sub "https://${AppDomainName}"
+        ORIGIN: !Sub "https://${AppDomainName}"
+        RP_ID: !Ref AppDomainName
+        ALLOWED_ORIGINS: !Sub "https://${AppDomainName}"
+        OIDC_REDIRECT_BASE_URL: !Sub "https://${AppDomainName}"
+        SUPER_ADMIN_EMAIL: !Ref SuperAdminEmail
+        FROM_EMAIL: !Ref FromEmail
+        INBOUND_EMAIL_DOMAIN: !Ref InboundEmailDomain
+        NOTIFICATION_BETA_ALLOWLIST: !Ref NotificationBetaAllowlist
+        AI_INTEGRATIONS_OPENAI_BASE_URL: !Ref OpenAiBaseUrl
+        DATABASE_SSL: require
+        DATABASE_POOL_MAX: "2"
+        DATABASE_CONNECT_TIMEOUT_MS: "10000"
+        LOG_LEVEL: info
+        DATABASE_URL: !Sub "{{resolve:secretsmanager:${AppSecretArn}:SecretString:DATABASE_URL}}"
+        SESSION_SECRET: !Sub "{{resolve:secretsmanager:${AppSecretArn}:SecretString:SESSION_SECRET}}"
+        RESEND_API_KEY: !Sub "{{resolve:secretsmanager:${AppSecretArn}:SecretString:RESEND_API_KEY}}"
+        INBOUND_EMAIL_WEBHOOK_SECRET: !Sub "{{resolve:secretsmanager:${AppSecretArn}:SecretString:INBOUND_EMAIL_WEBHOOK_SECRET}}"
+        AI_INTEGRATIONS_OPENAI_API_KEY: !Sub "{{resolve:secretsmanager:${AppSecretArn}:SecretString:AI_INTEGRATIONS_OPENAI_API_KEY}}"
+        GOOGLE_OIDC_CLIENT_ID: !Sub "{{resolve:secretsmanager:${AppSecretArn}:SecretString:GOOGLE_OIDC_CLIENT_ID}}"
+        GOOGLE_OIDC_CLIENT_SECRET: !Sub "{{resolve:secretsmanager:${AppSecretArn}:SecretString:GOOGLE_OIDC_CLIENT_SECRET}}"
+        MICROSOFT_OIDC_CLIENT_ID: !Sub "{{resolve:secretsmanager:${AppSecretArn}:SecretString:MICROSOFT_OIDC_CLIENT_ID}}"
+        MICROSOFT_OIDC_CLIENT_SECRET: !Sub "{{resolve:secretsmanager:${AppSecretArn}:SecretString:MICROSOFT_OIDC_CLIENT_SECRET}}"
+        FUELSAVER_LOGIN: !Sub "{{resolve:secretsmanager:${AppSecretArn}:SecretString:FUELSAVER_LOGIN}}"
+        ORIGIN_VERIFY_SECRET: !Sub "{{resolve:secretsmanager:${AppSecretArn}:SecretString:ORIGIN_VERIFY_SECRET}}"
+
+Resources:
+  RestApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub enviroiq-${Stage}
+      StageName: api
+      EndpointConfiguration: { Type: REGIONAL }
+      BinaryMediaTypes:
+        - application~1pdf
+        - application~1octet-stream
+        - application~1zip
+        - application~1gzip
+        - application~1vnd.openxmlformats-officedocument.spreadsheetml.sheet
+        - image~1*
+        - font~1*
+      AccessLogSetting:
+        DestinationArn: !GetAtt RestApiAccessLogs.Arn
+        Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","method":"$context.httpMethod","path":"$context.path","status":"$context.status","latency":"$context.responseLatency","integrationError":"$context.integrationErrorMessage"}'
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          ThrottlingBurstLimit: 100
+          ThrottlingRateLimit: 50
+
+  RestApiAccessLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/rest-api/enviroiq-${Stage}
+      RetentionInDays: !Ref LogRetentionDays
+
+  HttpFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub enviroiq-${Stage}-http
+      Handler: handlers.http
+      Timeout: 29
+      MemorySize: 3008
+      Events:
+        Root:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /
+            Method: ANY
+        Proxy:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /{proxy+}
+            Method: ANY
+
+  HttpFunctionLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/enviroiq-${Stage}-http
+      RetentionInDays: !Ref LogRetentionDays
+
+  MaintenanceFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub enviroiq-${Stage}-maintenance
+      Handler: handlers.maintenance
+      Timeout: 900
+      Events:
+        OrgMetrics:
+          Type: ScheduleV2
+          Properties: { ScheduleExpression: rate(15 minutes), Input: '{"detail":{"job":"org-metrics"}}', State: !If [SchedulesOn, ENABLED, DISABLED] }
+        Em6Intensity:
+          Type: ScheduleV2
+          Properties: { ScheduleExpression: rate(30 minutes), Input: '{"detail":{"job":"em6-intensity"}}', State: !If [SchedulesOn, ENABLED, DISABLED] }
+        GridPrune:
+          Type: ScheduleV2
+          Properties: { ScheduleExpression: rate(1 day), Input: '{"detail":{"job":"grid-prune"}}', State: !If [SchedulesOn, ENABLED, DISABLED] }
+        ArchivePrune:
+          Type: ScheduleV2
+          Properties: { ScheduleExpression: rate(1 day), Input: '{"detail":{"job":"archive-prune"}}', State: !If [SchedulesOn, ENABLED, DISABLED] }
+        NotificationDigest:
+          Type: ScheduleV2
+          Properties: { ScheduleExpression: rate(1 hour), Input: '{"detail":{"job":"notification-digest"}}', State: !If [SchedulesOn, ENABLED, DISABLED] }
+        WebauthnPrune:
+          Type: ScheduleV2
+          Properties: { ScheduleExpression: rate(10 minutes), Input: '{"detail":{"job":"webauthn-prune"}}', State: !If [SchedulesOn, ENABLED, DISABLED] }
+        StaleSignin:
+          Type: ScheduleV2
+          Properties: { ScheduleExpression: rate(1 day), Input: '{"detail":{"job":"stale-signin-digest"}}', State: !If [SchedulesOn, ENABLED, DISABLED] }
+        SupplierAudits:
+          Type: ScheduleV2
+          Properties: { ScheduleExpression: rate(1 hour), Input: '{"detail":{"job":"supplier-audits"}}', State: !If [SchedulesOn, ENABLED, DISABLED] }
+        GapDetector:
+          Type: ScheduleV2
+          Properties: { ScheduleExpression: rate(1 hour), Input: '{"detail":{"job":"gap-detector"}}', State: !If [SchedulesOn, ENABLED, DISABLED] }
+        SessionPrune:
+          Type: ScheduleV2
+          Properties: { ScheduleExpression: rate(15 minutes), Input: '{"detail":{"job":"session-prune"}}', State: !If [SchedulesOn, ENABLED, DISABLED] }
+
+  MaintenanceFunctionLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/enviroiq-${Stage}-maintenance
+      RetentionInDays: !Ref LogRetentionDays
+
+  MigrateFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub enviroiq-${Stage}-migrate
+      Handler: handlers.migrate
+      Timeout: 900
+
+  MigrateFunctionLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/enviroiq-${Stage}-migrate
+      RetentionInDays: !Ref LogRetentionDays
+
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub enviroiq-${Stage}-frontend-${AWS::AccountId}
+      PublicAccessBlockConfiguration: { BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true }
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: { Service: cloudfront.amazonaws.com }
+            Action: s3:GetObject
+            Resource: !Sub "${FrontendBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}"
+
+  FrontendOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub enviroiq-${Stage}-frontend-oac
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # Two single-page apps in one bucket: the app under /app/ and the
+  # prerendered marketing site at /. Extensionless paths map to the right
+  # index.html so deep links work without custom error pages.
+  SpaRewriteFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: !Sub enviroiq-${Stage}-spa-rewrite
+      AutoPublish: true
+      FunctionConfig:
+        Comment: Route extensionless paths to the app or marketing index.html
+        Runtime: cloudfront-js-2.0
+      FunctionCode: |
+        function handler(event) {
+          var request = event.request;
+          var uri = request.uri;
+          var last = uri.split('/').pop();
+          var hasExt = last.indexOf('.') !== -1;
+          if (uri === '/app' || uri.indexOf('/app/') === 0) {
+            if (!hasExt) request.uri = '/app/index.html';
+            return request;
+          }
+          if (uri === '/' ) { request.uri = '/index.html'; return request; }
+          if (!hasExt) {
+            request.uri = (uri.endsWith('/') ? uri : uri + '/') + 'index.html';
+          }
+          return request;
+        }
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub EnviroIQ ${Stage}
+        HttpVersion: http2and3
+        PriceClass: PriceClass_All
+        Aliases: [!Ref AppDomainName]
+        ViewerCertificate:
+          AcmCertificateArn: !Ref CertificateArn
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+        Origins:
+          - Id: frontend
+            DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt FrontendOriginAccessControl.Id
+            S3OriginConfig: { OriginAccessIdentity: "" }
+          - Id: api
+            DomainName: !Sub "${RestApi}.execute-api.${AWS::Region}.amazonaws.com"
+            OriginPath: /api
+            OriginCustomHeaders:
+              - HeaderName: x-origin-verify
+                HeaderValue: !Sub "{{resolve:secretsmanager:${AppSecretArn}:SecretString:ORIGIN_VERIFY_SECRET}}"
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols: [TLSv1.2]
+              OriginReadTimeout: 30
+        DefaultRootObject: index.html
+        DefaultCacheBehavior:
+          TargetOriginId: frontend
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6 # Managed-CachingOptimized
+          ResponseHeadersPolicyId: 67f7725c-6f97-4210-82d7-5512b31e9d03 # Managed-SecurityHeadersPolicy
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt SpaRewriteFunction.FunctionMetadata.FunctionARN
+        CacheBehaviors:
+          - PathPattern: /api/*
+            TargetOriginId: api
+            ViewerProtocolPolicy: https-only
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+            Compress: true
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad # Managed-CachingDisabled
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac # Managed-AllViewerExceptHostHeader
+
+  ApexRecordA:
+    Type: AWS::Route53::RecordSet
+    Condition: HasHostedZone
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref AppDomainName
+      Type: A
+      AliasTarget: { DNSName: !GetAtt Distribution.DomainName, HostedZoneId: Z2FDTNDATAQYW2 }
+  ApexRecordAAAA:
+    Type: AWS::Route53::RecordSet
+    Condition: HasHostedZone
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref AppDomainName
+      Type: AAAA
+      AliasTarget: { DNSName: !GetAtt Distribution.DomainName, HostedZoneId: Z2FDTNDATAQYW2 }
+
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub enviroiq-${Stage}-alarms
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref AlarmEmail
+
+  HttpErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub enviroiq-${Stage}-http-errors
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: !Ref HttpFunction }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopic]
+
+  MaintenanceErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub enviroiq-${Stage}-maintenance-errors
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: !Ref MaintenanceFunction }]
+      Statistic: Sum
+      Period: 900
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopic]
+
+Outputs:
+  ApiUrl:
+    Value: !Sub "https://${RestApi}.execute-api.${AWS::Region}.amazonaws.com/api"
+  DistributionId:
+    Value: !Ref Distribution
+  DistributionDomainName:
+    Value: !GetAtt Distribution.DomainName
+  FrontendBucketName:
+    Value: !Ref FrontendBucket
+  HttpFunctionName:
+    Value: !Ref HttpFunction
+  MaintenanceFunctionName:
+    Value: !Ref MaintenanceFunction
+  MigrateFunctionName:
+    Value: !Ref MigrateFunction

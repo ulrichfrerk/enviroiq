@@ -454,6 +454,34 @@ function localPartsForTz(tz: string, when: Date): { hour: number; ymd: string } 
  *   that need to pump ticks faster than real time without faking timers.
  *   Production should not override this.
  */
+
+function gapDetectorHour(): number {
+  const rawHour = Number(process.env.GAP_DETECTOR_HOUR);
+  return Number.isFinite(rawHour) && rawHour >= 0 && rawHour <= 23 ? Math.floor(rawHour) : 6;
+}
+
+export async function runGapDetectorTick(hour = gapDetectorHour(), tz = process.env.GAP_DETECTOR_TZ || "Pacific/Auckland"): Promise<void> {
+  try {
+    const { hour: localHour, ymd } = localPartsForTz(tz, new Date());
+    if (localHour !== hour) return;
+    // Fast in-memory short-circuit: if we already ran today inside *this*
+    // process, skip without hitting the DB.
+    if (lastDailyRunYmd === ymd) return;
+    // Cross-restart guard: claim the (tz, ymd) slot atomically via the
+    // notification_events.dedupe_key UNIQUE constraint. If another process
+    // (or a previous incarnation of this one) already claimed it, skip.
+    const won = await tryClaimDailyRun(tz, ymd);
+    lastDailyRunYmd = ymd; // remember either way to avoid re-querying
+    if (!won) {
+      logger.info({ tz, ymd }, "Gap detector daily run already claimed by another process — skipping");
+      return;
+    }
+    await runGapDetectorOnce();
+  } catch (err) {
+    logger.error({ err }, "Gap detector tick failed");
+  }
+}
+
 export function startGapDetector(opts?: { intervalMs?: number }): void {
   if (gapDetectorHandle) return;
   const rawHour = Number(process.env.GAP_DETECTOR_HOUR);
@@ -464,27 +492,7 @@ export function startGapDetector(opts?: { intervalMs?: number }): void {
   const intervalMs = opts?.intervalMs && opts.intervalMs > 0
     ? opts.intervalMs
     : 60 * 60 * 1000;
-  const tick = async () => {
-    try {
-      const { hour: localHour, ymd } = localPartsForTz(tz, new Date());
-      if (localHour !== hour) return;
-      // Fast in-memory short-circuit: if we already ran today inside *this*
-      // process, skip without hitting the DB.
-      if (lastDailyRunYmd === ymd) return;
-      // Cross-restart guard: claim the (tz, ymd) slot atomically via the
-      // notification_events.dedupe_key UNIQUE constraint. If another process
-      // (or a previous incarnation of this one) already claimed it, skip.
-      const won = await tryClaimDailyRun(tz, ymd);
-      lastDailyRunYmd = ymd; // remember either way to avoid re-querying
-      if (!won) {
-        logger.info({ tz, ymd }, "Gap detector daily run already claimed by another process — skipping");
-        return;
-      }
-      await runGapDetectorOnce();
-    } catch (err) {
-      logger.error({ err }, "Gap detector tick failed");
-    }
-  };
+  const tick = () => runGapDetectorTick(hour, tz);
   // Run an initial tick at boot in case the server starts up inside the
   // configured hour window. The lastDailyRunYmd guard makes this idempotent.
   void tick();
