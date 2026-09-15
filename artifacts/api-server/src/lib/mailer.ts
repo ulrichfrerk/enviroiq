@@ -120,7 +120,7 @@ const sesMailClient: MailClient = {
 // available on Lambda (the role carries ses:SendEmail), so the old
 // "not configured" fallbacks only fire when SES itself is unreachable.
 async function getResendClient(): Promise<{ client: MailClient; from: string } | null> {
-  const from = process.env.EMAIL_FROM || process.env.FROM_EMAIL || "EnviroIQ <noreply@enviroiq.net>";
+  const from = process.env.EMAIL_FROM || process.env.FROM_EMAIL || "EnviroIQ <monkey@shavedmonkeys.nz>";
   return { client: sesMailClient, from };
 }
 

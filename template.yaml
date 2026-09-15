@@ -43,7 +43,7 @@ Parameters:
     Default: ulrich@edgeops.nz
   FromEmail:
     Type: String
-    Default: "EnviroIQ <noreply@enviroiq.net>"
+    Default: "EnviroIQ <monkey@shavedmonkeys.nz>"
   SesRegion:
     Type: String
     Default: ap-southeast-2
