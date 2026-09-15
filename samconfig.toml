@@ -8,6 +8,7 @@ lint = true
 
 [staging.deploy.parameters]
 stack_name = "enviroiq-staging"
+tags = "Customer=\"enviroiq\" Project=\"enviroiq\" Environment=\"staging\" ManagedBy=\"sam\" Tier=\"application\""
 region = "ap-southeast-6"
 resolve_s3 = true
 capabilities = "CAPABILITY_IAM"
