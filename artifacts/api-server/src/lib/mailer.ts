@@ -1,5 +1,13 @@
-// Email sending via Resend
-import { Resend } from "resend";
+// Email sending via Amazon SES.
+//
+// SES is not offered in ap-southeast-6 (NZ), so sending calls ap-southeast-2
+// (Sydney) via SES_REGION; the app and its data stay in NZ. On Lambda the
+// execution role supplies credentials through the default provider chain
+// (it holds ses:SendEmail); nothing reads an API key. The rest of this module
+// is unchanged: getResendClient() still returns a `{ client, from }` handle
+// whose `client.emails.send()` and `client.batch.send()` keep the shapes the
+// send functions and tests already rely on — the client is now an SES shim.
+import { SESv2Client, SendEmailCommand, type SendEmailCommandInput } from "@aws-sdk/client-sesv2";
 import { logger } from "./logger.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -31,48 +39,89 @@ function recipientAllowed(to: string, allowlist: Set<string> | null): boolean {
   return allowlist.has(to.trim().toLowerCase());
 }
 
-// Resend client — prefers RESEND_API_KEY secret (works in dev + production),
-// falls back to the Replit Connectors proxy for legacy compatibility.
-async function getResendClient(): Promise<{ client: Resend; from: string } | null> {
-  const from = process.env.FROM_EMAIL || "EnviroIQ <noreply@enviroiq.net>";
+// SES-backed drop-in for the old Resend client. Keeps `emails.send()` and
+// `batch.send()`, both returning Resend's `{ data, error }` shape so callers
+// and tests are unchanged. SES has no batch endpoint, so batch.send() fans out
+// to individual SendEmailCommands and reports per-message ids in input order.
+interface MailPayload {
+  from: string;
+  to: string;
+  subject: string;
+  html: string;
+  text?: string;
+  replyTo?: string;
+  headers?: Record<string, string>;
+}
+type SendResult = { data: { id?: string } | null; error: { message: string } | null };
+type BatchResult = { data: { data: Array<{ id?: string }> } | null; error: { message: string } | null };
 
-  // Primary: direct API key secret (most reliable across all environments)
-  if (process.env.RESEND_API_KEY) {
-    return { client: new Resend(process.env.RESEND_API_KEY), from };
-  }
+interface MailClient {
+  emails: { send(payload: MailPayload): Promise<SendResult> };
+  batch: { send(payloads: MailPayload[]): Promise<BatchResult> };
+}
 
-  // Fallback: Replit Connectors proxy
-  const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
-  const xReplitToken = process.env.REPL_IDENTITY
-    ? "repl " + process.env.REPL_IDENTITY
-    : process.env.WEB_REPL_RENEWAL
-      ? "depl " + process.env.WEB_REPL_RENEWAL
-      : null;
+let sesSingleton: SESv2Client | undefined;
+function ses(): SESv2Client {
+  if (!sesSingleton) sesSingleton = new SESv2Client({ region: process.env.SES_REGION?.trim() || "ap-southeast-2" });
+  return sesSingleton;
+}
 
-  if (!hostname || !xReplitToken) {
-    return null;
-  }
-
-  try {
-    const data = await fetch(
-      `https://${hostname}/api/v2/connection?include_secrets=true&connector_names=resend`,
-      {
-        headers: {
-          Accept: "application/json",
-          "X-Replit-Token": xReplitToken,
+function toSesInput(p: MailPayload): SendEmailCommandInput {
+  return {
+    FromEmailAddress: p.from,
+    Destination: { ToAddresses: [p.to] },
+    ReplyToAddresses: p.replyTo ? [p.replyTo] : undefined,
+    ConfigurationSetName: process.env.SES_CONFIGURATION_SET?.trim() || undefined,
+    Content: {
+      Simple: {
+        Subject: { Data: p.subject, Charset: "UTF-8" },
+        Body: {
+          Html: { Data: p.html, Charset: "UTF-8" },
+          ...(p.text ? { Text: { Data: p.text, Charset: "UTF-8" } } : {}),
         },
+        Headers: p.headers
+          ? Object.entries(p.headers).map(([Name, Value]) => ({ Name, Value }))
+          : undefined,
       },
-    ).then((res) => res.json()) as { items?: Array<{ settings?: { api_key?: string; from_email?: string } }> };
+    },
+  };
+}
 
-    const settings = data?.items?.[0]?.settings;
-    if (!settings?.api_key) return null;
+const sesMailClient: MailClient = {
+  emails: {
+    async send(payload) {
+      try {
+        const out = await ses().send(new SendEmailCommand(toSesInput(payload)));
+        return { data: { id: out.MessageId }, error: null };
+      } catch (err) {
+        return { data: null, error: { message: err instanceof Error ? err.message : String(err) } };
+      }
+    },
+  },
+  batch: {
+    async send(payloads) {
+      try {
+        const ids = await Promise.all(
+          payloads.map(async (p) => {
+            const out = await ses().send(new SendEmailCommand(toSesInput(p)));
+            return { id: out.MessageId };
+          }),
+        );
+        return { data: { data: ids }, error: null };
+      } catch (err) {
+        return { data: null, error: { message: err instanceof Error ? err.message : String(err) } };
+      }
+    },
+  },
+};
 
-    const connectorFrom = process.env.FROM_EMAIL || settings.from_email || from;
-    return { client: new Resend(settings.api_key), from: connectorFrom };
-  } catch (err) {
-    logger.warn({ err }, "Failed to fetch Resend credentials from connector proxy");
-    return null;
-  }
+// Email transport handle. Kept named getResendClient() so the send functions
+// below are untouched; it now hands back the SES-backed client. Always
+// available on Lambda (the role carries ses:SendEmail), so the old
+// "not configured" fallbacks only fire when SES itself is unreachable.
+async function getResendClient(): Promise<{ client: MailClient; from: string } | null> {
+  const from = process.env.EMAIL_FROM || process.env.FROM_EMAIL || "EnviroIQ <noreply@enviroiq.net>";
+  return { client: sesMailClient, from };
 }
 
 const inviteEmailHtml = (name: string, orgName: string, magicUrl: string) => `<!DOCTYPE html>

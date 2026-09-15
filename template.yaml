@@ -44,6 +44,10 @@ Parameters:
   FromEmail:
     Type: String
     Default: "EnviroIQ <noreply@enviroiq.net>"
+  SesRegion:
+    Type: String
+    Default: ap-southeast-2
+    Description: SES send region (SES is not offered in ap-southeast-6, so mail is sent from Sydney).
   InboundEmailDomain:
     Type: String
     Default: enviroiq.net
@@ -95,6 +99,7 @@ Globals:
         OIDC_REDIRECT_BASE_URL: !Sub "https://${AppDomainName}"
         SUPER_ADMIN_EMAIL: !Ref SuperAdminEmail
         FROM_EMAIL: !Ref FromEmail
+        SES_REGION: !Ref SesRegion
         INBOUND_EMAIL_DOMAIN: !Ref InboundEmailDomain
         NOTIFICATION_BETA_ALLOWLIST: !Ref NotificationBetaAllowlist
         AI_INTEGRATIONS_OPENAI_BASE_URL: !Ref OpenAiBaseUrl
@@ -151,6 +156,11 @@ Resources:
       Handler: handlers.http
       Timeout: 29
       MemorySize: 3008
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: "*"
       Events:
         Root:
           Type: Api
@@ -177,6 +187,11 @@ Resources:
       FunctionName: !Sub enviroiq-${Stage}-maintenance
       Handler: handlers.maintenance
       Timeout: 900
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: [ses:SendEmail, ses:SendRawEmail]
+              Resource: "*"
       Events:
         OrgMetrics:
           Type: ScheduleV2

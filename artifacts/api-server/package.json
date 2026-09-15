@@ -12,6 +12,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@aws-sdk/client-sesv2": "^3.700.0",
     "@simplewebauthn/server": "^13.3.0",
     "@sparticuz/chromium": "^141.0.0",
     "@types/express-session": "^1.18.2",
@@ -41,7 +42,6 @@
     "pino-http": "^10",
     "puppeteer": "^24.41.0",
     "puppeteer-core": "^24.41.0",
-    "resend": "4.0.0",
     "serverless-http": "^4.0.0",
     "uuid": "^13.0.0",
     "xlsx": "^0.18.5",
